@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -6,6 +6,7 @@ using System.Windows.Input;
 namespace TM.Framework.Common.Controls.Menus
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class FileOperationsContextMenu : ContextMenu
     {
         public FileOperationsContextMenu()

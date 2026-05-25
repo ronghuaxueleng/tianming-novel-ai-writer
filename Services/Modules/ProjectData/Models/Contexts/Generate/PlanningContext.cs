@@ -1,7 +1,6 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Services.Modules.ProjectData.Models.Contexts.Aggregates;
 using TM.Services.Modules.ProjectData.Models.Generate.ChapterPlanning;
-using TM.Services.Modules.ProjectData.Models.Generate.StrategicOutline;
 using System.Text.Json.Serialization;
 
 namespace TM.Services.Modules.ProjectData.Models.Contexts.Generate

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using TM.Framework.Appearance.ThemeManagement;
@@ -6,6 +6,7 @@ using TM.Framework.Appearance.ThemeManagement;
 namespace TM.Framework.Appearance.AutoTheme.TimeBased
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class TimeScheduleEditDialog : Window
     {
         public TimeScheduleItem? Result { get; private set; }
@@ -123,7 +124,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             catch (Exception ex)
             {
                 App.Log($"[TimeScheduleEditDialog] 保存失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败：{ex.Message}", "错误");
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败");
             }
         }
 

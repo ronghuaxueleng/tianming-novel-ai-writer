@@ -1,9 +1,10 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows.Controls;
 
 namespace TM.Modules.Validate.ValidationIntro.CharacterIntro
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class CharacterIntroView : UserControl
     {
         public CharacterIntroView()

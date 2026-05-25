@@ -7,12 +7,13 @@ using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationTypesViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly NotificationTypeSettings _settings;
@@ -52,9 +53,9 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
 
             _types.CollectionChanged += OnTypesCollectionChanged;
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var loaded = _settings.LoadSettings();
+                var loaded = await _settings.LoadSettingsAsync().ConfigureAwait(false);
                 return () =>
                 {
                     foreach (var type in loaded)
@@ -79,7 +80,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
             var name = StandardDialog.ShowInput("添加通知类型", "请输入通知类型名称：");
             if (!string.IsNullOrWhiteSpace(name))
             {
-                AddType(name, "📌", $"{name}类型的通知");
+                AddType(name, "Icon.Pin", $"{name}类型的通知");
                 GlobalToast.Success("添加成功", $"已添加通知类型：{name}");
             }
         }
@@ -111,9 +112,14 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
 
         private void ExecuteSaveSettings()
         {
+            _ = ExecuteSaveSettingsAsync();
+        }
+
+        private async System.Threading.Tasks.Task ExecuteSaveSettingsAsync()
+        {
             try
             {
-                SaveSettings();
+                await SaveSettingsAsync();
                 GlobalToast.Success("保存成功", "通知类型配置已保存");
             }
             catch (Exception ex)
@@ -212,18 +218,10 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
             App.Log("[NotificationTypesViewModel] 已重置为默认类型");
         }
 
-        public void SaveSettings()
+        public async System.Threading.Tasks.Task SaveSettingsAsync()
         {
-            try
-            {
-                _settings.SaveSettings(Types.ToList());
-                App.Log($"[NotificationTypesViewModel] 保存配置成功，共 {Types.Count} 个类型");
-            }
-            catch (Exception ex)
-            {
-                App.Log($"[NotificationTypesViewModel] 保存配置失败: {ex.Message}");
-                throw;
-            }
+            await _settings.SaveSettingsAsync(Types.ToList());
+            App.Log($"[NotificationTypesViewModel] 保存配置（异步），共 {Types.Count} 个类型");
         }
 
         private void UpdateStatistics()

@@ -1,4 +1,5 @@
 using System;
+using System.Linq;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -10,16 +11,13 @@ using System.Windows.Input;
 using System.Windows.Media;
 using TM.Framework.Appearance.IntelligentGeneration.GenerationHistory;
 using TM.Framework.Appearance.ThemeManagement;
-using TM.Framework.Common.Controls;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.AI.Core;
 
 namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class AIColorSchemeViewModel : INotifyPropertyChanged, IAIGeneratingState
     {
         private readonly AIService _aiService;
@@ -107,27 +105,33 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
             _historySettings = historySettings;
             _settings = settings;
 
-            try
+            TM.Framework.Common.Helpers.MVVM.AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var data = _settings.LoadData();
-                var cfg = data?.UserConfig;
-                if (cfg != null)
+                await _settings.LoadDataAsync().ConfigureAwait(false);
+                var cfg = _settings.GetData()?.UserConfig;
+                return () =>
                 {
-                    if (!string.IsNullOrWhiteSpace(cfg.LastKeywords)) Keywords = cfg.LastKeywords;
-                    if (!string.IsNullOrWhiteSpace(cfg.LastColorHarmony) && ColorHarmonies.Contains(cfg.LastColorHarmony))
-                        SelectedColorHarmony = cfg.LastColorHarmony;
-                    if (!string.IsNullOrWhiteSpace(cfg.LastThemeType) && ThemeTypes.Contains(cfg.LastThemeType))
-                        SelectedThemeType = cfg.LastThemeType;
-                    if (!string.IsNullOrWhiteSpace(cfg.LastEmotion) && Emotions.Contains(cfg.LastEmotion))
-                        SelectedEmotion = cfg.LastEmotion;
-                    if (!string.IsNullOrWhiteSpace(cfg.LastScene) && Scenes.Contains(cfg.LastScene))
-                        SelectedScene = cfg.LastScene;
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[AIColorScheme] 加载用户配置失败: {ex.Message}");
-            }
+                    try
+                    {
+                        if (cfg != null)
+                        {
+                            if (!string.IsNullOrWhiteSpace(cfg.LastKeywords)) Keywords = cfg.LastKeywords;
+                            if (!string.IsNullOrWhiteSpace(cfg.LastColorHarmony) && ColorHarmonies.Contains(cfg.LastColorHarmony))
+                                SelectedColorHarmony = cfg.LastColorHarmony;
+                            if (!string.IsNullOrWhiteSpace(cfg.LastThemeType) && ThemeTypes.Contains(cfg.LastThemeType))
+                                SelectedThemeType = cfg.LastThemeType;
+                            if (!string.IsNullOrWhiteSpace(cfg.LastEmotion) && Emotions.Contains(cfg.LastEmotion))
+                                SelectedEmotion = cfg.LastEmotion;
+                            if (!string.IsNullOrWhiteSpace(cfg.LastScene) && Scenes.Contains(cfg.LastScene))
+                                SelectedScene = cfg.LastScene;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[AIColorScheme] 加载用户配置失败: {ex.Message}");
+                    }
+                };
+            }, "AIColorScheme");
 
             _cancelGenerationCommand = new RelayCommand(CancelGeneration, () => IsGenerating);
             GenerateSchemesCommand = new AsyncRelayCommand(GenerateSchemesAsync);
@@ -166,7 +170,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
                 var result = await _aiService.GenerateAsync(prompt, ct);
                 if (!result.Success)
                 {
-                    GlobalToast.Error("生成失败", result.ErrorMessage);
+                    GlobalToast.Error("生成失败", $"生成失败：{result.ErrorMessage ?? "未知原因"}");
                     TM.App.Log($"[AIColorScheme] 生成失败: {result.ErrorMessage}");
                     return;
                 }
@@ -177,12 +181,13 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
                     TM.App.Log($"[AIColorScheme] 解析失败，AI响应: {result.Content}");
                     return;
                 }
+                var newSchemes = new List<ColorSchemeCard>(cards.Count);
                 foreach (var card in cards)
                 {
                     var c = card;
                     c.ApplyCommand = new AsyncRelayCommand(() => ApplySchemeAsync(c));
                     c.SaveCommand = new AsyncRelayCommand(() => SaveSchemeAsync(c));
-                    GeneratedSchemes.Add(c);
+                    newSchemes.Add(c);
 
                     try
                     {
@@ -206,11 +211,12 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
                         TM.App.Log($"[AIColorScheme] 写入生成历史失败: {ex.Message}");
                     }
                 }
+                GeneratedSchemes = new ObservableCollection<ColorSchemeCard>(newSchemes.Take(20));
                 GlobalToast.Success("生成完成", $"已生成 {cards.Count} 套配色方案");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("生成异常", ex.Message);
+                GlobalToast.Error("生成异常", $"生成异常：{ex.Message}");
                 TM.App.Log($"[AIColorScheme] 生成异常: {ex.Message}");
             }
             finally
@@ -348,7 +354,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
             {
                 if (string.IsNullOrWhiteSpace(hex)) return Colors.Gray;
                 hex = hex.Trim();
-                if (!hex.StartsWith("#")) hex = "#" + hex;
+                if (!hex.StartsWith('#')) hex = "#" + hex;
                 if (hex.Length == 7)
                     return Color.FromRgb(
                         Convert.ToByte(hex.Substring(1, 2), 16),
@@ -414,7 +420,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("应用失败", ex.Message);
+                GlobalToast.Error("应用失败", $"应用失败：{ex.Message}");
                 TM.App.Log($"[AIColorScheme] 应用主题失败: {ex.Message}");
             }
         }
@@ -430,7 +436,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
                 TM.App.Log($"[AIColorScheme] 保存主题失败: {ex.Message}");
             }
         }
@@ -449,7 +455,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
             var themesPath = StoragePathHelper.GetFrameworkStoragePath("Appearance/ThemeManagement/Themes");
             StoragePathHelper.EnsureDirectoryExists(themesPath);
             var filePath = Path.Combine(themesPath, $"{themeName}Theme.xaml");
-            var tmp = filePath + ".tmp";
+            var tmp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await File.WriteAllTextAsync(tmp, xaml, System.Text.Encoding.UTF8);
             File.Move(tmp, filePath, overwrite: true);
         }
@@ -530,11 +536,27 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
         public string Scene { get; set; } = "通用";
         public int Score { get; set; } = 0;
 
-        public SolidColorBrush PrimaryBrush => new(PrimaryColor);
-        public SolidColorBrush SecondaryBrush => new(SecondaryColor);
-        public SolidColorBrush AccentBrush => new(AccentColor);
-        public SolidColorBrush BackgroundBrush => new(BackgroundColor);
-        public SolidColorBrush TextBrush => new(TextColor);
+        private SolidColorBrush? _primaryBrush;
+        public SolidColorBrush PrimaryBrush => _primaryBrush ??= FreezeBrush(PrimaryColor);
+
+        private SolidColorBrush? _secondaryBrush;
+        public SolidColorBrush SecondaryBrush => _secondaryBrush ??= FreezeBrush(SecondaryColor);
+
+        private SolidColorBrush? _accentBrush;
+        public SolidColorBrush AccentBrush => _accentBrush ??= FreezeBrush(AccentColor);
+
+        private SolidColorBrush? _backgroundBrush;
+        public SolidColorBrush BackgroundBrush => _backgroundBrush ??= FreezeBrush(BackgroundColor);
+
+        private SolidColorBrush? _textBrush;
+        public SolidColorBrush TextBrush => _textBrush ??= FreezeBrush(TextColor);
+
+        private static SolidColorBrush FreezeBrush(Color color)
+        {
+            var b = new SolidColorBrush(color);
+            b.Freeze();
+            return b;
+        }
 
         public string PrimaryHex => $"#{PrimaryColor.R:X2}{PrimaryColor.G:X2}{PrimaryColor.B:X2}";
         public string SecondaryHex => $"#{SecondaryColor.R:X2}{SecondaryColor.G:X2}{SecondaryColor.B:X2}";
@@ -544,7 +566,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
 
         public string ScoreText => $"{Score}分";
         public string ScoreRating => Score >= 80 ? "优秀" : Score >= 60 ? "良好" : "一般";
-        public string ScoreIcon => Score >= 80 ? "⭐" : Score >= 60 ? "✨" : "💡";
+        public string ScoreIcon => Score >= 80 ? "Icon.Star" : Score >= 60 ? "Icon.Sparkle" : "Icon.Lightbulb";
 
         public ICommand? ApplyCommand { get; set; }
         public ICommand? SaveCommand { get; set; }

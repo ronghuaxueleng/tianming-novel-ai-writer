@@ -1,11 +1,11 @@
-using System;
+﻿using System;
 using System.Reflection;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Appearance.Font.Models;
 using TM.Framework.Appearance.Font.Services;
 
@@ -20,10 +20,11 @@ namespace TM.Framework.Appearance.Font.UIFont
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class UIFontViewModel : INotifyPropertyChanged
     {
         private ObservableCollection<string> _availableFonts = new();
-        private ObservableCollection<FontItem> _filteredFonts = new();
+        private TM.Framework.Common.ViewModels.RangeObservableCollection<FontItem> _filteredFonts = new();
         private ObservableCollection<FontCategory> _categories = new();
         private FontCategory _selectedCategory = FontCategory.All;
         private SortMode _sortMode = SortMode.Name;
@@ -35,11 +36,14 @@ namespace TM.Framework.Appearance.Font.UIFont
         private double _selectedLineHeight;
         private double _selectedLetterSpacing;
         private string _searchText = string.Empty;
+        private List<string> _cachedAllFonts = new();
+        private System.Windows.Threading.DispatcherTimer? _filterDebounceTimer;
 
         private readonly FontCategoryService _categoryService;
         private readonly FontFavoriteService _favoriteService;
+        private TM.Framework.Common.Controls.TreeNodeItem? _selectedFontNode;
 
-        private bool _isComparisonMode = false;
+        private bool _isComparisonMode;
         private FontSettings _comparisonSettings;
         private string _comparisonFontFamily;
         private double _comparisonFontSize;
@@ -60,7 +64,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             }
         }
 
-        public ObservableCollection<FontItem> FilteredFonts
+        public TM.Framework.Common.ViewModels.RangeObservableCollection<FontItem> FilteredFonts
         {
             get => _filteredFonts;
             set
@@ -73,7 +77,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             }
         }
 
-        public ObservableCollection<TM.Framework.Common.Controls.TreeNodeItem> FontTree { get; } = new ObservableCollection<TM.Framework.Common.Controls.TreeNodeItem>();
+        public TM.Framework.Common.ViewModels.RangeObservableCollection<TM.Framework.Common.Controls.TreeNodeItem> FontTree { get; } = new();
 
         public ObservableCollection<FontCategory> Categories
         {
@@ -205,7 +209,7 @@ namespace TM.Framework.Appearance.Font.UIFont
                 {
                     _searchText = value;
                     OnPropertyChanged(nameof(SearchText));
-                    ApplyFiltersAndSort();
+                    ScheduleFilter();
                 }
             }
         }
@@ -334,9 +338,22 @@ namespace TM.Framework.Appearance.Font.UIFont
                 Enum.GetValues(typeof(FontCategory)).Cast<FontCategory>()
             );
 
-            LoadSystemFonts();
-
-            ApplyFiltersAndSort();
+            AsyncSettingsLoader.RunOrDefer(() =>
+            {
+                var fonts = FontManager.GetSystemFonts();
+                var favoriteSet = new System.Collections.Generic.HashSet<string>();
+                var recentFonts = new System.Collections.Generic.List<string>();
+                var items = BuildFontItemsCore(fonts, FontCategory.All, string.Empty, SortMode.Name, favoriteSet, recentFonts);
+                var treeNodes = BuildFontTreeNodes(items);
+                return () =>
+                {
+                    _cachedAllFonts = fonts;
+                    AvailableFonts = new ObservableCollection<string>(fonts);
+                    FilteredFonts.ReplaceAll(items);
+                    FontTree.ReplaceAll(treeNodes);
+                    TM.App.Log($"[UIFont] 已加载 {fonts.Count} 个系统字体");
+                };
+            }, "UIFont");
 
             ApplyCommand = new RelayCommand(ApplySettings);
             SaveCommand = new RelayCommand(SaveSettings);
@@ -346,15 +363,15 @@ namespace TM.Framework.Appearance.Font.UIFont
             ToggleComparisonModeCommand = new RelayCommand(ToggleComparisonMode);
             ApplyMainFontCommand = new AsyncRelayCommand(ApplyMainFontAsync);
             ApplyComparisonFontCommand = new AsyncRelayCommand(ApplyComparisonFontAsync);
-            ExportConfigCommand = new RelayCommand(ExportConfig);
-            ImportConfigCommand = new RelayCommand(ImportConfig);
-            ShareConfigCommand = new RelayCommand(ShareConfig);
+            ExportConfigCommand = new AsyncRelayCommand(ExportConfigAsync);
+            ImportConfigCommand = new AsyncRelayCommand(ImportConfigAsync);
+            ShareConfigCommand = new AsyncRelayCommand(ShareConfigAsync);
             SelectFontCommand = new TM.Framework.Common.Helpers.MVVM.RelayCommand(SelectFontFromTree);
 
-            _comparisonSettings = new FontSettings 
-            { 
-                FontFamily = "Consolas", 
-                FontSize = 14, 
+            _comparisonSettings = new FontSettings
+            {
+                FontFamily = "Consolas",
+                FontSize = 14,
                 FontWeight = "Normal",
                 LineHeight = 1.5,
                 LetterSpacing = 0
@@ -366,63 +383,41 @@ namespace TM.Framework.Appearance.Font.UIFont
             _comparisonLetterSpacing = 0;
         }
 
-        private void LoadSystemFonts()
+        private void ScheduleFilter()
         {
-            try
+            if (_filterDebounceTimer == null)
             {
-                var fonts = FontManager.GetSystemFonts();
-                AvailableFonts = new ObservableCollection<string>(fonts);
-                TM.App.Log($"[UIFont] 已加载 {fonts.Count} 个系统字体");
+                _filterDebounceTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(300)
+                };
+                _filterDebounceTimer.Tick += (_, _) => { _filterDebounceTimer.Stop(); ApplyFiltersAndSort(); };
             }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[UIFont] 加载系统字体失败: {ex.Message}");
-                StandardDialog.ShowError($"加载系统字体失败: {ex.Message}", "错误");
-            }
+            _filterDebounceTimer.Stop();
+            _filterDebounceTimer.Start();
         }
 
-        private void ApplyFiltersAndSort()
+        private async void ApplyFiltersAndSort()
         {
+            if (_cachedAllFonts.Count == 0) return;
+
+            var fonts = _cachedAllFonts;
+            var category = SelectedCategory;
+            var searchText = SearchText;
+            var sortMode = CurrentSortMode;
+            var favoriteSet = new System.Collections.Generic.HashSet<string>(_favoriteService.GetFavorites(), StringComparer.OrdinalIgnoreCase);
+            var recentFonts = sortMode == SortMode.RecentUsed ? _favoriteService.GetRecentFonts() : new System.Collections.Generic.List<string>();
+
             try
             {
-                var allFonts = FontManager.GetSystemFonts();
-
-                var fontItems = allFonts.Select(fontName => new FontItem
+                var (items, treeNodes) = await Task.Run(() =>
                 {
-                    FontName = fontName,
-                    Category = _categoryService.ClassifyFont(fontName),
-                    IsFavorite = _favoriteService.IsFavorite(fontName),
-                    IsMonospace = _categoryService.IsMonospace(fontName),
-                    Tags = _categoryService.GenerateTags(fontName, _categoryService.ClassifyFont(fontName))
-                }).ToList();
-
-                if (SelectedCategory != FontCategory.All)
-                {
-                    fontItems = fontItems.Where(f => f.Category == SelectedCategory).ToList();
-                }
-
-                if (!string.IsNullOrWhiteSpace(SearchText))
-                {
-                    fontItems = fontItems.Where(f => f.FontName.Contains(SearchText, StringComparison.OrdinalIgnoreCase)).ToList();
-                }
-
-                fontItems = CurrentSortMode switch
-                {
-                    SortMode.Name => fontItems.OrderBy(f => f.FontName).ToList(),
-                    SortMode.RecentUsed => fontItems.OrderByDescending(f =>
-                    {
-                        var recentFonts = _favoriteService.GetRecentFonts();
-                        int index = recentFonts.IndexOf(f.FontName);
-                        return index >= 0 ? recentFonts.Count - index : -1;
-                    }).ThenBy(f => f.FontName).ToList(),
-                    SortMode.FavoriteFirst => fontItems.OrderByDescending(f => f.IsFavorite).ThenBy(f => f.FontName).ToList(),
-                    _ => fontItems
-                };
-
-                FilteredFonts = new ObservableCollection<FontItem>(fontItems);
-                BuildFontTree();
-
-                TM.App.Log($"[UIFont] 筛选完成: {FilteredFonts.Count}个字体 (分类:{SelectedCategory}, 排序:{CurrentSortMode})");
+                    var fontItems = BuildFontItemsCore(fonts, category, searchText, sortMode, favoriteSet, recentFonts);
+                    return (fontItems, BuildFontTreeNodes(fontItems));
+                });
+                FilteredFonts.ReplaceAll(items);
+                FontTree.ReplaceAll(treeNodes);
+                TM.App.Log($"[UIFont] 筛选完成: {items.Count}个字体 (分类:{category}, 排序:{sortMode})");
             }
             catch (Exception ex)
             {
@@ -430,13 +425,55 @@ namespace TM.Framework.Appearance.Font.UIFont
             }
         }
 
-        private void BuildFontTree()
+        private List<FontItem> BuildFontItemsCore(
+            System.Collections.Generic.List<string> fonts,
+            FontCategory category, string searchText, SortMode sortMode,
+            System.Collections.Generic.HashSet<string> favoriteSet,
+            System.Collections.Generic.List<string> recentFonts)
         {
-            FontTree.Clear();
-            foreach (var font in FilteredFonts)
+            var fontItems = fonts.Select(fontName =>
             {
-                string icon = font.IsFavorite ? "⭐" : "🔤";
-                FontTree.Add(new TM.Framework.Common.Controls.TreeNodeItem
+                var cat = _categoryService.ClassifyFont(fontName);
+                var isMono = _categoryService.IsMonospace(fontName);
+                return new FontItem
+                {
+                    FontName = fontName,
+                    Category = cat,
+                    IsFavorite = favoriteSet.Contains(fontName),
+                    IsMonospace = isMono,
+                    Tags = _categoryService.GenerateTags(fontName, cat, isMono)
+                };
+            }).ToList();
+
+            if (category != FontCategory.All)
+                fontItems = fontItems.Where(f => f.Category == category).ToList();
+
+            if (!string.IsNullOrWhiteSpace(searchText))
+                fontItems = fontItems.Where(f => f.FontName.Contains(searchText, StringComparison.OrdinalIgnoreCase)).ToList();
+
+            fontItems = sortMode switch
+            {
+                SortMode.Name => fontItems.OrderBy(f => f.FontName).ToList(),
+                SortMode.RecentUsed => fontItems.OrderByDescending(f =>
+                {
+                    int index = recentFonts.IndexOf(f.FontName);
+                    return index >= 0 ? recentFonts.Count - index : -1;
+                }).ThenBy(f => f.FontName).ToList(),
+                SortMode.FavoriteFirst => fontItems.OrderByDescending(f => f.IsFavorite).ThenBy(f => f.FontName).ToList(),
+                _ => fontItems
+            };
+
+            return fontItems;
+        }
+
+        private static System.Collections.Generic.List<TM.Framework.Common.Controls.TreeNodeItem> BuildFontTreeNodes(
+            System.Collections.Generic.IEnumerable<FontItem> fontItems)
+        {
+            var newItems = new System.Collections.Generic.List<TM.Framework.Common.Controls.TreeNodeItem>();
+            foreach (var font in fontItems)
+            {
+                var icon = font.IsFavorite ? IconHelper.TryGet("Icon.Star") : IconHelper.TryGet("Icon.Font");
+                newItems.Add(new TM.Framework.Common.Controls.TreeNodeItem
                 {
                     Name = font.FontName,
                     Icon = icon,
@@ -445,18 +482,17 @@ namespace TM.Framework.Appearance.Font.UIFont
                     ShowChildCount = false
                 });
             }
-            OnPropertyChanged(nameof(FontTree));
+            return newItems;
         }
 
         private void SelectFontFromTree(object? parameter)
         {
             if (parameter is TM.Framework.Common.Controls.TreeNodeItem node && node.Tag is FontItem font)
             {
-                foreach (var item in FontTree)
-                {
-                    item.IsSelected = false;
-                }
+                if (_selectedFontNode != null)
+                    _selectedFontNode.IsSelected = false;
                 node.IsSelected = true;
+                _selectedFontNode = node;
                 SelectedFontFamily = font.FontName;
             }
         }
@@ -477,7 +513,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 切换收藏失败: {ex.Message}");
-                StandardDialog.ShowError($"切换收藏失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"切换收藏失败\n\n错误详情：{ex.Message}", "操作失败");
             }
         }
 
@@ -492,7 +528,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 清除最近使用失败: {ex.Message}");
-                StandardDialog.ShowError($"清除最近使用失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"清除最近使用失败\n\n错误详情：{ex.Message}", "操作失败");
             }
         }
 
@@ -508,7 +544,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 应用字体失败: {ex.Message}");
-                StandardDialog.ShowError($"应用字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"应用字体失败\n\n错误详情：{ex.Message}", "应用失败");
             }
         }
 
@@ -526,7 +562,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 保存字体失败: {ex.Message}");
-                StandardDialog.ShowError($"保存字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"保存字体失败\n\n错误详情：{ex.Message}", "保存失败");
             }
         }
 
@@ -549,7 +585,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 重置字体失败: {ex.Message}");
-                StandardDialog.ShowError($"重置字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"重置字体失败\n\n错误详情：{ex.Message}", "重置失败");
             }
         }
 
@@ -564,7 +600,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 切换对比模式失败: {ex.Message}");
-                StandardDialog.ShowError($"切换对比模式失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"切换对比模式失败\n\n错误详情：{ex.Message}", "操作失败");
             }
         }
 
@@ -594,7 +630,7 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] A/B测试失败: {ex.Message}");
-                StandardDialog.ShowError($"A/B测试失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"A/B测试失败\n\n错误详情：{ex.Message}", "测试失败");
             }
         }
 
@@ -618,28 +654,28 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] A/B测试失败: {ex.Message}");
-                StandardDialog.ShowError($"A/B测试失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"A/B测试失败\n\n错误详情：{ex.Message}", "测试失败");
             }
         }
 
-        private void ExportConfig()
+        private async System.Threading.Tasks.Task ExportConfigAsync()
         {
             try
             {
-                FontManager.ExportConfiguration();
+                await FontManager.ExportConfigurationAsync();
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 导出配置失败: {ex.Message}");
-                StandardDialog.ShowError($"导出失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"导出失败\n\n错误详情：{ex.Message}", "导出失败");
             }
         }
 
-        private void ImportConfig()
+        private async System.Threading.Tasks.Task ImportConfigAsync()
         {
             try
             {
-                if (FontManager.ImportConfiguration())
+                if (await FontManager.ImportConfigurationAsync())
                 {
                     var config = FontManager.LoadConfiguration();
                     _currentSettings = config.UIFont.Clone();
@@ -653,20 +689,20 @@ namespace TM.Framework.Appearance.Font.UIFont
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 导入配置失败: {ex.Message}");
-                StandardDialog.ShowError($"导入失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"导入失败\n\n错误详情：{ex.Message}", "导入失败");
             }
         }
 
-        private void ShareConfig()
+        private async System.Threading.Tasks.Task ShareConfigAsync()
         {
             try
             {
-                FontManager.ExportAsShareable();
+                await FontManager.ExportAsShareableAsync();
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[UIFont] 分享配置失败: {ex.Message}");
-                StandardDialog.ShowError($"分享失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"分享失败\n\n错误详情：{ex.Message}", "分享失败");
             }
         }
 

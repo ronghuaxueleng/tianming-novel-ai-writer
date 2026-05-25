@@ -2,9 +2,11 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <ResourceDictionary.MergedDictionaries>
+
         <ResourceDictionary Source="StandardMargins.xaml"/>
         <ResourceDictionary Source="StandardGeometry.xaml"/>
         <ResourceDictionary Source="FontResources.xaml"/>
+        <ResourceDictionary Source="IconResources.xaml"/>
 
         <ResourceDictionary Source="Converters.xaml"/>
 
@@ -16,6 +18,7 @@
 
         <ResourceDictionary Source="InputStyles/StandardInputs.xaml"/>
         <ResourceDictionary Source="InputStyles/TreeComboBoxStyle.xaml"/>
+        <ResourceDictionary Source="/Framework/Common/Controls/MultiSelectComboBox/MultiSelectComboBox.xaml"/>
 
         <ResourceDictionary Source="ScrollbarStyles/StandardScrollbar.xaml"/>
 

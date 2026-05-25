@@ -1,14 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Framework.Common.Models;
-using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.VersionTracking;
 
 namespace TM.Framework.Common.Services
@@ -23,7 +19,7 @@ namespace TM.Framework.Common.Services
         (int categoriesDeleted, int dataDeleted) CascadeDeleteCategory(string categoryName);
     }
 
-    public abstract class ModuleServiceBase<TCategory, TData> : IAsyncInitializable, ICategorySaver, IClearAllService, ICascadeDeleteCategoryService
+    public abstract partial class ModuleServiceBase<TCategory, TData> : IAsyncInitializable, ICategorySaver, IClearAllService, ICascadeDeleteCategoryService
         where TCategory : ICategory
         where TData : class, IDataItem
     {
@@ -31,6 +27,7 @@ namespace TM.Framework.Common.Services
         private string _builtInCategoriesFile;
         private string _dataFile;
         private readonly string _modulePath;
+        private readonly string _moduleName;
         private IDataStorageStrategy<TData>? _storage;
         private readonly bool _delayDataLoading;
         private bool _versionIncrementPending = false;
@@ -47,7 +44,6 @@ namespace TM.Framework.Common.Services
         private int _saveBuiltInCategoriesQueueVersion;
         private System.Threading.Tasks.Task _saveBuiltInCategoriesQueueTask = System.Threading.Tasks.Task.CompletedTask;
 
-        private readonly IWorkScopeService _workScopeService;
         private readonly VersionTrackingService _versionTrackingService;
 
         private readonly object _initLock = new();
@@ -56,15 +52,18 @@ namespace TM.Framework.Common.Services
         protected List<TCategory> Categories { get; set; }
         protected List<TData> DataItems { get; set; }
 
+        private readonly object _nameSnapshotLock = new();
+        private readonly Dictionary<string, string> _nameSnapshot = new(StringComparer.Ordinal);
+
         protected ModuleServiceBase(string modulePath, string categoriesFileName, string dataFileName, bool delayDataLoading = false)
         {
             _modulePath = modulePath;
+            _moduleName = modulePath.Split('/').Last();
             _categoriesFile = StoragePathHelper.GetFilePath("Modules", modulePath, categoriesFileName);
             _builtInCategoriesFile = StoragePathHelper.GetFilePath("Modules", modulePath, "built_in_categories.json");
             _dataFile = StoragePathHelper.GetFilePath("Modules", modulePath, dataFileName);
             _delayDataLoading = delayDataLoading;
 
-            _workScopeService = ServiceLocator.Get<IWorkScopeService>();
             _versionTrackingService = ServiceLocator.Get<VersionTrackingService>();
 
             Categories = new List<TCategory>();
@@ -82,6 +81,19 @@ namespace TM.Framework.Common.Services
                 }
                 TM.App.Log($"[{GetType().Name}] 项目切换，已重置数据，等待下次访问时重新加载");
             };
+
+            StoragePathHelper.ModuleDataIsEnabledChanged += (dirPath, enabled) =>
+            {
+                var myDir = System.IO.Path.GetDirectoryName(_dataFile);
+                if (!string.Equals(myDir, dirPath, StringComparison.OrdinalIgnoreCase)) return;
+                lock (_initLock)
+                {
+                    foreach (var item in DataItems)
+                        item.IsEnabled = enabled;
+                }
+                TM.App.Log($"[{GetType().Name}] 内存 IsEnabled 已同步为 {enabled}");
+            };
+
         }
 
         protected void OverrideCategoriesFile(string path) { _categoriesFile = path; }
@@ -114,18 +126,27 @@ namespace TM.Framework.Common.Services
             }
         }
 
+        public System.Threading.Tasks.Task ReloadAsync()
+        {
+            lock (_initLock)
+            {
+                _initializeTask = null;
+                Categories = new List<TCategory>();
+                DataItems = new List<TData>();
+            }
+            return InitializeAsync();
+        }
+
         public void EnsureInitialized()
         {
             if (IsInitialized) return;
+            _ = InitializeAsync();
+        }
 
-            var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher != null && dispatcher.CheckAccess())
-            {
-                _ = InitializeAsync();
-                return;
-            }
-
-            System.Threading.Tasks.Task.Run(() => InitializeAsync()).GetAwaiter().GetResult();
+        public System.Threading.Tasks.Task EnsureInitializedAsync()
+        {
+            if (IsInitialized) return System.Threading.Tasks.Task.CompletedTask;
+            return InitializeAsync();
         }
 
         #region 统一ID补全
@@ -195,6 +216,20 @@ namespace TM.Framework.Common.Services
             TM.App.Log($"[{GetType().Name}] 自动分配数据ID: {newId}");
         }
 
+        private void SyncCategoryId(TData data)
+        {
+            var categoryName = data.Category;
+            if (string.IsNullOrWhiteSpace(categoryName)) return;
+
+            var category = Categories.FirstOrDefault(c => string.Equals(c.Name, categoryName, StringComparison.Ordinal));
+            if (category == null || string.IsNullOrWhiteSpace(category.Id)) return;
+
+            if (data.CategoryId == category.Id) return;
+
+            data.CategoryId = category.Id;
+            TM.App.Log($"[{GetType().Name}] 同步CategoryId: {categoryName} -> {category.Id}");
+        }
+
         private void EnsureDataCategoryId(TData data)
         {
             if (!string.IsNullOrWhiteSpace(data.CategoryId))
@@ -241,7 +276,101 @@ namespace TM.Framework.Common.Services
                 await SaveDataAsync().ConfigureAwait(false);
                 TM.App.Log($"[{GetType().Name}] 初始化时补全Id/CategoryId并已回写");
             }
+
+            RebuildNameSnapshot();
         }
+
+        #region P0-E: Name 变化追踪（用于 Rename 全局传播）
+
+        protected virtual string? GetEntityTypeKeyForPropagation() => null;
+
+        protected void RebuildNameSnapshot()
+        {
+            lock (_nameSnapshotLock)
+            {
+                _nameSnapshot.Clear();
+                foreach (var item in DataItems)
+                {
+                    if (item == null) continue;
+                    var id = item.Id;
+                    if (string.IsNullOrWhiteSpace(id)) continue;
+                    _nameSnapshot[id!] = item.Name ?? string.Empty;
+                }
+            }
+        }
+
+        private string? GetSnapshotName(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return null;
+            lock (_nameSnapshotLock)
+            {
+                return _nameSnapshot.TryGetValue(id, out var name) ? name : null;
+            }
+        }
+
+        private void SetSnapshotName(string id, string name)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            lock (_nameSnapshotLock)
+            {
+                _nameSnapshot[id] = name ?? string.Empty;
+            }
+        }
+
+        private void RemoveSnapshotName(string id)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            lock (_nameSnapshotLock)
+            {
+                _nameSnapshot.Remove(id);
+            }
+        }
+
+        protected void TryTriggerRenamePropagation(string id, string? oldName, string? newName)
+        {
+            if (string.IsNullOrWhiteSpace(id)) return;
+            if (string.IsNullOrWhiteSpace(oldName) || string.IsNullOrWhiteSpace(newName)) return;
+            if (string.Equals(oldName, newName, StringComparison.Ordinal)) return;
+
+            var entityTypeKey = GetEntityTypeKeyForPropagation();
+            if (string.IsNullOrWhiteSpace(entityTypeKey)) return;
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var propagationType = Type.GetType("TM.Services.Framework.AI.EntityPropagationService, 天命", throwOnError: false)
+                                           ?? Type.GetType("TM.Services.Framework.AI.EntityPropagationService", throwOnError: false);
+                    if (propagationType == null)
+                    {
+                        TM.App.Log($"[{GetType().Name}] Rename 传播跳过：未能解析 EntityPropagationService 类型");
+                        return;
+                    }
+
+                    var instance = Activator.CreateInstance(propagationType);
+                    var method = propagationType.GetMethod("PropagateRenameAsync");
+                    if (instance == null || method == null)
+                    {
+                        TM.App.Log($"[{GetType().Name}] Rename 传播跳过：未能解析 PropagateRenameAsync 方法");
+                        return;
+                    }
+
+                    var task = method.Invoke(instance, new object[] { id, entityTypeKey!, oldName!, newName! }) as System.Threading.Tasks.Task;
+                    if (task == null) return;
+                    await task.ConfigureAwait(false);
+
+                    var resultProp = task.GetType().GetProperty("Result");
+                    var result = resultProp?.GetValue(task) as string ?? string.Empty;
+                    TM.App.Log($"[{GetType().Name}] Rename 传播完成: {entityTypeKey} {id} '{oldName}' -> '{newName}': {result}");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[{GetType().Name}] Rename 传播异常（非致命）: {ex.Message}");
+                }
+            });
+        }
+
+        #endregion
 
         protected virtual System.Threading.Tasks.Task OnAfterCategoriesLoadedAsync()
         {
@@ -277,34 +406,83 @@ namespace TM.Framework.Common.Services
             await OnInitializedAsync().ConfigureAwait(false);
         }
 
+        protected virtual string GetBuiltInCategoriesResourceMarker()
+        {
+            return $".Modules.{_modulePath.Replace('/', '.')}.Resources.built_in_categories.json";
+        }
+
+        private async System.Threading.Tasks.Task<List<TCategory>> LoadEmbeddedBuiltInCategoriesAsync()
+        {
+            var result = new List<TCategory>();
+            try
+            {
+                var asm = GetType().Assembly;
+                var marker = GetBuiltInCategoriesResourceMarker();
+                string? resourceName = asm.GetManifestResourceNames()
+                    .FirstOrDefault(n => n.EndsWith(marker, StringComparison.Ordinal));
+
+                if (resourceName == null)
+                    return result;
+
+                await using var stream = asm.GetManifestResourceStream(resourceName)!;
+                var categories = await JsonSerializer.DeserializeAsync<List<TCategory>>(stream, JsonHelper.Default).ConfigureAwait(false);
+                if (categories != null)
+                {
+                    foreach (var cat in categories)
+                        cat.IsBuiltIn = true;
+                    result = categories;
+                }
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[{GetType().Name}] 加载嵌入内置分类失败: {ex.Message}");
+            }
+            return result;
+        }
+
+        private static List<TCategory> MergeBuiltInRuntimeCache(List<TCategory> baseline, List<TCategory> runtime)
+        {
+            var result = baseline.ToList();
+            foreach (var item in runtime)
+            {
+                var index = result.FindIndex(c =>
+                    (!string.IsNullOrWhiteSpace(c.Id) && !string.IsNullOrWhiteSpace(item.Id) && string.Equals(c.Id, item.Id, StringComparison.Ordinal)) ||
+                    string.Equals(c.Name, item.Name, StringComparison.Ordinal));
+
+                if (index >= 0) result[index] = item;
+                else result.Add(item);
+            }
+            return result.OrderBy(c => c.Order).ToList();
+        }
+
         private async System.Threading.Tasks.Task LoadCategoriesAsync()
         {
             try
             {
                 var userCategories = new List<TCategory>();
-                var builtInCategories = new List<TCategory>();
 
                 if (File.Exists(_categoriesFile))
                 {
-                    var json = await File.ReadAllTextAsync(_categoriesFile).ConfigureAwait(false);
-                    var categories = JsonSerializer.Deserialize<List<TCategory>>(json);
+                    await using var stream = File.OpenRead(_categoriesFile);
+                    var categories = await JsonSerializer.DeserializeAsync<List<TCategory>>(stream, JsonHelper.Default).ConfigureAwait(false);
                     if (categories != null)
                     {
                         userCategories = categories;
                     }
                 }
 
+                var builtInCategories = await LoadEmbeddedBuiltInCategoriesAsync().ConfigureAwait(false);
+
                 if (File.Exists(_builtInCategoriesFile))
                 {
-                    var json = await File.ReadAllTextAsync(_builtInCategoriesFile).ConfigureAwait(false);
-                    var categories = JsonSerializer.Deserialize<List<TCategory>>(json);
-                    if (categories != null)
+                    await using var builtInStream = File.OpenRead(_builtInCategoriesFile);
+                    var storageCategories = await JsonSerializer.DeserializeAsync<List<TCategory>>(builtInStream, JsonHelper.Default).ConfigureAwait(false);
+                    if (storageCategories != null && storageCategories.Count > 0)
                     {
-                        foreach (var cat in categories)
-                        {
+                        foreach (var cat in storageCategories)
                             cat.IsBuiltIn = true;
-                        }
-                        builtInCategories = categories;
+
+                        builtInCategories = MergeBuiltInRuntimeCache(builtInCategories, storageCategories);
                     }
                 }
 
@@ -497,8 +675,10 @@ namespace TM.Framework.Common.Services
                     throw new InvalidOperationException($"系统内置分类「{categoryName}」不可删除");
                 }
 
-                int dataRemoved = DataItems.RemoveAll(d => 
-                    string.Equals(d.Category, categoryName, StringComparison.Ordinal));
+                var categoryId = category.Id;
+                int dataRemoved = DataItems.RemoveAll(d =>
+                    (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && string.Equals(d.Category, categoryName, StringComparison.Ordinal)));
 
                 Categories.Remove(category);
                 SaveCategories();
@@ -519,8 +699,10 @@ namespace TM.Framework.Common.Services
                     throw new InvalidOperationException($"系统内置分类「{categoryName}」不可删除");
                 }
 
-                int dataRemoved = DataItems.RemoveAll(d => 
-                    string.Equals(d.Category, categoryName, StringComparison.Ordinal));
+                var categoryId = category.Id;
+                int dataRemoved = DataItems.RemoveAll(d =>
+                    (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && string.Equals(d.Category, categoryName, StringComparison.Ordinal)));
 
                 Categories.Remove(category);
                 await SaveCategoriesAsync().ConfigureAwait(false);
@@ -536,7 +718,10 @@ namespace TM.Framework.Common.Services
             if (root != null && root.IsBuiltIn)
             {
                 TM.App.Log($"[{GetType().Name}] 内置分类仅删除直属数据，保留分类节点及子树: {categoryName}");
-                int dataRemoved = DataItems.RemoveAll(d => string.Equals(d.Category, categoryName, StringComparison.Ordinal));
+                var builtInId = root.Id;
+                int dataRemoved = DataItems.RemoveAll(d =>
+                    (!string.IsNullOrWhiteSpace(builtInId) && d.CategoryId == builtInId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && string.Equals(d.Category, categoryName, StringComparison.Ordinal)));
                 if (dataRemoved > 0) SaveData();
                 TM.App.Log($"[{GetType().Name}] 内置分类直属数据已清除: {dataRemoved}条");
                 return (0, dataRemoved);
@@ -563,7 +748,15 @@ namespace TM.Framework.Common.Services
                 allNameSet.Where(n => !builtInNames.Contains(n)),
                 StringComparer.Ordinal);
 
-            int dataRemoved = DataItems.RemoveAll(d => allNameSet.Contains(d.Category));
+            var categoryIdSet = new HashSet<string>(
+                Categories
+                    .Where(c => allNameSet.Contains(c.Name) && !string.IsNullOrWhiteSpace(c.Id))
+                    .Select(c => c.Id),
+                StringComparer.Ordinal);
+
+            int dataRemoved = DataItems.RemoveAll(d =>
+                (!string.IsNullOrWhiteSpace(d.CategoryId) && categoryIdSet.Contains(d.CategoryId)) ||
+                (string.IsNullOrWhiteSpace(d.CategoryId) && allNameSet.Contains(d.Category)));
             int catRemoved = Categories.RemoveAll(c => catDeleteSet.Contains(c.Name));
 
             if (catRemoved > 0) SaveCategories();
@@ -579,7 +772,7 @@ namespace TM.Framework.Common.Services
             void Collect(string name)
             {
                 result.Add(name);
-                foreach (var child in Categories.Where(c => 
+                foreach (var child in Categories.Where(c =>
                     string.Equals(c.ParentCategory, name, StringComparison.Ordinal)))
                 {
                     Collect(child.Name);
@@ -589,511 +782,7 @@ namespace TM.Framework.Common.Services
             return result;
         }
 
-        public bool IsCategoryOperationAllowed(string categoryName)
-        {
-            var category = Categories.FirstOrDefault(c => c.Name == categoryName);
-            return category == null || !category.IsBuiltIn;
-        }
-
-        public bool IsCategoryBuiltIn(string categoryName)
-        {
-            var category = Categories.FirstOrDefault(c => c.Name == categoryName);
-            return category?.IsBuiltIn ?? false;
-        }
-
-        #endregion
-
-        #region 数据管理
-
-        public List<TData> GetAllData()
-        {
-            return DataItems.ToList();
-        }
-
-        public void AddData(TData data)
-        {
-            if (data == null) return;
-
-            EnsureDataIdentifiers(data);
-
-            SetSourceBookIdIfSupported(data);
-
-            DataItems.Add(data);
-            SaveData();
-            TM.App.Log($"[{GetType().Name}] 添加数据");
-        }
-
-        public async System.Threading.Tasks.Task AddDataAsync(TData data)
-        {
-            if (data == null) return;
-
-            EnsureDataIdentifiers(data);
-
-            SetSourceBookIdIfSupported(data);
-
-            DataItems.Add(data);
-            await SaveDataAsync().ConfigureAwait(false);
-            TM.App.Log($"[{GetType().Name}] 异步添加数据");
-        }
-
-        public void UpdateData(TData data)
-        {
-            if (data == null) return;
-
-            SaveData();
-            TM.App.Log($"[{GetType().Name}] 更新数据");
-        }
-
-        public async System.Threading.Tasks.Task UpdateDataAsync(TData data)
-        {
-            if (data == null) return;
-
-            await SaveDataAsync().ConfigureAwait(false);
-            TM.App.Log($"[{GetType().Name}] 异步更新数据");
-        }
-
-        public void DeleteData(string dataId)
-        {
-            int removedCount = OnBeforeDeleteData(dataId);
-            if (removedCount > 0)
-            {
-                SaveData();
-                TM.App.Log($"[{GetType().Name}] 删除数据: ID={dataId}");
-            }
-        }
-
-        public async System.Threading.Tasks.Task DeleteDataAsync(string dataId)
-        {
-            int removedCount = OnBeforeDeleteData(dataId);
-            if (removedCount > 0)
-            {
-                await SaveDataAsync().ConfigureAwait(false);
-                TM.App.Log($"[{GetType().Name}] 异步删除数据: ID={dataId}");
-            }
-        }
-
-        protected abstract int OnBeforeDeleteData(string dataId);
-
-        protected void SetSourceBookIdIfSupported(TData data)
-        {
-            try
-            {
-                if (data is not ISourceBookBound bound) return;
-
-                if (!string.IsNullOrEmpty(bound.SourceBookId))
-                    return;
-
-                var currentSourceBookId = _workScopeService.CurrentSourceBookId;
-                if (string.IsNullOrEmpty(currentSourceBookId))
-                {
-                    var dispatcher = System.Windows.Application.Current?.Dispatcher;
-                    if (dispatcher != null && dispatcher.CheckAccess())
-                    {
-                        _ = _workScopeService.GetCurrentScopeAsync();
-                        return;
-                    }
-
-                    currentSourceBookId = System.Threading.Tasks.Task.Run(
-                        () => _workScopeService.GetCurrentScopeAsync()).GetAwaiter().GetResult();
-                }
-
-                if (!string.IsNullOrEmpty(currentSourceBookId))
-                {
-                    bound.SourceBookId = currentSourceBookId;
-                    TM.App.Log($"[{GetType().Name}] 自动设置 SourceBookId: {currentSourceBookId}");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 设置 SourceBookId 失败: {ex.Message}");
-            }
-        }
-
-        #endregion
-
-        #region 防噪音机制（过滤空分类/空数据）
-
-        public virtual List<TCategory> GetNonEmptyCategories()
-        {
-            var dataCategories = DataItems
-                .Where(d => IsDataEnabled(d) && !string.IsNullOrEmpty(GetDataCategory(d)))
-                .Select(d => GetDataCategory(d))
-                .Distinct()
-                .ToHashSet(StringComparer.Ordinal);
-
-            return Categories
-                .Where(c => c.IsEnabled && dataCategories.Contains(c.Name))
-                .OrderBy(c => c.Order)
-                .ToList();
-        }
-
-        public virtual List<TData> GetNonEmptyData()
-        {
-            return DataItems
-                .Where(d => IsDataEnabled(d) && HasContent(d))
-                .ToList();
-        }
-
-        protected virtual bool HasContent(TData data)
-        {
-            return data != null && IsDataEnabled(data);
-        }
-
-        private string GetDataCategory(TData data)
-        {
-            return data?.Category ?? string.Empty;
-        }
-
-        private bool IsDataEnabled(TData data)
-        {
-            return data?.IsEnabled ?? false;
-        }
-
-        #endregion
-
-        #region 批量启用/禁用
-
-        public virtual int SetCategoriesEnabled(IEnumerable<string> categoryNames, bool enabled)
-        {
-            if (categoryNames == null) return 0;
-            var set = new HashSet<string>(categoryNames, StringComparer.Ordinal);
-            int count = 0;
-            foreach (var category in Categories)
-            {
-                if (set.Contains(category.Name) && category.IsEnabled != enabled)
-                {
-                    category.IsEnabled = enabled;
-                    count++;
-                }
-            }
-            if (count > 0) SaveCategories();
-            return count;
-        }
-
-        public virtual async System.Threading.Tasks.Task<int> SetCategoriesEnabledAsync(IEnumerable<string> categoryNames, bool enabled)
-        {
-            if (categoryNames == null) return 0;
-            var set = new HashSet<string>(categoryNames, StringComparer.Ordinal);
-            int count = 0;
-            foreach (var category in Categories)
-            {
-                if (set.Contains(category.Name) && category.IsEnabled != enabled)
-                {
-                    category.IsEnabled = enabled;
-                    count++;
-                }
-            }
-            if (count > 0) await SaveCategoriesAsync().ConfigureAwait(false);
-            return count;
-        }
-
-        public int SetDataEnabledByCategories(IEnumerable<string> categoryNames, bool enabled)
-        {
-            if (categoryNames == null) return 0;
-            var set = new HashSet<string>(categoryNames, StringComparer.Ordinal);
-            int count = 0;
-            foreach (var item in DataItems)
-            {
-                if (set.Contains(item.Category) && item.IsEnabled != enabled)
-                {
-                    item.IsEnabled = enabled;
-                    count++;
-                }
-            }
-            if (count > 0) SaveData();
-            return count;
-        }
-
-        public async System.Threading.Tasks.Task<int> SetDataEnabledByCategoriesAsync(IEnumerable<string> categoryNames, bool enabled)
-        {
-            if (categoryNames == null) return 0;
-            var set = new HashSet<string>(categoryNames, StringComparer.Ordinal);
-            int count = 0;
-            foreach (var item in DataItems)
-            {
-                if (set.Contains(item.Category) && item.IsEnabled != enabled)
-                {
-                    item.IsEnabled = enabled;
-                    count++;
-                }
-            }
-            if (count > 0) await SaveDataAsync().ConfigureAwait(false);
-            return count;
-        }
-
-        #endregion
-
-        private void EnqueueWriteCategoriesFile(string destPath, string json, string logTag)
-        {
-            lock (_saveCategoriesQueueLock)
-            {
-                var version = ++_saveCategoriesQueueVersion;
-                _saveCategoriesQueueTask = _saveCategoriesQueueTask.ContinueWith(async _ =>
-                {
-                    try
-                    {
-                        await System.Threading.Tasks.Task.Delay(50).ConfigureAwait(false);
-                        bool shouldWrite;
-                        lock (_saveCategoriesQueueLock)
-                        {
-                            shouldWrite = (version == _saveCategoriesQueueVersion);
-                        }
-                        if (!shouldWrite) return;
-
-                        var dir = Path.GetDirectoryName(destPath);
-                        var tmp = destPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
-                        File.Move(tmp, destPath, overwrite: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[{logTag}] 后台写文件失败: {ex.Message}");
-                    }
-                }, System.Threading.Tasks.TaskScheduler.Default).Unwrap();
-            }
-        }
-
-        private void EnqueueWriteBuiltInCategoriesFile(string destPath, string json, string logTag)
-        {
-            lock (_saveBuiltInCategoriesQueueLock)
-            {
-                var version = ++_saveBuiltInCategoriesQueueVersion;
-                _saveBuiltInCategoriesQueueTask = _saveBuiltInCategoriesQueueTask.ContinueWith(async _ =>
-                {
-                    try
-                    {
-                        await System.Threading.Tasks.Task.Delay(50).ConfigureAwait(false);
-                        bool shouldWrite;
-                        lock (_saveBuiltInCategoriesQueueLock)
-                        {
-                            shouldWrite = (version == _saveBuiltInCategoriesQueueVersion);
-                        }
-                        if (!shouldWrite) return;
-
-                        var dir = Path.GetDirectoryName(destPath);
-                        var tmp = destPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                            Directory.CreateDirectory(dir);
-                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
-                        File.Move(tmp, destPath, overwrite: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[{logTag}] 后台写文件失败: {ex.Message}");
-                    }
-                }, System.Threading.Tasks.TaskScheduler.Default).Unwrap();
-            }
-        }
-
-        #region 数据持久化
-
-        private List<TCategory> MergeCategories(List<TCategory> userCategories, List<TCategory> builtInCategories)
-        {
-            var result = new List<TCategory>();
-            var userCategoryNames = new HashSet<string>(userCategories.Select(c => c.Name), StringComparer.Ordinal);
-
-            result.AddRange(userCategories);
-
-            foreach (var builtIn in builtInCategories)
-            {
-                if (!userCategoryNames.Contains(builtIn.Name))
-                {
-                    result.Add(builtIn);
-                }
-                else
-                {
-                    TM.App.Log($"[{GetType().Name}] 用户分类覆盖系统内置: {builtIn.Name}");
-                }
-            }
-
-            return result.OrderBy(c => c.Order).ToList();
-        }
-
-        protected virtual List<TCategory> CreateDefaultCategories()
-        {
-            return new List<TCategory>();
-        }
-
-        private void SaveCategories()
-        {
-            try
-            {
-                var userCategories = Categories.Where(c => !c.IsBuiltIn).ToList();
-                var json = JsonSerializer.Serialize(userCategories, JsonHelper.Default);
-                EnqueueWriteCategoriesFile(_categoriesFile, json, GetType().Name + ".SaveCategories");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 保存分类失败: {ex.Message}");
-            }
-        }
-
-        private void SaveBuiltInCategories()
-        {
-            try
-            {
-                var builtInCategories = Categories.Where(c => c.IsBuiltIn).ToList();
-                var json = JsonSerializer.Serialize(builtInCategories, JsonHelper.Default);
-                EnqueueWriteBuiltInCategoriesFile(_builtInCategoriesFile, json, GetType().Name + ".SaveBuiltInCategories");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 保存系统内置分类失败: {ex.Message}");
-            }
-        }
-
-        private async System.Threading.Tasks.Task SaveCategoriesAsync()
-        {
-            try
-            {
-                var userCategories = Categories.Where(c => !c.IsBuiltIn).ToList();
-
-                var json = JsonSerializer.Serialize(userCategories, JsonHelper.Default);
-                var dir = Path.GetDirectoryName(_categoriesFile);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-                var tmp = _categoriesFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
-                File.Move(tmp, _categoriesFile, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 异步保存分类失败: {ex.Message}");
-            }
-        }
-
-        private async System.Threading.Tasks.Task SaveBuiltInCategoriesAsync()
-        {
-            try
-            {
-                var builtInCategories = Categories.Where(c => c.IsBuiltIn).ToList();
-
-                var json = JsonSerializer.Serialize(builtInCategories, JsonHelper.Default);
-                var dir = Path.GetDirectoryName(_builtInCategoriesFile);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-                var tmp = _builtInCategoriesFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
-                File.Move(tmp, _builtInCategoriesFile, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 异步保存系统内置分类失败: {ex.Message}");
-            }
-        }
-
-        public void SaveAllCategories()
-        {
-            SaveBuiltInCategories();
-            SaveCategories();
-        }
-
-        public async System.Threading.Tasks.Task SaveAllCategoriesAsync()
-        {
-            await SaveBuiltInCategoriesAsync().ConfigureAwait(false);
-            await SaveCategoriesAsync().ConfigureAwait(false);
-        }
-
-        protected void SaveData()
-        {
-            PrepareSourceBookIds();
-
-            var storage = _storage!;
-
-            var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher != null && dispatcher.CheckAccess())
-            {
-                var snapshot = DataItems.ToList();
-                lock (_saveDataQueueLock)
-                {
-                    var version = ++_saveDataQueueVersion;
-                    _saveDataQueueTask = _saveDataQueueTask.ContinueWith(async _ =>
-                    {
-                        try
-                        {
-                            await System.Threading.Tasks.Task.Delay(50).ConfigureAwait(false);
-                            bool shouldWrite;
-                            lock (_saveDataQueueLock)
-                            {
-                                shouldWrite = (version == _saveDataQueueVersion);
-                            }
-                            if (!shouldWrite) return;
-
-                            await storage.SaveAsync(snapshot).ConfigureAwait(false);
-                        }
-                        catch (Exception ex)
-                        {
-                            TM.App.Log($"[{GetType().Name}] 后台保存数据失败: {ex.Message}");
-                        }
-                    }, System.Threading.Tasks.TaskScheduler.Default).Unwrap();
-                }
-            }
-            else
-            {
-                storage.Save(DataItems);
-            }
-
-            TriggerVersionIncrement();
-        }
-
-        protected async System.Threading.Tasks.Task SaveDataAsync()
-        {
-            PrepareSourceBookIds();
-            await _storage!.SaveAsync(DataItems).ConfigureAwait(false);
-            TriggerVersionIncrement();
-        }
-
-        private void PrepareSourceBookIds()
-        {
-            try
-            {
-                var currentSourceBookId = _workScopeService.CurrentSourceBookId;
-                if (string.IsNullOrEmpty(currentSourceBookId)) return;
-
-                foreach (var item in DataItems)
-                {
-                    if (item is ISourceBookBound bound && string.IsNullOrEmpty(bound.SourceBookId))
-                    {
-                        bound.SourceBookId = currentSourceBookId;
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetType().Name}] 批量补写 SourceBookId 失败: {ex.Message}");
-            }
-        }
-
-        private void TriggerVersionIncrement()
-        {
-            if (!_versionIncrementPending)
-            {
-                _versionIncrementPending = true;
-                System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
-                {
-                    if (_versionIncrementPending)
-                    {
-                        var moduleName = GetModuleName();
-                        _versionTrackingService.IncrementModuleVersion(moduleName);
-                        _versionIncrementPending = false;
-                    }
-                }, System.Windows.Threading.DispatcherPriority.Background);
-            }
-        }
-
-        public string ModuleName => GetModuleName();
-
-        protected string GetModuleName()
-        {
-            return _modulePath.Split('/').Last();
-        }
-
         #endregion
     }
 }
+

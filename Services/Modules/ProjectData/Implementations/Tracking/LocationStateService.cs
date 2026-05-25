@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -28,11 +26,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task UpdateLocationStateAsync(string chapterId, LocationStateChange change)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<LocationStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<LocationStateGuide>(volFile).ConfigureAwait(false);
 
             if (!guide.Locations.ContainsKey(change.LocationId))
             {
-                var displayName = await TryResolveLocationDisplayNameAsync(change.LocationId) ?? change.LocationId;
+                var displayName = !string.IsNullOrWhiteSpace(change.LocationName)
+                    ? change.LocationName
+                    : await TryResolveLocationDisplayNameAsync(change.LocationId).ConfigureAwait(false) ?? change.LocationId;
                 guide.Locations[change.LocationId] = new LocationStateEntry
                 {
                     Name = displayName,
@@ -64,7 +64,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
                 if (!File.Exists(elementsPath)) return null;
 
-                var json = await File.ReadAllTextAsync(elementsPath);
+                var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return null;
@@ -81,14 +81,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { TM.App.Log($"[LocationState] 读取地点名失败: {ex.Message}"); }
             return null;
         }
 
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<LocationStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<LocationStateGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Locations)
@@ -117,14 +117,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<Dictionary<string, LocationStateEntry>> GetAllLocationStatesAsync()
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<LocationStateGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var merged = new Dictionary<string, LocationStateEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<LocationStateGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 foreach (var (id, entry) in guide.Locations)
                     merged[id] = entry;
-            }
             return merged;
         }
     }

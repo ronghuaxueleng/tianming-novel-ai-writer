@@ -1,8 +1,7 @@
 using System;
 using System.IO;
-using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
+using System.Threading;
 using System.Threading.Tasks;
 using TM.Framework.Appearance.ThemeManagement;
 
@@ -14,10 +13,12 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         private readonly ThemeManager _themeManager;
         private readonly SceneDetector _sceneDetector;
         private readonly StatisticsAnalyzer _statsAnalyzer;
-        private SystemFollowSettings _settings;
+        private volatile SystemFollowSettings _settings;
+        private int _settingsVersion;
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
         private DateTime _lastSwitchTime;
         private System.Threading.Timer? _debounceTimer;
-        private string? _pendingTheme;
+        private volatile string? _pendingTheme;
 
         public SystemFollowController(
             SystemThemeMonitor monitor,
@@ -28,7 +29,19 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             _themeManager = themeManager;
             _sceneDetector = sceneDetector;
             _statsAnalyzer = new StatisticsAnalyzer();
-            _settings = LoadSettings();
+            _settings = new SystemFollowSettings();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                var loadVersion = Volatile.Read(ref _settingsVersion);
+                try
+                {
+                    var loaded = await LoadSettingsAsync().ConfigureAwait(false);
+                    if (loadVersion != Volatile.Read(ref _settingsVersion))
+                        return;
+                    _settings = loaded;
+                }
+                catch (Exception ex) { TM.App.Log($"[SystemFollowController] 初始化加载失败: {ex.Message}"); }
+            });
 
             _monitor.ThemeChanged += OnSystemThemeChanged;
 
@@ -48,13 +61,14 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         {
             if (!_settings.Enabled)
             {
+                Interlocked.Increment(ref _settingsVersion);
                 _settings.Enabled = true;
-                SaveSettings();
+                SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 保存失败: {ex.Message}"));
                 _monitor.StartMonitoring();
 
                 var themeInfo = _monitor.DetectCurrentTheme();
                 var targetTheme = DetermineTargetTheme(themeInfo);
-                _ = SwitchWithDelay(targetTheme);
+                SwitchWithDelay(targetTheme).SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 切换失败: {ex.Message}"));
 
                 TM.App.Log("[SystemFollowController] 已启用跟随系统");
             }
@@ -64,8 +78,9 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         {
             if (_settings.Enabled)
             {
+                Interlocked.Increment(ref _settingsVersion);
                 _settings.Enabled = false;
-                SaveSettings();
+                SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 保存失败: {ex.Message}"));
                 _monitor.StopMonitoring();
                 TM.App.Log("[SystemFollowController] 已禁用跟随系统");
             }
@@ -130,7 +145,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                 {
                     if (_pendingTheme != null && int.TryParse(_pendingTheme, out var themeInt) && Enum.IsDefined(typeof(ThemeType), themeInt))
                     {
-                        _ = SwitchWithDelay((ThemeType)themeInt);
+                        SwitchWithDelay((ThemeType)themeInt).SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 切换失败: {ex.Message}"));
                     }
                 }, null, _settings.DebounceDelay * 1000, System.Threading.Timeout.Infinite);
 
@@ -138,28 +153,49 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             }
             else
             {
-                _ = SwitchWithDelay(targetTheme);
+                SwitchWithDelay(targetTheme).SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 切换失败: {ex.Message}"));
             }
         }
 
         private async Task SwitchWithDelay(ThemeType targetTheme)
         {
-            if (_themeManager.CurrentTheme == targetTheme)
-            {
-                if (_settings.EnableVerboseLog)
-                {
-                    TM.App.Log($"[SystemFollowController] 已是目标主题 {targetTheme}，跳过切换");
-                }
-                return;
-            }
-
-            if (_settings.DelaySeconds > 0)
-            {
-                await Task.Delay(_settings.DelaySeconds * 1000);
-            }
-
             try
             {
+                if (_themeManager.CurrentTheme == targetTheme)
+                {
+                    if (_settings.EnableVerboseLog)
+                    {
+                        TM.App.Log($"[SystemFollowController] 已是目标主题 {targetTheme}，跳过切换");
+                    }
+                    return;
+                }
+
+                if (_settings.DelaySeconds > 0)
+                {
+                    await Task.Delay(_settings.DelaySeconds * 1000);
+                }
+
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher == null) return;
+
+                if (dispatcher.CheckAccess())
+                {
+                    await ExecuteSwitchCoreAsync(targetTheme);
+                }
+                else
+                {
+                    await dispatcher.InvokeAsync(() => ExecuteSwitchCoreAsync(targetTheme)).Task.Unwrap();
+                }
+            }
+            catch (OperationCanceledException) { }
+            catch (Exception ex) { TM.App.Log($"[SystemFollowController] 主题切换异常: {ex.Message}"); }
+        }
+
+        private async Task ExecuteSwitchCoreAsync(ThemeType targetTheme)
+        {
+            try
+            {
+                Interlocked.Increment(ref _settingsVersion);
                 var startTime = DateTime.Now;
                 var fromTheme = _themeManager.CurrentTheme;
 
@@ -172,7 +208,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                 _settings.LastSwitchTime = DateTime.Now;
                 _settings.TotalSwitchCount++;
                 _lastSwitchTime = DateTime.Now;
-                SaveSettings();
+                await SaveSettingsAsync();
 
                 TM.App.Log($"[SystemFollowController] 切换完成，耗时: {duration.TotalMilliseconds:F0}ms");
 
@@ -245,13 +281,16 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
             TM.App.Log($"[SystemFollowController] 测试切换: 系统={themeInfo}, 目标={targetTheme}");
 
-            try
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null) return;
+
+            if (dispatcher.CheckAccess())
             {
-                _themeManager.SwitchTheme(targetTheme);
+                _ = ExecuteSwitchCoreAsync(targetTheme);
             }
-            catch (Exception ex)
+            else
             {
-                TM.App.Log($"[SystemFollowController] 测试切换失败: {ex.Message}");
+                dispatcher.BeginInvoke(() => _ = ExecuteSwitchCoreAsync(targetTheme));
             }
         }
 
@@ -267,8 +306,9 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
         public void UpdateSettings(SystemFollowSettings settings)
         {
+            Interlocked.Increment(ref _settingsVersion);
             _settings = settings;
-            SaveSettings();
+            SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[SystemFollow] 保存失败: {ex.Message}"));
 
             if (_settings.Enabled)
             {
@@ -282,7 +322,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             TM.App.Log("[SystemFollowController] 设置已更新");
         }
 
-        private SystemFollowSettings LoadSettings()
+        private async System.Threading.Tasks.Task<SystemFollowSettings> LoadSettingsAsync()
         {
             try
             {
@@ -290,52 +330,34 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
                 if (File.Exists(filePath))
                 {
-                    var json = File.ReadAllText(filePath);
+                    var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                     var settings = JsonSerializer.Deserialize<SystemFollowSettings>(json);
                     if (settings != null)
                     {
-                        TM.App.Log("[SystemFollowController] 设置加载成功");
+                        TM.App.Log("[SystemFollowController] 设置异步加载成功");
                         return settings;
                     }
                 }
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[SystemFollowController] 加载设置失败: {ex.Message}");
+                TM.App.Log($"[SystemFollowController] 异步加载设置失败: {ex.Message}");
             }
 
             return SystemFollowSettings.CreateDefault();
         }
 
-        private void SaveSettings()
-        {
-            try
-            {
-                var filePath = StoragePathHelper.GetFilePath("Framework", "Appearance/AutoTheme/SystemFollow", "settings.json");
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpSfc = filePath + ".tmp";
-                File.WriteAllText(tmpSfc, json);
-                File.Move(tmpSfc, filePath, overwrite: true);
-
-                if (_settings.EnableVerboseLog)
-                {
-                    TM.App.Log("[SystemFollowController] 设置已保存");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SystemFollowController] 保存设置失败: {ex.Message}");
-            }
-        }
-
         private async System.Threading.Tasks.Task SaveSettingsAsync()
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var filePath = StoragePathHelper.GetFilePath("Framework", "Appearance/AutoTheme/SystemFollow", "settings.json");
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpSfcA = filePath + ".tmp";
-                await File.WriteAllTextAsync(tmpSfcA, json);
+                var tmpSfcA = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpSfcA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default).ConfigureAwait(false);
+                }
                 File.Move(tmpSfcA, filePath, overwrite: true);
 
                 if (_settings.EnableVerboseLog)
@@ -346,6 +368,10 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemFollowController] 异步保存设置失败: {ex.Message}");
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
     }

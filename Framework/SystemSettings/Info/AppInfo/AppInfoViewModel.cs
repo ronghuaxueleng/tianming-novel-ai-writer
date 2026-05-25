@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
@@ -6,15 +6,15 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Text;
-using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Info.Models;
 
 namespace TM.Framework.SystemSettings.Info.AppInfo
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class AppInfoViewModel : INotifyPropertyChanged
     {
         private AppInfoSettings _settings = null!;
@@ -33,16 +33,16 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
 
             AsyncSettingsLoader.LoadOrDefer<AppInfoSettings>(_settingsFilePath, s => { _settings = s; }, "AppInfo");
 
-            AssemblyList = new ObservableCollection<AssemblyItem>();
-            Dependencies = new ObservableCollection<DependencyItem>();
+            AssemblyList = new RangeObservableCollection<AssemblyItem>();
+            Dependencies = new RangeObservableCollection<DependencyItem>();
             ResourceStats = new ObservableCollection<ResourceStatItem>();
-            FeatureModules = new ObservableCollection<FeatureModuleItem>();
-            Licenses = new ObservableCollection<LicenseItem>();
-            VersionHistory = new ObservableCollection<VersionHistoryItem>();
-            PerformanceMetrics = new ObservableCollection<PerformanceMetricItem>();
+            FeatureModules = new RangeObservableCollection<FeatureModuleItem>();
+            Licenses = new RangeObservableCollection<LicenseItem>();
+            VersionHistory = new RangeObservableCollection<VersionHistoryItem>();
+            PerformanceMetrics = new RangeObservableCollection<PerformanceMetricItem>();
 
             CheckUpdateCommand = new RelayCommand(CheckUpdate);
-            ExportCommand = new RelayCommand(ExportInfo);
+            ExportCommand = new RelayCommand(() => ExportInfo().SafeFireAndForget(ex => TM.App.Log($"[AppInfoViewModel] {ex.Message}")));
             RefreshCommand = new RelayCommand(RefreshInfo);
 
             RefreshInfo();
@@ -111,19 +111,19 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
             set { _processId = value; OnPropertyChanged(nameof(ProcessId)); }
         }
 
-        public ObservableCollection<AssemblyItem> AssemblyList { get; } = null!;
-        public ObservableCollection<DependencyItem> Dependencies { get; } = null!;
+        public RangeObservableCollection<AssemblyItem> AssemblyList { get; } = null!;
+        public RangeObservableCollection<DependencyItem> Dependencies { get; } = null!;
         public ObservableCollection<ResourceStatItem> ResourceStats { get; } = null!;
-        public ObservableCollection<FeatureModuleItem> FeatureModules { get; } = null!;
-        public ObservableCollection<LicenseItem> Licenses { get; } = null!;
-        public ObservableCollection<VersionHistoryItem> VersionHistory { get; } = null!;
-        public ObservableCollection<PerformanceMetricItem> PerformanceMetrics { get; } = null!;
+        public RangeObservableCollection<FeatureModuleItem> FeatureModules { get; } = null!;
+        public RangeObservableCollection<LicenseItem> Licenses { get; } = null!;
+        public RangeObservableCollection<VersionHistoryItem> VersionHistory { get; } = null!;
+        public RangeObservableCollection<PerformanceMetricItem> PerformanceMetrics { get; } = null!;
 
         public ICommand CheckUpdateCommand { get; } = null!;
         public ICommand ExportCommand { get; } = null!;
         public ICommand RefreshCommand { get; } = null!;
 
-        private void RefreshInfo()
+        private async void RefreshInfo()
         {
             try
             {
@@ -148,43 +148,71 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
                 var runningTimeSpan = DateTime.Now - process.StartTime;
                 RunningTime = $"{runningTimeSpan.Hours}小时 {runningTimeSpan.Minutes}分钟 {runningTimeSpan.Seconds}秒";
 
-                LoadAssemblies();
+                await LoadAssemblies();
 
-                LoadDependencies();
+                var depList = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var assemblies = AppDomain.CurrentDomain.GetAssemblies()
+                        .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
+                        .OrderBy(a => a.GetName().Name);
+                    var thirdPartyLibs = assemblies.Where(a =>
+                        !a.GetName().Name?.StartsWith("System", StringComparison.Ordinal) == true &&
+                        !a.GetName().Name?.StartsWith("Microsoft", StringComparison.Ordinal) == true &&
+                        !a.GetName().Name?.StartsWith("TM", StringComparison.Ordinal) == true &&
+                        !a.GetName().Name?.StartsWith("mscorlib", StringComparison.Ordinal) == true);
+                    var list = new System.Collections.Generic.List<DependencyItem>();
+                    foreach (var assembly in thirdPartyLibs)
+                    {
+                        var name = assembly.GetName();
+                        list.Add(new DependencyItem
+                        {
+                            Name = name.Name ?? "Unknown",
+                            Version = name.Version?.ToString() ?? "N/A",
+                            Type = "第三方库",
+                            IsOutdated = false
+                        });
+                    }
+                    return list;
+                }).ConfigureAwait(true);
+                Dependencies.ReplaceAll(depList);
+                TM.App.Log($"[AppInfo] 依赖项分析完成，发现 {Dependencies.Count} 个第三方库");
+
                 LoadResourceStats();
                 LoadFeatureModules();
                 LoadLicenses();
                 LoadVersionHistory();
-                LoadPerformanceMetrics();
+                await LoadPerformanceMetricsAsync();
 
                 TM.App.Log($"[AppInfo] 刷新应用信息成功");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[AppInfo] 刷新应用信息失败: {ex.Message}");
-                GlobalToast.Error("刷新失败", $"无法刷新应用信息: {ex.Message}");
+                GlobalToast.Error("刷新失败", $"刷新失败：{ex.Message}");
             }
         }
 
-        private void LoadAssemblies()
+        private async Task LoadAssemblies()
         {
             try
             {
-                AssemblyList.Clear();
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies()
-                    .Where(a => !a.IsDynamic)
-                    .OrderBy(a => a.GetName().Name);
-
-                foreach (var assembly in assemblies)
-                {
-                    var name = assembly.GetName();
-                    AssemblyList.Add(new AssemblyItem
-                    {
-                        Name = name.Name ?? "Unknown",
-                        Version = name.Version?.ToString() ?? "N/A",
-                        Location = assembly.Location
-                    });
-                }
+                var items = await Task.Run(() =>
+                    AppDomain.CurrentDomain.GetAssemblies()
+                        .Where(a => !a.IsDynamic)
+                        .OrderBy(a => a.GetName().Name)
+                        .Select(a =>
+                        {
+                            var name = a.GetName();
+                            return new AssemblyItem
+                            {
+                                Name = name.Name ?? "Unknown",
+                                Version = name.Version?.ToString() ?? "N/A",
+                                Location = a.Location
+                            };
+                        })
+                        .ToList()
+                ).ConfigureAwait(true);
+                AssemblyList.ReplaceAll(items);
             }
             catch (Exception ex)
             {
@@ -203,11 +231,11 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[AppInfo] 检查更新失败: {ex.Message}");
-                GlobalToast.Error("检查失败", $"无法检查更新: {ex.Message}");
+                GlobalToast.Error("检查失败", $"检查失败：{ex.Message}");
             }
         }
 
-        private async void ExportInfo()
+        private async Task ExportInfo()
         {
             try
             {
@@ -241,49 +269,13 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[AppInfo] 导出应用信息失败: {ex.Message}");
-                GlobalToast.Error("导出失败", $"无法导出应用信息: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
         protected void OnPropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
-
-        private void LoadDependencies()
-        {
-            try
-            {
-                Dependencies.Clear();
-
-                var assemblies = AppDomain.CurrentDomain.GetAssemblies()
-                    .Where(a => !a.IsDynamic && !string.IsNullOrEmpty(a.Location))
-                    .OrderBy(a => a.GetName().Name);
-
-                var thirdPartyLibs = assemblies.Where(a => 
-                    !a.GetName().Name?.StartsWith("System") == true &&
-                    !a.GetName().Name?.StartsWith("Microsoft") == true &&
-                    !a.GetName().Name?.StartsWith("TM") == true &&
-                    !a.GetName().Name?.StartsWith("mscorlib") == true);
-
-                foreach (var assembly in thirdPartyLibs)
-                {
-                    var name = assembly.GetName();
-                    Dependencies.Add(new DependencyItem
-                    {
-                        Name = name.Name ?? "Unknown",
-                        Version = name.Version?.ToString() ?? "N/A",
-                        Type = "第三方库",
-                        IsOutdated = false
-                    });
-                }
-
-                TM.App.Log($"[AppInfo] 依赖项分析完成，发现 {Dependencies.Count} 个第三方库");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[AppInfo] 依赖项分析失败: {ex.Message}");
-            }
         }
 
         private void LoadResourceStats()
@@ -305,7 +297,7 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
                             Category = "主题文件",
                             Count = themeFiles.Length,
                             TotalSize = FormatBytes(themeSize),
-                            Icon = "🎨"
+                            Icon = "Icon.Palette"
                         });
                     }
 
@@ -319,7 +311,7 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
                             Category = "数据存储",
                             Count = storageFiles.Length,
                             TotalSize = FormatBytes(storageSize),
-                            Icon = "💾"
+                            Icon = "Icon.Save"
                         });
                     }
 
@@ -333,7 +325,7 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
                             Category = "XAML资源",
                             Count = xamlFiles.Length,
                             TotalSize = FormatBytes(xamlSize),
-                            Icon = "📄"
+                            Icon = "Icon.Document"
                         });
                     }
                 }
@@ -358,28 +350,15 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
         {
             try
             {
-                FeatureModules.Clear();
-
-                var modules = new[]
+                FeatureModules.ReplaceAll(new[]
                 {
-                    new { Category = "界面设置", Count = 5, Icon = "🎨", Status = "已启用" },
-                    new { Category = "用户设置", Count = 4, Icon = "👤", Status = "已启用" },
-                    new { Category = "通知设置", Count = 5, Icon = "🔔", Status = "已启用" },
-                    new { Category = "安全设置", Count = 5, Icon = "🔒", Status = "已启用" },
-                    new { Category = "网络设置", Count = 4, Icon = "🌐", Status = "已启用" },
-                    new { Category = "系统设置", Count = 5, Icon = "⚙️", Status = "已启用" }
-                };
-
-                foreach (var module in modules)
-                {
-                    FeatureModules.Add(new FeatureModuleItem
-                    {
-                        CategoryName = module.Category,
-                        SubfunctionCount = module.Count,
-                        Icon = module.Icon,
-                        Status = module.Status
-                    });
-                }
+                    new FeatureModuleItem { CategoryName = "界面设置", SubfunctionCount = 5, Icon = "Icon.Palette", Status = "已启用" },
+                    new FeatureModuleItem { CategoryName = "用户设置", SubfunctionCount = 4, Icon = "Icon.User", Status = "已启用" },
+                    new FeatureModuleItem { CategoryName = "通知设置", SubfunctionCount = 5, Icon = "Icon.Bell", Status = "已启用" },
+                    new FeatureModuleItem { CategoryName = "安全设置", SubfunctionCount = 5, Icon = "Icon.Lock", Status = "已启用" },
+                    new FeatureModuleItem { CategoryName = "网络设置", SubfunctionCount = 4, Icon = "Icon.Globe", Status = "已启用" },
+                    new FeatureModuleItem { CategoryName = "系统设置", SubfunctionCount = 5, Icon = "Icon.Settings", Status = "已启用" }
+                });
 
                 TM.App.Log($"[AppInfo] 功能模块统计完成");
             }
@@ -393,27 +372,10 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
         {
             try
             {
-                Licenses.Clear();
-
-                Licenses.Add(new LicenseItem
+                Licenses.ReplaceAll(new[]
                 {
-                    Name = "天命",
-                    LicenseType = "专有许可证",
-                    Description = "本应用遵循专有软件许可协议"
-                });
-
-                Licenses.Add(new LicenseItem
-                {
-                    Name = "Emoji.Wpf",
-                    LicenseType = "MIT License",
-                    Description = "彩色Emoji显示库"
-                });
-
-                Licenses.Add(new LicenseItem
-                {
-                    Name = ".NET Runtime",
-                    LicenseType = "MIT License",
-                    Description = "微软.NET运行时环境"
+                    new LicenseItem { Name = "天命",        LicenseType = "专有许可证", Description = "本应用遵循专有软件许可协议" },
+                    new LicenseItem { Name = ".NET Runtime", LicenseType = "MIT License", Description = "微软.NET运行时环境" }
                 });
 
                 TM.App.Log($"[AppInfo] 许可证信息加载完成");
@@ -428,90 +390,19 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
         {
             try
             {
-                VersionHistory.Clear();
-
-                VersionHistory.Add(new VersionHistoryItem
+                VersionHistory.ReplaceAll(new[]
                 {
-                    Version = "1.4.6",
-                    ReleaseDate = new DateTime(2026, 3, 5),
-                    ChangeLog = "版本更新",
-                    IsCurrent = true
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.5",
-                    ReleaseDate = new DateTime(2026, 3, 5),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.4",
-                    ReleaseDate = new DateTime(2026, 3, 5),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.3",
-                    ReleaseDate = new DateTime(2026, 3, 5),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.2",
-                    ReleaseDate = new DateTime(2026, 3, 4),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.1",
-                    ReleaseDate = new DateTime(2026, 3, 4),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.4.0",
-                    ReleaseDate = new DateTime(2026, 3, 4),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.3.9",
-                    ReleaseDate = new DateTime(2026, 3, 3),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.3.8",
-                    ReleaseDate = new DateTime(2026, 3, 3),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                VersionHistory.Add(new VersionHistoryItem
-                {
-                    Version = "1.3.7",
-                    ReleaseDate = new DateTime(2026, 3, 3),
-                    ChangeLog = "版本更新",
-                    IsCurrent = false
-                });
-
-                while (VersionHistory.Count > 10)
-                    VersionHistory.RemoveAt(VersionHistory.Count - 1);
+                    new VersionHistoryItem { Version = "2.1.5", ReleaseDate = new DateTime(2026, 3, 30), ChangeLog = "版本更新", IsCurrent = false  },
+                    new VersionHistoryItem { Version = "2.1.4", ReleaseDate = new DateTime(2026, 3, 30), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.1.3", ReleaseDate = new DateTime(2026, 3, 30), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.1.2", ReleaseDate = new DateTime(2026, 3, 28), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.1.1", ReleaseDate = new DateTime(2026, 3, 28), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.1.0", ReleaseDate = new DateTime(2026, 3, 27), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.0.9", ReleaseDate = new DateTime(2026, 3, 27), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.0.8", ReleaseDate = new DateTime(2026, 3, 27), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.0.7", ReleaseDate = new DateTime(2026, 3, 26), ChangeLog = "版本更新", IsCurrent = false },
+                    new VersionHistoryItem { Version = "2.0.6", ReleaseDate = new DateTime(2026, 3, 25), ChangeLog = "版本更新", IsCurrent = false }
+                }.Take(10).ToList());
 
                 TM.App.Log($"[AppInfo] 版本历史加载完成");
             }
@@ -521,48 +412,55 @@ namespace TM.Framework.SystemSettings.Info.AppInfo
             }
         }
 
-        private void LoadPerformanceMetrics()
+        private async System.Threading.Tasks.Task LoadPerformanceMetricsAsync()
         {
             try
             {
-                PerformanceMetrics.Clear();
-                var process = Process.GetCurrentProcess();
-
-                var startupTime = (DateTime.Now - process.StartTime).TotalSeconds;
-                PerformanceMetrics.Add(new PerformanceMetricItem
+                var metrics = await System.Threading.Tasks.Task.Run(() =>
                 {
-                    Name = "启动耗时",
-                    Value = $"{startupTime:F2} 秒",
-                    Icon = "🚀",
-                    Status = startupTime < 5 ? "优秀" : startupTime < 10 ? "良好" : "需优化"
-                });
+                    var process = Process.GetCurrentProcess();
+                    var list = new System.Collections.Generic.List<PerformanceMetricItem>();
 
-                var memoryMB = process.WorkingSet64 / 1024 / 1024;
-                PerformanceMetrics.Add(new PerformanceMetricItem
-                {
-                    Name = "内存占用",
-                    Value = $"{memoryMB} MB",
-                    Icon = "💾",
-                    Status = memoryMB < 200 ? "优秀" : memoryMB < 500 ? "良好" : "偏高"
-                });
+                    var startupTime = (DateTime.Now - process.StartTime).TotalSeconds;
+                    list.Add(new PerformanceMetricItem
+                    {
+                        Name = "启动耗时",
+                        Value = $"{startupTime:F2} 秒",
+                        Icon = "Icon.Rocket",
+                        Status = startupTime < 5 ? "优秀" : startupTime < 10 ? "良好" : "需优化"
+                    });
 
-                var threadCount = process.Threads.Count;
-                PerformanceMetrics.Add(new PerformanceMetricItem
-                {
-                    Name = "线程数",
-                    Value = threadCount.ToString(),
-                    Icon = "🧵",
-                    Status = threadCount < 50 ? "正常" : threadCount < 100 ? "较多" : "过多"
-                });
+                    var memoryMB = process.WorkingSet64 / 1024 / 1024;
+                    list.Add(new PerformanceMetricItem
+                    {
+                        Name = "内存占用",
+                        Value = $"{memoryMB} MB",
+                        Icon = "Icon.Save",
+                        Status = memoryMB < 200 ? "优秀" : memoryMB < 500 ? "良好" : "偏高"
+                    });
 
-                var gen2Count = GC.CollectionCount(2);
-                PerformanceMetrics.Add(new PerformanceMetricItem
-                {
-                    Name = "2代GC次数",
-                    Value = gen2Count.ToString(),
-                    Icon = "🗑️",
-                    Status = gen2Count < 10 ? "优秀" : gen2Count < 50 ? "正常" : "偏多"
-                });
+                    var threadCount = process.Threads.Count;
+                    list.Add(new PerformanceMetricItem
+                    {
+                        Name = "线程数",
+                        Value = threadCount.ToString(),
+                        Icon = "Icon.Package",
+                        Status = threadCount < 50 ? "正常" : threadCount < 100 ? "较多" : "过多"
+                    });
+
+                    var gen2Count = GC.CollectionCount(2);
+                    list.Add(new PerformanceMetricItem
+                    {
+                        Name = "2代GC次数",
+                        Value = gen2Count.ToString(),
+                        Icon = "Icon.Trash",
+                        Status = gen2Count < 10 ? "优秀" : gen2Count < 50 ? "正常" : "偏多"
+                    });
+
+                    return list;
+                }).ConfigureAwait(true);
+
+                PerformanceMetrics.ReplaceAll(metrics);
 
                 TM.App.Log($"[AppInfo] 性能指标采集完成");
             }

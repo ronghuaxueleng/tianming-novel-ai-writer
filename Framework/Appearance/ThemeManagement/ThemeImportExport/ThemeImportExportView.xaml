@@ -1,13 +1,12 @@
 <UserControl x:Class="TM.Framework.Appearance.ThemeManagement.ThemeImportExport.ThemeImportExportView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
              xmlns:local="clr-namespace:TM.Framework.Appearance.ThemeManagement.ThemeImportExport">
 
-    <ScrollViewer VerticalScrollBarVisibility="Auto" 
-                  Background="{DynamicResource ContentBackground}">
+    <ScrollViewer VerticalScrollBarVisibility="Auto"
+                  Background="{DynamicResource ContentBackgroundGlass}">
     <Grid Margin="5">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto"/>
@@ -19,10 +18,11 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="📤" Title="导出主题">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Upload}" Title="导出主题">
                 <StackPanel>
-                    <TextBlock Text="将主题配置导出为 XAML 文件，可分享给其他用户或备份使用" 
-                              FontSize="13" 
+
+                    <TextBlock Text="将主题配置导出为 XAML 文件，可分享给其他用户或备份使用"
+                              FontSize="13"
                               Foreground="{DynamicResource TextSecondary}"
                               TextWrapping="Wrap"
                               Margin="0,0,0,15"/>
@@ -34,7 +34,7 @@
                                helpers:ButtonHelper.ConfirmTitle="确认导出"
                                Padding="20,10" Margin="0,0,10,0" MinWidth="140">
                             <StackPanel Orientation="Horizontal">
-                                <emoji:TextBlock Text="📤" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Image Source="{DynamicResource Icon.Upload}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBlock Text="导出当前主题" VerticalAlignment="Center"
                                           FontFamily="{DynamicResource GlobalFontFamily}"
                                           FontSize="{DynamicResource FontSizeSmall}"/>
@@ -46,7 +46,7 @@
                                helpers:ButtonHelper.ConfirmTitle="确认导出"
                                Padding="20,10" MinWidth="140">
                             <StackPanel Orientation="Horizontal">
-                                <emoji:TextBlock Text="📦" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Image Source="{DynamicResource Icon.Package}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBlock Text="导出所有主题" VerticalAlignment="Center"
                                           FontFamily="{DynamicResource GlobalFontFamily}"
                                           FontSize="{DynamicResource FontSizeSmall}"/>
@@ -56,15 +56,16 @@
                 </StackPanel>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="📥" Title="导入主题">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Download}" Title="导入主题">
                 <StackPanel>
+
                     <StackPanel Margin="0,0,0,15">
-                        <TextBlock Text="从文件导入主题配置，支持标准的 XAML 主题文件" 
-                                  FontSize="13" 
+                        <TextBlock Text="从文件导入主题配置，支持标准的 XAML 主题文件"
+                                  FontSize="13"
                                   Foreground="{DynamicResource TextSecondary}"
                                   TextWrapping="Wrap"
                                   Margin="0,0,0,8"/>
-                        <TextBlock FontSize="12" 
+                        <TextBlock FontSize="12"
                                   Foreground="{DynamicResource TextSecondary}"
                                   TextWrapping="Wrap">
                             <Run Text="支持的文件格式："/>
@@ -79,7 +80,7 @@
                                helpers:ButtonHelper.ConfirmTitle="确认导入"
                                Padding="20,10" MinWidth="140">
                             <StackPanel Orientation="Horizontal">
-                                <emoji:TextBlock Text="📥" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <Image Source="{DynamicResource Icon.Download}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
                                 <TextBlock Text="选择文件导入" VerticalAlignment="Center"
                                           FontFamily="{DynamicResource GlobalFontFamily}"
                                           FontSize="{DynamicResource FontSizeSmall}"/>
@@ -89,9 +90,9 @@
                 </StackPanel>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="4" Icon="📁" Title="导出位置">
+            <layout:IconHeaderGroupBox Grid.Row="4" Icon="{DynamicResource Icon.Folder}" Title="导出位置">
                 <StackPanel>
-                    <TextBlock FontSize="13" 
+                    <TextBlock FontSize="13"
                               Foreground="{DynamicResource TextSecondary}"
                               TextWrapping="Wrap"
                               Margin="0,0,0,15">
@@ -105,7 +106,7 @@
                            HorizontalAlignment="Right"
                            Padding="20,10" MinWidth="160">
                         <StackPanel Orientation="Horizontal">
-                            <emoji:TextBlock Text="📁" FontSize="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
+                            <Image Source="{DynamicResource Icon.Folder}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,8,0"/>
                             <TextBlock Text="打开导出文件夹" VerticalAlignment="Center"
                                       FontFamily="{DynamicResource GlobalFontFamily}"
                                       FontSize="{DynamicResource FontSizeSmall}"/>
@@ -114,7 +115,7 @@
                 </StackPanel>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="6" Icon="📋" Title="导出记录（最近20条）">
+            <layout:IconHeaderGroupBox Grid.Row="6" Icon="{DynamicResource Icon.Clipboard}" Title="导出记录（最近20条）">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
@@ -134,17 +135,17 @@
                            Padding="12,6"
                            FontSize="12"/>
 
-                    <Border Grid.Row="2" 
-                            BorderBrush="{DynamicResource BorderBrush}" 
-                            BorderThickness="1" 
+                    <Border Grid.Row="2"
+                            BorderBrush="{DynamicResource GlassBorderBrush}"
+                            BorderThickness="1"
                             CornerRadius="6"
-                            Background="{DynamicResource Surface}">
+                            Background="{DynamicResource SurfaceGlass}">
                         <ScrollViewer VerticalScrollBarVisibility="Auto">
                             <ItemsControl x:Name="ExportedListControl" ItemsSource="{Binding ExportedThemes}">
                                 <ItemsControl.ItemTemplate>
                                     <DataTemplate>
-                                        <Border BorderBrush="{DynamicResource BorderBrush}" 
-                                               BorderThickness="0,0,0,1" 
+                                        <Border BorderBrush="{DynamicResource GlassBorderBrush}"
+                                               BorderThickness="0,0,0,1"
                                                Padding="15,12"
                                                Background="Transparent">
                                             <Border.Style>
@@ -165,19 +166,19 @@
                                                 </Grid.ColumnDefinitions>
 
                                                 <StackPanel Grid.Column="0">
-                                                    <TextBlock Text="{Binding FileName}" 
-                                                              FontSize="13" 
+                                                    <TextBlock Text="{Binding FileName}"
+                                                              FontSize="13"
                                                               FontWeight="Medium"
                                                               Foreground="{DynamicResource TextPrimary}"/>
-                                                    <TextBlock Text="{Binding DisplayTime}" 
-                                                              FontSize="11" 
+                                                    <TextBlock Text="{Binding DisplayTime}"
+                                                              FontSize="11"
                                                               Foreground="{DynamicResource TextSecondary}"
                                                               Margin="0,4,0,0"/>
                                                 </StackPanel>
 
-                                                <TextBlock Grid.Column="1" 
-                                                          Text="{Binding FileSize}" 
-                                                          FontSize="12" 
+                                                <TextBlock Grid.Column="1"
+                                                          Text="{Binding FileSize}"
+                                                          FontSize="12"
                                                           Foreground="{DynamicResource TextSecondary}"
                                                           VerticalAlignment="Center"
                                                           Margin="15,0"/>
@@ -195,12 +196,12 @@
                                                         <ControlTemplate>
                                                             <Border Padding="40" Background="Transparent">
                                                                 <StackPanel HorizontalAlignment="Center">
-                                                                    <emoji:TextBlock Text="📭" FontSize="48" 
-                                                                                    HorizontalAlignment="Center" 
+                                                                    <Image Source="{DynamicResource Icon.Clipboard}" Width="48" Height="48"
+                                                                                    HorizontalAlignment="Center"
                                                                                     Opacity="0.3"
                                                                                     Margin="0,0,0,15"/>
-                                                                    <TextBlock Text="暂无导出记录" 
-                                                                              FontSize="14" 
+                                                                    <TextBlock Text="暂无导出记录"
+                                                                              FontSize="14"
                                                                               Foreground="{DynamicResource TextSecondary}"
                                                                               HorizontalAlignment="Center"/>
         </StackPanel>
@@ -216,12 +217,12 @@
                         </ScrollViewer>
                     </Border>
 
-                    <Border Grid.Row="4" 
-                            Background="{DynamicResource Surface}" 
-                            CornerRadius="6" 
+                    <Border Grid.Row="4"
+                            Background="{DynamicResource SurfaceGlass}"
+                            CornerRadius="6"
                             Padding="12,8">
-                        <TextBlock Text="{Binding StatusMessage}" 
-                                  FontSize="12" 
+                        <TextBlock Text="{Binding StatusMessage}"
+                                  FontSize="12"
                                   Foreground="{DynamicResource TextSecondary}">
                             <TextBlock.Style>
                                 <Style TargetType="TextBlock">

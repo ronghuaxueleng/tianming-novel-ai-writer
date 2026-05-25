@@ -5,11 +5,10 @@ using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Interfaces;
-using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
 using TM.Services.Modules.ProjectData.Models.Validate.ValidationSummary;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -29,7 +28,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private readonly VolumeDesignService _volumeDesignService;
         private List<ValidationSummaryData> _dataItems;
+        private readonly object _dataLock = new();
         private readonly SemaphoreSlim _saveLock = new(1, 1);
+        private readonly object _saveQueueLock = new();
+        private Task _saveTail = Task.CompletedTask;
+        private int _dataVersion;
 
         private string DataDirectoryPath => Path.Combine(
             StoragePathHelper.GetModulesStoragePath(ModulePath),
@@ -44,7 +47,19 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             _volumeDesignService.CategoryDeleted += OnVolumeCategoryDeleted;
 
-            LoadData();
+            StoragePathHelper.CurrentProjectChanged += (_, _) =>
+            {
+                Interlocked.Increment(ref _dataVersion);
+                lock (_dataLock) { _dataItems = new List<ValidationSummaryData>(); }
+                System.Threading.Tasks.Task.Run(async () =>
+                {
+                    await LoadDataAsync().ConfigureAwait(false);
+                    TM.App.Log("[ValidationSummaryService] 项目切换，数据已重新加载");
+                }).SafeFireAndForget(ex => TM.App.Log($"[ValidationSummaryService] 项目切换后台加载失败: {ex.Message}"));
+            };
+
+            System.Threading.Tasks.Task.Run(async () => await LoadDataAsync().ConfigureAwait(false))
+                .SafeFireAndForget(ex => TM.App.Log($"[ValidationSummaryService] 后台加载失败: {ex.Message}"));
         }
 
         private void OnVolumeCategoryDeleted(object? sender, CategoryDeletedEventArgs e)
@@ -52,13 +67,24 @@ namespace TM.Services.Modules.ProjectData.Implementations
             try
             {
                 var categoryName = e.CategoryName;
-                var dataToDelete = _dataItems.Where(d => d.Category == categoryName).ToList();
+                var categoryId = e.CategoryId;
+                List<ValidationSummaryData> snapshot;
+                lock (_dataLock) { snapshot = new List<ValidationSummaryData>(_dataItems); }
+                var dataToDelete = snapshot.Where(d =>
+                    (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName)).ToList();
+                Interlocked.Increment(ref _dataVersion);
+                lock (_dataLock)
+                {
+                    _dataItems.RemoveAll(d =>
+                        (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                        (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName));
+                }
 
                 if (dataToDelete.Count > 0)
                 {
                     foreach (var item in dataToDelete)
                     {
-                        _dataItems.Remove(item);
                         DeleteDataFile(item.Id);
                     }
                     TM.App.Log($"[ValidationSummaryService] 级联删除: 分类'{categoryName}'下的 {dataToDelete.Count} 条数据已删除");
@@ -74,7 +100,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public List<ValidationSummaryData> GetAllData()
         {
-            return _dataItems.ToList();
+            lock (_dataLock) return _dataItems.ToList();
         }
 
         public ValidationSummaryData? GetDataById(string id)
@@ -82,12 +108,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (string.IsNullOrEmpty(id))
                 return null;
 
-            return _dataItems.FirstOrDefault(d => d.Id == id);
+            lock (_dataLock) return _dataItems.FirstOrDefault(d => d.Id == id);
         }
 
         public ValidationSummaryData? GetDataByVolumeNumber(int volumeNumber)
         {
-            return _dataItems.FirstOrDefault(d => d.TargetVolumeNumber == volumeNumber);
+            lock (_dataLock) return _dataItems.FirstOrDefault(d => d.TargetVolumeNumber == volumeNumber);
         }
 
         public void AddData(ValidationSummaryData data)
@@ -105,8 +131,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
             data.CreatedTime = DateTime.Now;
             data.ModifiedTime = DateTime.Now;
 
-            _dataItems.Add(data);
-            SaveDataItem(data);
+            Interlocked.Increment(ref _dataVersion);
+            lock (_dataLock) _dataItems.Add(data);
+            _ = EnqueueSaveDataItem(data);
 
             TM.App.Log($"[ValidationSummaryService] 添加数据: {data.Name}");
         }
@@ -133,7 +160,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 return;
 
             data.ModifiedTime = DateTime.Now;
-            SaveDataItem(data);
+            Interlocked.Increment(ref _dataVersion);
+            _ = EnqueueSaveDataItem(data);
 
             TM.App.Log($"[ValidationSummaryService] 更新数据: {data.Name}");
         }
@@ -143,10 +171,15 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (string.IsNullOrEmpty(id))
                 return;
 
-            var data = _dataItems.FirstOrDefault(d => d.Id == id);
+            ValidationSummaryData? data;
+            Interlocked.Increment(ref _dataVersion);
+            lock (_dataLock)
+            {
+                data = _dataItems.FirstOrDefault(d => d.Id == id);
+                if (data != null) _dataItems.Remove(data);
+            }
             if (data != null)
             {
-                _dataItems.Remove(data);
                 DeleteDataFile(id);
                 TM.App.Log($"[ValidationSummaryService] 删除数据: {data.Name}");
             }
@@ -165,7 +198,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 {
                     Id = v.Id,
                     Name = v.VolumeNumber > 0 ? $"第{v.VolumeNumber}卷 {v.VolumeTitle}".Trim() : v.Name,
-                    Icon = "📚",
+                    Icon = "Icon.Books",
                     Order = v.VolumeNumber,
                     IsBuiltIn = false,
                     IsEnabled = v.IsEnabled
@@ -202,13 +235,17 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 data.CreatedTime = existingData.CreatedTime;
                 data.ModifiedTime = DateTime.Now;
 
-                var index = _dataItems.FindIndex(d => d.Id == existingData.Id);
-                if (index >= 0)
+                Interlocked.Increment(ref _dataVersion);
+                lock (_dataLock)
                 {
-                    _dataItems[index] = data;
+                    var index = _dataItems.FindIndex(d => d.Id == existingData.Id);
+                    if (index >= 0)
+                    {
+                        _dataItems[index] = data;
+                    }
                 }
 
-                SaveDataItem(data);
+                _ = EnqueueSaveDataItem(data);
                 TM.App.Log($"[ValidationSummaryService] 覆盖更新卷校验: {data.Name}");
             }
             else
@@ -236,12 +273,34 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 数据持久化
 
-        private void LoadData()
+        public Task FlushPendingAsync(CancellationToken ct = default)
         {
+            Task tail;
+            lock (_saveQueueLock)
+            {
+                tail = _saveTail;
+            }
+            return tail.WaitAsync(ct);
+        }
+
+        private Task EnqueueSaveDataItem(ValidationSummaryData data)
+        {
+            lock (_saveQueueLock)
+            {
+                _saveTail = _saveTail.ContinueWith(async _ =>
+                {
+                    await SaveDataItem(data).ConfigureAwait(false);
+                }, CancellationToken.None, TaskContinuationOptions.None, TaskScheduler.Default).Unwrap();
+                return _saveTail;
+            }
+        }
+
+        private async Task LoadDataAsync()
+        {
+            var loadVersion = Volatile.Read(ref _dataVersion);
+            var items = new List<ValidationSummaryData>();
             try
             {
-                _dataItems.Clear();
-
                 if (!Directory.Exists(DataDirectoryPath))
                 {
                     return;
@@ -252,11 +311,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 {
                     try
                     {
-                        var json = File.ReadAllText(file);
-                        var data = JsonSerializer.Deserialize<ValidationSummaryData>(json, JsonOptions);
+                        await using var stream = File.OpenRead(file);
+                        var data = await JsonSerializer.DeserializeAsync<ValidationSummaryData>(stream, JsonOptions).ConfigureAwait(false);
                         if (data != null)
                         {
-                            _dataItems.Add(data);
+                            items.Add(data);
                         }
                     }
                     catch (Exception ex)
@@ -265,15 +324,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
 
-                TM.App.Log($"[ValidationSummaryService] 加载数据: {_dataItems.Count} 条");
+                TM.App.Log($"[ValidationSummaryService] 加载数据: {items.Count} 条");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ValidationSummaryService] 加载数据失败: {ex.Message}");
             }
+            finally
+            {
+                if (loadVersion == Volatile.Read(ref _dataVersion))
+                {
+                    lock (_dataLock) _dataItems = items;
+                }
+            }
         }
 
-        private async void SaveDataItem(ValidationSummaryData data)
+        private async Task SaveDataItem(ValidationSummaryData data)
         {
             var acquired = false;
             try
@@ -284,9 +350,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 StoragePathHelper.EnsureDirectoryExists(DataDirectoryPath);
 
                 var filePath = Path.Combine(DataDirectoryPath, $"{data.Id}.json");
-                var json = JsonSerializer.Serialize(data, JsonOptions);
-                var tmpVss = filePath + ".tmp";
-                await File.WriteAllTextAsync(tmpVss, json).ConfigureAwait(false);
+                var tmpVss = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpVss))
+                {
+                    await JsonSerializer.SerializeAsync(stream, data, JsonOptions).ConfigureAwait(false);
+                }
                 File.Move(tmpVss, filePath, overwrite: true);
             }
             catch (Exception ex)
@@ -302,13 +370,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private void DeleteDataFile(string id)
         {
+            var filePath = Path.Combine(DataDirectoryPath, $"{id}.json");
             try
             {
-                var filePath = Path.Combine(DataDirectoryPath, $"{id}.json");
                 if (File.Exists(filePath))
-                {
                     File.Delete(filePath);
-                }
             }
             catch (Exception ex)
             {

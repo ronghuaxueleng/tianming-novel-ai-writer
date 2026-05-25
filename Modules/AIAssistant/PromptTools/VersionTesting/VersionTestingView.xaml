@@ -3,19 +3,17 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
              xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-             xmlns:forms="clr-namespace:TM.Framework.Common.Controls.Forms"
              xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI"
              xmlns:local="clr-namespace:TM.Modules.AIAssistant.PromptTools.VersionTesting"
              mc:Ignorable="d"
              d:DesignHeight="600" d:DesignWidth="1200">
 
     <dm:TwoColumnEditorLayout x:Name="EditorLayout"
-        LeftIcon="🧪"
+        LeftIcon="{DynamicResource Icon.Flask}"
         LeftTitle="测试版本"
-        RightIcon="📊"
+        RightIcon="{DynamicResource Icon.Chart}"
         RightTitle="测试"
         ShowSearch="True"
         SearchKeyword="{Binding SearchKeyword, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
@@ -33,12 +31,12 @@
         <dm:TwoColumnEditorLayout.DetailsContent>
             <Grid Margin="0">
                 <Grid.RowDefinitions>
-                    <RowDefinition Height="2*"/>
-                    <RowDefinition Height="10"/>
-                    <RowDefinition Height="5*"/>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="5"/>
+                    <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="⚙️" Title="测试配置">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Settings}" Title="测试配置">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="2*"/>
@@ -50,7 +48,6 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
@@ -60,7 +57,7 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <emoji:TextBlock Text="💡" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Image Source="{DynamicResource Icon.Lightbulb}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBlock Text="快捷模板"
                                                Style="{DynamicResource StandardTextStyle}"
                                                FontWeight="SemiBold"
@@ -77,22 +74,24 @@
                                           VerticalAlignment="Center"/>
                             </Grid>
 
-                            <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,10,0,5">
-                                <emoji:TextBlock Text="🧾" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                            <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,10,0,5">
+                                <Image Source="{DynamicResource Icon.Clipboard}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                 <TextBlock Text="测试输入要求"
                                            Style="{DynamicResource StandardTextStyle}"
                                            FontWeight="SemiBold"/>
                             </StackPanel>
 
-                            <TextBox Grid.Row="3"
+                            <TextBox Grid.Row="2"
                                      Text="{Binding TestInput, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                                      Style="{DynamicResource StandardTextBoxStyle}"
                                      AcceptsReturn="True"
                                      TextWrapping="Wrap"
                                      VerticalScrollBarVisibility="Auto"
                                      HorizontalAlignment="Stretch"
+                                     Height="Auto"
                                      VerticalAlignment="Stretch"
-                                     MinHeight="70"
+                                     VerticalContentAlignment="Top"
+                                     MinHeight="80"
                                      Margin="0,0,0,4"/>
                         </Grid>
 
@@ -102,18 +101,23 @@
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
-                            <Button Grid.Row="0" Content="▶ 执行测试"
+                            <Button Grid.Row="0"
                                     Command="{Binding ExecuteTestCommand}"
                                     Style="{DynamicResource PrimaryButtonStyle}"
                                     Height="40"
                                     Margin="0,0,0,8"
-                                    HorizontalAlignment="Stretch"/>
+                                    HorizontalAlignment="Stretch">
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Center">
+                                    <Image Source="{DynamicResource Icon.Play}" Width="14" Height="14" Margin="0,0,8,0"/>
+                                    <TextBlock Text="执行测试" VerticalAlignment="Center"/>
+                                </StackPanel>
+                            </Button>
 
-                            <Border Grid.Row="1" BorderBrush="{DynamicResource BorderBrush}"
+                            <Border Grid.Row="1" BorderBrush="{DynamicResource GlassBorderBrush}"
                                     BorderThickness="1"
                                     CornerRadius="6"
                                     Padding="8"
-                                    Background="{DynamicResource Surface}"
+                                    Background="{DynamicResource SurfaceGlass}"
                                     VerticalAlignment="Stretch">
                                 <Grid>
                                     <Grid.RowDefinitions>
@@ -126,7 +130,7 @@
                                     </Grid.RowDefinitions>
 
                                     <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,8">
-                                        <emoji:TextBlock Text="📊" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <Image Source="{DynamicResource Icon.Chart}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                         <TextBlock Text="动态评分"
                                                    Style="{DynamicResource StandardTextStyle}"
                                                    FontWeight="SemiBold"/>
@@ -190,7 +194,7 @@
                     </Grid>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="🔄" Title="版本对比">
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Refresh}" Title="版本对比">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -202,7 +206,6 @@
                             <Grid.RowDefinitions>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
-                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
                             </Grid.RowDefinitions>
 
@@ -212,12 +215,12 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <emoji:TextBlock Text="📂" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Image Source="{DynamicResource Icon.FolderOpen}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBlock Text="分类A" Style="{DynamicResource StandardTextStyle}" FontWeight="SemiBold"/>
                                 </StackPanel>
                                 <Border Grid.Column="1"
-                                        Background="{DynamicResource Surface}"
-                                        BorderBrush="{DynamicResource BorderBrush}"
+                                        Background="{DynamicResource SurfaceGlass}"
+                                        BorderBrush="{DynamicResource GlassBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="4"
                                         Padding="6,2"
@@ -231,7 +234,7 @@
                                                TextTrimming="CharacterEllipsis"/>
                                 </Border>
                             </Grid>
-                            <ComboBox Grid.Row="1" 
+                            <ComboBox Grid.Row="1"
                                       ItemsSource="{Binding CategoryATree}"
                                       Style="{StaticResource TreeComboBoxStyle}"
                                       Height="36"
@@ -243,7 +246,7 @@
                                       helpers:ComboBoxHelper.MaxLevel="5"
                                       helpers:ComboBoxHelper.NodeDoubleClickCommand="{Binding CategoryASelectCommand}"/>
 
-                            <Grid Grid.Row="3">
+                            <Grid Grid.Row="2">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
@@ -255,17 +258,17 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <emoji:TextBlock Text="📄" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <Image Source="{DynamicResource Icon.Document}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                         <TextBlock Text="实际输出内容" Style="{DynamicResource StandardTextStyle}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                         <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
-                                            <emoji:TextBlock Text="📊" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                            <Image Source="{DynamicResource Icon.Chart}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                             <TextBlock Text="字数:" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                             <TextBlock Text="{Binding OutputAWordCount, Mode=OneWay}" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="3,0,0,0" VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <emoji:TextBlock Text="⏱️" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                            <Image Source="{DynamicResource Icon.Clock}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                             <TextBlock Text="耗时:" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                             <TextBlock Text="{Binding OutputADuration, Mode=OneWay}" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="3,0,0,0" VerticalAlignment="Center"/>
                                         </StackPanel>
@@ -278,14 +281,15 @@
                                          TextWrapping="Wrap"
                                          VerticalScrollBarVisibility="Auto"
                                          HorizontalAlignment="Stretch"
+                                         Height="Auto"
                                          VerticalAlignment="Stretch"
-                                         MinHeight="340"/>
+                                         VerticalContentAlignment="Stretch"
+                                         />
                             </Grid>
                         </Grid>
 
                         <Grid Grid.Column="2">
                             <Grid.RowDefinitions>
-                                <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="Auto"/>
                                 <RowDefinition Height="*"/>
@@ -297,12 +301,12 @@
                                     <ColumnDefinition Width="*"/>
                                 </Grid.ColumnDefinitions>
                                 <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                    <emoji:TextBlock Text="🗂️" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                    <Image Source="{DynamicResource Icon.FolderOpen}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                     <TextBlock Text="分类B" Style="{DynamicResource StandardTextStyle}" FontWeight="SemiBold"/>
                                 </StackPanel>
                                 <Border Grid.Column="1"
-                                        Background="{DynamicResource Surface}"
-                                        BorderBrush="{DynamicResource BorderBrush}"
+                                        Background="{DynamicResource SurfaceGlass}"
+                                        BorderBrush="{DynamicResource GlassBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="4"
                                         Padding="6,2"
@@ -328,7 +332,7 @@
                                       helpers:ComboBoxHelper.MaxLevel="5"
                                       helpers:ComboBoxHelper.NodeDoubleClickCommand="{Binding CategoryBSelectCommand}"/>
 
-                            <Grid Grid.Row="3">
+                            <Grid Grid.Row="2">
                                 <Grid.RowDefinitions>
                                     <RowDefinition Height="Auto"/>
                                     <RowDefinition Height="*"/>
@@ -340,17 +344,17 @@
                                         <ColumnDefinition Width="*"/>
                                     </Grid.ColumnDefinitions>
                                     <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center">
-                                        <emoji:TextBlock Text="📄" FontSize="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
+                                        <Image Source="{DynamicResource Icon.Document}" Width="16" Height="16" VerticalAlignment="Center" Margin="0,0,6,0"/>
                                         <TextBlock Text="实际输出内容" Style="{DynamicResource StandardTextStyle}" FontWeight="SemiBold" VerticalAlignment="Center"/>
                                     </StackPanel>
                                     <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right" VerticalAlignment="Center">
                                         <StackPanel Orientation="Horizontal" Margin="0,0,12,0" VerticalAlignment="Center">
-                                            <emoji:TextBlock Text="📊" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                            <Image Source="{DynamicResource Icon.Chart}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                             <TextBlock Text="字数:" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                             <TextBlock Text="{Binding OutputBWordCount, Mode=OneWay}" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="3,0,0,0" VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                                            <emoji:TextBlock Text="⏱️" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                            <Image Source="{DynamicResource Icon.Clock}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
                                             <TextBlock Text="耗时:" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                             <TextBlock Text="{Binding OutputBDuration, Mode=OneWay}" Style="{DynamicResource StandardTextStyle}" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="3,0,0,0" VerticalAlignment="Center"/>
                                         </StackPanel>
@@ -363,8 +367,10 @@
                                          TextWrapping="Wrap"
                                          VerticalScrollBarVisibility="Auto"
                                          HorizontalAlignment="Stretch"
+                                         Height="Auto"
                                          VerticalAlignment="Stretch"
-                                         MinHeight="340"/>
+                                         VerticalContentAlignment="Stretch"
+                                         />
                             </Grid>
                         </Grid>
                     </Grid>

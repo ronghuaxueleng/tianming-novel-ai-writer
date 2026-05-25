@@ -1,18 +1,15 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
+using System.Windows.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Controls;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.Content;
 using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
@@ -21,7 +18,8 @@ using TM.Services.Modules.ProjectData.Models.Guides;
 namespace TM.Modules.Generate.Content.ChapterPreview
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class ChapterPreviewViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class ChapterPreviewViewModel : INotifyPropertyChanged, IDisposable
     {
         public event PropertyChangedEventHandler? PropertyChanged;
         protected void OnPropertyChanged([CallerMemberName] string? name = null)
@@ -33,6 +31,7 @@ namespace TM.Modules.Generate.Content.ChapterPreview
         };
 
         private string _searchKeyword = string.Empty;
+        private readonly DispatcherTimer _searchDebounceTimer;
         public string SearchKeyword
         {
             get => _searchKeyword;
@@ -42,12 +41,13 @@ namespace TM.Modules.Generate.Content.ChapterPreview
                 {
                     _searchKeyword = value;
                     OnPropertyChanged();
-                    FilterChapters();
+                    _searchDebounceTimer.Stop();
+                    _searchDebounceTimer.Start();
                 }
             }
         }
 
-        public ObservableCollection<VolumeTreeItem> VolumeTree { get; } = new();
+        public RangeObservableCollection<VolumeTreeItem> VolumeTree { get; } = new();
         private ContentGuide? _contentGuide;
         private readonly VolumeDesignService _volumeDesignService;
 
@@ -67,34 +67,41 @@ namespace TM.Modules.Generate.Content.ChapterPreview
                 _selectedChapterDetail = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(HasSelectedChapter));
-                OnPropertyChanged(nameof(CharacterNames));
-                OnPropertyChanged(nameof(LocationNames));
-                OnPropertyChanged(nameof(FactionNames));
-                OnPropertyChanged(nameof(PlotRuleNames));
+                RefreshNameLists();
             }
         }
 
         public bool HasSelectedChapter => SelectedChapterDetail != null;
 
-        public ObservableCollection<string> CharacterNames => new(
-            _selectedChapterDetail?.ContextIds?.Characters?
+        private List<string> _characterNames = new();
+        private List<string> _locationNames = new();
+        private List<string> _factionNames = new();
+        private List<string> _plotRuleNames = new();
+
+        public IReadOnlyList<string> CharacterNames => _characterNames;
+        public IReadOnlyList<string> LocationNames => _locationNames;
+        public IReadOnlyList<string> FactionNames => _factionNames;
+        public IReadOnlyList<string> PlotRuleNames => _plotRuleNames;
+
+        private void RefreshNameLists()
+        {
+            _characterNames = _selectedChapterDetail?.ContextIds?.Characters?
                 .Select(id => _characterNameMap.TryGetValue(id, out var name) ? name : id)
-                .ToList() ?? new List<string>());
-
-        public ObservableCollection<string> LocationNames => new(
-            _selectedChapterDetail?.ContextIds?.Locations?
+                .ToList() ?? new();
+            _locationNames = _selectedChapterDetail?.ContextIds?.Locations?
                 .Select(id => _locationNameMap.TryGetValue(id, out var name) ? name : id)
-                .ToList() ?? new List<string>());
-
-        public ObservableCollection<string> FactionNames => new(
-            _selectedChapterDetail?.ContextIds?.Factions?
+                .ToList() ?? new();
+            _factionNames = _selectedChapterDetail?.ContextIds?.Factions?
                 .Select(id => _factionNameMap.TryGetValue(id, out var name) ? name : id)
-                .ToList() ?? new List<string>());
-
-        public ObservableCollection<string> PlotRuleNames => new(
-            _selectedChapterDetail?.ContextIds?.PlotRules?
+                .ToList() ?? new();
+            _plotRuleNames = _selectedChapterDetail?.ContextIds?.PlotRules?
                 .Select(id => _plotRuleNameMap.TryGetValue(id, out var name) ? name : id)
-                .ToList() ?? new List<string>());
+                .ToList() ?? new();
+            OnPropertyChanged(nameof(CharacterNames));
+            OnPropertyChanged(nameof(LocationNames));
+            OnPropertyChanged(nameof(FactionNames));
+            OnPropertyChanged(nameof(PlotRuleNames));
+        }
 
         private int _totalChapters;
         public int TotalChapters
@@ -129,9 +136,21 @@ namespace TM.Modules.Generate.Content.ChapterPreview
         {
             _volumeDesignService = volumeDesignService;
 
-            TM.Services.Modules.ProjectData.Implementations.GuideContextService.CacheInvalidated += (_, _) => _contentLoaded = false;
+            _searchDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+            _searchDebounceTimer.Tick += (_, _) => { _searchDebounceTimer.Stop(); FilterChapters(); };
+
+            TM.Services.Modules.ProjectData.Implementations.GuideContextService.CacheInvalidated += OnCacheInvalidated;
 
             _ = LoadContentGuideAsync();
+        }
+
+        private void OnCacheInvalidated(object? sender, EventArgs e) => _contentLoaded = false;
+
+        public void Dispose()
+        {
+            _searchDebounceTimer.Stop();
+            TM.Services.Modules.ProjectData.Implementations.GuideContextService.CacheInvalidated -= OnCacheInvalidated;
+            GC.SuppressFinalize(this);
         }
 
         private async Task LoadContentGuideAsync(bool forceReload = false)
@@ -162,7 +181,7 @@ namespace TM.Modules.Generate.Content.ChapterPreview
             catch (Exception ex)
             {
                 TM.App.Log($"[ChapterPreviewViewModel] 加载失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         }
 
@@ -243,22 +262,6 @@ namespace TM.Modules.Generate.Content.ChapterPreview
             }
         }
 
-        private static async Task<List<T>> LoadDataListAsync<T>(string filePath)
-        {
-            if (!File.Exists(filePath))
-                return new List<T>();
-            try
-            {
-                var json = await File.ReadAllTextAsync(filePath);
-                return JsonSerializer.Deserialize<List<T>>(json, JsonOptions) ?? new List<T>();
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ChapterPreviewViewModel] 读取数据失败 [{filePath}]: {ex.Message}");
-                return new List<T>();
-            }
-        }
-
         private void BuildVolumeTree(IEnumerable<ContentGuideEntry>? entries = null)
         {
             VolumeTree.Clear();
@@ -296,6 +299,7 @@ namespace TM.Modules.Generate.Content.ChapterPreview
             }
 
             var includeEmptyVolumes = entries == null;
+            var newItems = new List<VolumeTreeItem>();
             foreach (var volume in volumeDesigns)
             {
                 if (string.IsNullOrWhiteSpace(volume.Id)) continue;
@@ -303,20 +307,22 @@ namespace TM.Modules.Generate.Content.ChapterPreview
                 if (!includeEmptyVolumes && (chapters == null || chapters.Count == 0))
                     continue;
 
-                AddVolumeTreeItem(volume, chapters ?? new List<ContentGuideEntry>());
+                AddVolumeTreeItem(newItems, volume, chapters ?? new List<ContentGuideEntry>());
             }
+
+            VolumeTree.ReplaceAll(newItems);
 
             TotalChapters = chapterEntries.Count;
             TotalVolumes = VolumeTree.Count;
         }
 
-        private void AddVolumeTreeItem(VolumeDesignData? volume, IEnumerable<ContentGuideEntry> chapters)
+        private void AddVolumeTreeItem(List<VolumeTreeItem> target, VolumeDesignData? volume, IEnumerable<ContentGuideEntry> chapters)
         {
             var volItem = new VolumeTreeItem
             {
                 VolumeNumber = volume?.VolumeNumber ?? 0,
                 Name = volume == null ? "未归属卷" : BuildVolumeDisplayName(volume),
-                Icon = volume == null ? "📦" : "📚",
+                Icon = volume == null ? "Icon.Package" : "Icon.Books",
                 IsExpanded = false
             };
             foreach (var ch in chapters.OrderBy(c => ResolveChapterNumber(c)))
@@ -333,7 +339,7 @@ namespace TM.Modules.Generate.Content.ChapterPreview
                 });
             }
 
-            VolumeTree.Add(volItem);
+            target.Add(volItem);
         }
 
         private void LoadChapterDetail(string chapterId)
@@ -356,11 +362,9 @@ namespace TM.Modules.Generate.Content.ChapterPreview
             }
 
             VolumeTree.Clear();
-            var keyword = SearchKeyword.ToLower();
-
             var filtered = _contentGuide.Chapters.Values
-                .Where(c => c.ChapterId.ToLower().Contains(keyword) ||
-                           (c.Title?.ToLower().Contains(keyword) ?? false))
+                .Where(c => c.ChapterId.Contains(SearchKeyword, StringComparison.OrdinalIgnoreCase) ||
+                           (c.Title?.Contains(SearchKeyword, StringComparison.OrdinalIgnoreCase) ?? false))
                 .ToList();
 
             BuildVolumeTree(filtered);

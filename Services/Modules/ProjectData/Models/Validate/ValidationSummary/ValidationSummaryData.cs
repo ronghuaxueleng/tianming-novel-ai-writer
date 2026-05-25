@@ -13,7 +13,7 @@ namespace TM.Services.Modules.ProjectData.Models.Validate.ValidationSummary
 
         [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
 
-        [JsonPropertyName("Icon")] public string Icon { get; set; } = "✅";
+        [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.CheckCircle";
 
         [JsonPropertyName("Category")] public string Category { get; set; } = string.Empty;
 

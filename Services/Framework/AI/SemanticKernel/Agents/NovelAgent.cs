@@ -12,7 +12,6 @@ using Microsoft.SemanticKernel.Agents;
 using Microsoft.SemanticKernel.ChatCompletion;
 using TM.Services.Framework.AI.SemanticKernel.Agents.Wrappers;
 using TM.Services.Framework.AI.SemanticKernel.Chunk;
-using TM.Services.Framework.AI.SemanticKernel.Conversation.Thinking;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Agents
 {
@@ -36,13 +35,14 @@ namespace TM.Services.Framework.AI.SemanticKernel.Agents
         public async IAsyncEnumerable<IStreamChunk> InvokeStreamingAsync(
             ChatHistory chatHistory,
             PromptExecutionSettings settings,
+            Guid runId,
             [EnumeratorCancellation] CancellationToken ct)
         {
             var thread = _contextProviders.Count > 0
                 ? new ChatHistoryAgentThread(chatHistory)
-                  {
-                      AIContextProviders = new AggregateAIContextProvider(_contextProviders)
-                  }
+                {
+                    AIContextProviders = new AggregateAIContextProvider(_contextProviders)
+                }
                 : new ChatHistoryAgentThread(chatHistory);
 
             var options = new AgentInvokeOptions
@@ -52,7 +52,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Agents
 
             var agentStream = _agent.InvokeStreamingAsync(thread, options, ct);
 
-            await foreach (var chunk in _thinkingWrapper.WrapAgentStreamAsync(agentStream, ct))
+            await foreach (var chunk in _thinkingWrapper.WrapAgentStreamAsync(agentStream, runId, ct).ConfigureAwait(false))
             {
                 yield return chunk;
             }

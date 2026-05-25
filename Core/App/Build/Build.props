@@ -1,7 +1,5 @@
-<!-- Build.props - 全局using指令和通用配置 -->
 <Project>
   
-  <!-- 全局using指令 - 所有C#文件自动引用 -->
   <ItemGroup>
     <Using Include="TM.Framework.Common.Helpers" />
     <Using Include="TM.Framework.Common.Helpers.UI" />

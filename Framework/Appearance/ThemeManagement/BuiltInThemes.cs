@@ -9,6 +9,35 @@ namespace TM.Framework.Appearance.ThemeManagement
     {
         private static readonly Dictionary<ThemeType, string> _themes = new()
         {
+            [ThemeType.Linear] = """
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- Linear 极简浅色主题 -->
+    <SolidColorBrush x:Key="UnifiedBackground" Color="#F7F8FA"/>
+    <SolidColorBrush x:Key="ContentBackground" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="Surface" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="ContentHighlight" Color="#FAFAFC"/>
+    <SolidColorBrush x:Key="WindowBorder" Color="#EAECEF"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="#E5E7EB"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="#1E2028"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#6B7280"/>
+    <SolidColorBrush x:Key="TextTertiary" Color="#9CA3AF"/>
+    <SolidColorBrush x:Key="TextDisabled" Color="#D1D5DB"/>
+    <SolidColorBrush x:Key="HoverBackground" Color="#F3F4F6"/>
+    <SolidColorBrush x:Key="ActiveBackground" Color="#E5E7EB"/>
+    <SolidColorBrush x:Key="SelectedBackground" Color="#EEF2FF"/>
+    <SolidColorBrush x:Key="PrimaryColor" Color="#5E6AD2"/>
+    <SolidColorBrush x:Key="PrimaryHover" Color="#7A85E0"/>
+    <SolidColorBrush x:Key="PrimaryActive" Color="#4B56B5"/>
+    <SolidColorBrush x:Key="SuccessColor" Color="#10B981"/>
+    <SolidColorBrush x:Key="WarningColor" Color="#F59E0B"/>
+    <SolidColorBrush x:Key="DangerColor" Color="#EF4444"/>
+    <SolidColorBrush x:Key="DangerHover" Color="#DC2626"/>
+    <SolidColorBrush x:Key="InfoColor" Color="#3B82F6"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
+</ResourceDictionary>
+""",
+
             [ThemeType.Light] = """
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
@@ -34,6 +63,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#EF4444"/>
     <SolidColorBrush x:Key="DangerHover" Color="#DC2626"/>
     <SolidColorBrush x:Key="InfoColor" Color="#3B82F6"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -62,6 +92,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#C0543C"/>
     <SolidColorBrush x:Key="DangerHover" Color="#A8462F"/>
     <SolidColorBrush x:Key="InfoColor" Color="#7B8FA8"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -90,6 +121,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#F87171"/>
     <SolidColorBrush x:Key="DangerHover" Color="#EF4444"/>
     <SolidColorBrush x:Key="InfoColor" Color="#60A5FA"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -118,6 +150,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#DC2626"/>
     <SolidColorBrush x:Key="DangerHover" Color="#B91C1C"/>
     <SolidColorBrush x:Key="InfoColor" Color="#0284C7"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -146,6 +179,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#E53935"/>
     <SolidColorBrush x:Key="DangerHover" Color="#C62828"/>
     <SolidColorBrush x:Key="InfoColor" Color="#1976D2"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -174,6 +208,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#EF4444"/>
     <SolidColorBrush x:Key="DangerHover" Color="#DC2626"/>
     <SolidColorBrush x:Key="InfoColor" Color="#8B5CF6"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -202,6 +237,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#FF4D4F"/>
     <SolidColorBrush x:Key="DangerHover" Color="#D9363E"/>
     <SolidColorBrush x:Key="InfoColor" Color="#4A6FA5"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -230,6 +266,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#F85149"/>
     <SolidColorBrush x:Key="DangerHover" Color="#DA3633"/>
     <SolidColorBrush x:Key="InfoColor" Color="#6CB6FF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -258,6 +295,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#FF4D4F"/>
     <SolidColorBrush x:Key="DangerHover" Color="#FF7875"/>
     <SolidColorBrush x:Key="InfoColor" Color="#1890FF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -286,6 +324,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#F5222D"/>
     <SolidColorBrush x:Key="DangerHover" Color="#CF1322"/>
     <SolidColorBrush x:Key="InfoColor" Color="#1890FF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -314,6 +353,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#FF4D4F"/>
     <SolidColorBrush x:Key="DangerHover" Color="#CF1322"/>
     <SolidColorBrush x:Key="InfoColor" Color="#1890FF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -342,6 +382,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#FF4D4F"/>
     <SolidColorBrush x:Key="DangerHover" Color="#FF7875"/>
     <SolidColorBrush x:Key="InfoColor" Color="#13C2C2"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -370,6 +411,7 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#F5222D"/>
     <SolidColorBrush x:Key="DangerHover" Color="#CF1322"/>
     <SolidColorBrush x:Key="InfoColor" Color="#1890FF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
 </ResourceDictionary>
 """,
 
@@ -398,6 +440,36 @@ namespace TM.Framework.Appearance.ThemeManagement
     <SolidColorBrush x:Key="DangerColor" Color="#C07070"/>
     <SolidColorBrush x:Key="DangerHover" Color="#A85D5D"/>
     <SolidColorBrush x:Key="InfoColor" Color="#7C9299"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#AA000000"/>
+</ResourceDictionary>
+""",
+
+            [ThemeType.HighContrast] = """
+<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <!-- 高对比度主题（无障碍：纯黑背景 + 纯白主字 + 亮黄主色 + 亮青副色，符合 WCAG AAA 21:1 对比度） -->
+    <SolidColorBrush x:Key="UnifiedBackground" Color="#000000"/>
+    <SolidColorBrush x:Key="ContentBackground" Color="#000000"/>
+    <SolidColorBrush x:Key="Surface" Color="#000000"/>
+    <SolidColorBrush x:Key="ContentHighlight" Color="#1A1A1A"/>
+    <SolidColorBrush x:Key="WindowBorder" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="BorderBrush" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="TextPrimary" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="TextSecondary" Color="#00FFFF"/>
+    <SolidColorBrush x:Key="TextTertiary" Color="#C0C0C0"/>
+    <SolidColorBrush x:Key="TextDisabled" Color="#808080"/>
+    <SolidColorBrush x:Key="HoverBackground" Color="#1F1F1F"/>
+    <SolidColorBrush x:Key="ActiveBackground" Color="#2A2A2A"/>
+    <SolidColorBrush x:Key="SelectedBackground" Color="#003366"/>
+    <SolidColorBrush x:Key="PrimaryColor" Color="#FFFF00"/>
+    <SolidColorBrush x:Key="PrimaryHover" Color="#FFFFFF"/>
+    <SolidColorBrush x:Key="PrimaryActive" Color="#FFA500"/>
+    <SolidColorBrush x:Key="SuccessColor" Color="#00FF00"/>
+    <SolidColorBrush x:Key="WarningColor" Color="#FFFF00"/>
+    <SolidColorBrush x:Key="DangerColor" Color="#FF0000"/>
+    <SolidColorBrush x:Key="DangerHover" Color="#FF6060"/>
+    <SolidColorBrush x:Key="InfoColor" Color="#00FFFF"/>
+    <SolidColorBrush x:Key="BusyOverlayBackground" Color="#DD000000"/>
 </ResourceDictionary>
 """
         };

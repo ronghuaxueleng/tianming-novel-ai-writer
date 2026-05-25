@@ -1,19 +1,19 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Windows.Input;
 using System.Windows.Threading;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
-using TM.Framework.User.Security.PasswordProtection;
+using System.Threading.Tasks;
 
 namespace TM.Framework.User.Security.PasswordProtection.AutoLock
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class AutoLockViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class AutoLockViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly AppLockSettings _lockSettings;
+        private bool _disposed;
 
         private bool _enableAutoLock;
         private int _autoLockMinutes;
@@ -22,6 +22,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
         private readonly DispatcherTimer _updateTimer;
         private string _countdownColor = "PrimaryColor";
         private int _recentLockCount;
+        private readonly EventHandler _activityTimeUpdatedHandler;
 
         public AutoLockViewModel(AppLockSettings lockSettings)
         {
@@ -29,7 +30,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
             _remainingTime = "--:--";
             _lastActivityTime = "暂无活动";
 
-            SaveSettingsCommand = new RelayCommand(SaveSettings);
+            SaveSettingsCommand = new RelayCommand(() => SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[AutoLockViewModel] {ex.Message}")));
             LockNowCommand = new RelayCommand(LockNow);
             ResetTimerCommand = new RelayCommand(ResetTimer);
 
@@ -38,13 +39,13 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
                 Interval = TimeSpan.FromSeconds(1)
             };
             _updateTimer.Tick += UpdateTimer_Tick;
-            _updateTimer.Start();
 
-            _lockSettings.ActivityTimeUpdated += (s, e) => UpdateDisplayInfo();
+            _activityTimeUpdatedHandler = (s, e) => UpdateDisplayInfo();
+            _lockSettings.ActivityTimeUpdated += _activityTimeUpdatedHandler;
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var config = _lockSettings.LoadConfig();
+                var config = await _lockSettings.LoadConfigAsync().ConfigureAwait(false);
                 var lockCount = _lockSettings.GetLockHistoryCount(7);
                 return () =>
                 {
@@ -52,6 +53,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
                     AutoLockMinutes = config.AutoLockMinutes;
                     RecentLockCount = lockCount;
                     UpdateDisplayInfo();
+                    if (!_disposed) _updateTimer.Start();
                 };
             }, "AutoLock");
 
@@ -160,16 +162,16 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
 
         #region 方法
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
                 var enable = EnableAutoLock;
                 var minutes = AutoLockMinutes;
 
-                var ok = await System.Threading.Tasks.Task.Run(() =>
+                var ok = await System.Threading.Tasks.Task.Run(async () =>
                 {
-                    var config = _lockSettings.LoadConfig();
+                    var config = await _lockSettings.LoadConfigAsync().ConfigureAwait(false);
                     config.EnableAutoLock = enable;
                     config.AutoLockMinutes = minutes;
 
@@ -195,7 +197,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
             catch (Exception ex)
             {
                 TM.App.Log($"[AutoLockViewModel] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"保存设置时出错: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         }
 
@@ -209,7 +211,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
             catch (Exception ex)
             {
                 TM.App.Log($"[AutoLockViewModel] 立即锁定失败: {ex.Message}");
-                GlobalToast.Error("锁定失败", $"触发锁定时出错: {ex.Message}");
+                GlobalToast.Error("锁定失败", $"锁定失败：{ex.Message}");
             }
         }
 
@@ -225,7 +227,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
             catch (Exception ex)
             {
                 TM.App.Log($"[AutoLockViewModel] 重置计时器失败: {ex.Message}");
-                GlobalToast.Error("重置失败", $"重置计时器时出错: {ex.Message}");
+                GlobalToast.Error("重置失败", $"重置失败：{ex.Message}");
             }
         }
 
@@ -251,7 +253,7 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
 
                 if (EnableAutoLock && config.LastActivityTime.HasValue)
                 {
-                    var remaining = _lockSettings.GetTimeUntilAutoLock();
+                    var remaining = _lockSettings.GetTimeUntilAutoLock(config);
 
                     if (remaining.TotalSeconds > 0)
                     {
@@ -288,17 +290,19 @@ namespace TM.Framework.User.Security.PasswordProtection.AutoLock
             }
         }
 
-        private void LoadRecentLocks()
+        #endregion
+
+        #region IDisposable
+
+        public void Dispose()
         {
-            try
-            {
-                RecentLockCount = _lockSettings.GetLockHistoryCount(7);
-                TM.App.Log($"[AutoLockViewModel] 最近7天自动锁定次数: {RecentLockCount}");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[AutoLockViewModel] 加载最近锁定记录失败: {ex.Message}");
-            }
+            if (_disposed) return;
+            _disposed = true;
+
+            _updateTimer.Stop();
+            _updateTimer.Tick -= UpdateTimer_Tick;
+            _lockSettings.ActivityTimeUpdated -= _activityTimeUpdatedHandler;
+            GC.SuppressFinalize(this);
         }
 
         #endregion

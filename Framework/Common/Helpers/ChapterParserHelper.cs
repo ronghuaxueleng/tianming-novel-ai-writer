@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 
@@ -78,6 +77,14 @@ namespace TM.Framework.Common.Helpers
             @"^Chapter\s*(\d+)",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
+        private static readonly Regex LooseArabicRangeRegex = new(
+            @"[第]?(\d+)\s*[^\d]{0,6}[-~～〜—–－−‐‑‒―﹣﹘到至][^\d]{0,6}\s*[第]?(\d+)\s*(?:章节|章)",
+            RegexOptions.Compiled);
+
+        private static readonly Regex ListSeparatorRegex = new(
+            @"\s*(?:[,，、/]|和|与|及)\s*",
+            RegexOptions.Compiled);
+
         #endregion
 
         #region 章节ID解析
@@ -115,19 +122,7 @@ namespace TM.Framework.Common.Helpers
                 return null;
             }
 
-            content = content
-                .Replace('－', '-')
-                .Replace('–', '-')
-                .Replace('—', '-')
-                .Replace('−', '-')
-                .Replace('‐', '-')
-                .Replace('‑', '-')
-                .Replace('‒', '-')
-                .Replace('―', '-')
-                .Replace('﹣', '-')
-                .Replace('﹘', '-')
-                .Replace('～', '-')
-                .Replace('〜', '-');
+            content = NormalizeDashes(content);
 
             var matches = MultiRangeTokenRegex.Matches(content);
             if (matches.Count < 2)
@@ -205,7 +200,7 @@ namespace TM.Framework.Common.Helpers
             if (match.Success)
             {
                 var rawList = match.Groups[1].Value;
-                var parts = Regex.Split(rawList, @"\s*(?:[,，、/]|和|与|及)\s*");
+                var parts = ListSeparatorRegex.Split(rawList);
                 foreach (var part in parts)
                 {
                     if (string.IsNullOrWhiteSpace(part))
@@ -358,19 +353,7 @@ namespace TM.Framework.Common.Helpers
             if (string.IsNullOrEmpty(content))
                 return null;
 
-            content = content
-                .Replace('－', '-')
-                .Replace('–', '-')
-                .Replace('—', '-')
-                .Replace('−', '-')
-                .Replace('‐', '-')
-                .Replace('‑', '-')
-                .Replace('‒', '-')
-                .Replace('―', '-')
-                .Replace('﹣', '-')
-                .Replace('﹘', '-')
-                .Replace('～', '-')
-                .Replace('〜', '-');
+            content = NormalizeDashes(content);
 
             var match = ArabicRangeRegex.Match(content);
             if (match.Success &&
@@ -438,7 +421,7 @@ namespace TM.Framework.Common.Helpers
                 }
             }
 
-            match = Regex.Match(content, @"[第]?(\d+)\s*[^\d]{0,6}[-~～〜—–－−‐‑‒―﹣﹘到至][^\d]{0,6}\s*[第]?(\d+)\s*(?:章节|章)");
+            match = LooseArabicRangeRegex.Match(content);
             if (match.Success &&
                 int.TryParse(match.Groups[1].Value, out start) &&
                 int.TryParse(match.Groups[2].Value, out end))
@@ -487,8 +470,8 @@ namespace TM.Framework.Common.Helpers
             if (match.Success)
             {
                 var numStr = match.Groups[1].Value;
-                var chapterNum = char.IsDigit(numStr[0]) 
-                    ? int.Parse(numStr) 
+                var chapterNum = char.IsDigit(numStr[0])
+                    ? int.Parse(numStr)
                     : ChineseToArabic(numStr);
                 var chapterName = match.Groups[3].Value.Trim();
                 return (chapterNum > 0 ? chapterNum : null, string.IsNullOrEmpty(chapterName) ? null : chapterName);
@@ -499,7 +482,7 @@ namespace TM.Framework.Common.Helpers
             {
                 var specialType = specialMatch.Groups[1].Value;
                 var specialName = specialMatch.Groups[2].Value.Trim();
-                if (specialName.StartsWith("：") || specialName.StartsWith(":") || specialName.StartsWith("."))
+                if (specialName.StartsWith('：') || specialName.StartsWith(':') || specialName.StartsWith('.'))
                     specialName = specialName.Substring(1).Trim();
                 return (null, string.IsNullOrEmpty(specialName) ? specialType : $"{specialType} {specialName}");
             }
@@ -509,7 +492,7 @@ namespace TM.Framework.Common.Helpers
             {
                 var num = int.Parse(engMatch.Groups[1].Value);
                 var remaining = trimmed.Substring(engMatch.Length).Trim();
-                if (remaining.StartsWith(":") || remaining.StartsWith("-") || remaining.StartsWith("."))
+                if (remaining.StartsWith(':') || remaining.StartsWith('-') || remaining.StartsWith('.'))
                     remaining = remaining.Substring(1).Trim();
                 return (num, string.IsNullOrEmpty(remaining) ? null : remaining);
             }
@@ -548,20 +531,35 @@ namespace TM.Framework.Common.Helpers
 
         private static readonly Dictionary<char, int> ChineseDigits = new()
         {
-            ['零'] = 0, ['〇'] = 0,
-            ['一'] = 1, ['壹'] = 1,
-            ['二'] = 2, ['贰'] = 2, ['两'] = 2,
-            ['三'] = 3, ['叁'] = 3,
-            ['四'] = 4, ['肆'] = 4,
-            ['五'] = 5, ['伍'] = 5,
-            ['六'] = 6, ['陆'] = 6,
-            ['七'] = 7, ['柒'] = 7,
-            ['八'] = 8, ['捌'] = 8,
-            ['九'] = 9, ['玖'] = 9,
-            ['十'] = 10, ['拾'] = 10,
-            ['百'] = 100, ['佰'] = 100,
-            ['千'] = 1000, ['仟'] = 1000,
-            ['万'] = 10000, ['萬'] = 10000
+            ['零'] = 0,
+            ['〇'] = 0,
+            ['一'] = 1,
+            ['壹'] = 1,
+            ['二'] = 2,
+            ['贰'] = 2,
+            ['两'] = 2,
+            ['三'] = 3,
+            ['叁'] = 3,
+            ['四'] = 4,
+            ['肆'] = 4,
+            ['五'] = 5,
+            ['伍'] = 5,
+            ['六'] = 6,
+            ['陆'] = 6,
+            ['七'] = 7,
+            ['柒'] = 7,
+            ['八'] = 8,
+            ['捌'] = 8,
+            ['九'] = 9,
+            ['玖'] = 9,
+            ['十'] = 10,
+            ['拾'] = 10,
+            ['百'] = 100,
+            ['佰'] = 100,
+            ['千'] = 1000,
+            ['仟'] = 1000,
+            ['万'] = 10000,
+            ['萬'] = 10000
         };
 
         public static int ChineseToArabic(string chinese)
@@ -615,6 +613,20 @@ namespace TM.Framework.Common.Helpers
         #endregion
 
         #region 辅助方法
+
+        private static string NormalizeDashes(string text) => text
+            .Replace('－', '-')
+            .Replace('–', '-')
+            .Replace('—', '-')
+            .Replace('−', '-')
+            .Replace('‐', '-')
+            .Replace('‑', '-')
+            .Replace('‒', '-')
+            .Replace('―', '-')
+            .Replace('﹣', '-')
+            .Replace('﹘', '-')
+            .Replace('～', '-')
+            .Replace('〜', '-');
 
         public static int CompareChapterId(string a, string b)
         {

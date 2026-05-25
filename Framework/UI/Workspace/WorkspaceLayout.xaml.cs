@@ -1,10 +1,6 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Threading;
-using System.Windows.Input;
-using TM.Framework.Common.Services;
 using TM.Services.Framework.Settings;
 using TM.Framework.UI.Workspace.Services;
 using TM.Framework.UI.Workspace.RightPanel.Conversation;
@@ -12,6 +8,7 @@ using TM.Framework.UI.Workspace.RightPanel.Conversation;
 namespace TM.Framework.UI.Workspace
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class WorkspaceLayout : UserControl
     {
         private readonly SettingsManager _settings;

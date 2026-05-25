@@ -1,10 +1,11 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
 using System.Windows;
 
 namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ChapterRepairDialog : Window
     {
         private readonly ChapterRepairViewModel _vm;
@@ -22,6 +23,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
                 {
                     if (_vm.CancelRepairCommand.CanExecute(null))
                         _vm.CancelRepairCommand.Execute(null);
+                    _vm.Cleanup();
                 }
                 catch
                 {

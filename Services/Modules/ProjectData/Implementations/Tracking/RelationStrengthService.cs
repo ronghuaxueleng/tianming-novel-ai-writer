@@ -6,11 +6,8 @@ using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Context;
-using TM.Services.Modules.ProjectData.Models.Contexts.Design;
-using TM.Services.Modules.ProjectData.Models.Contexts.Generate;
 using TM.Services.Modules.ProjectData.Models.Design.Characters;
 using TM.Services.Modules.ProjectData.Models.Design.Plot;
-using TM.Services.Modules.ProjectData.Models.Generate.ChapterBlueprint;
 using TM.Framework.Common.Helpers.Id;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -71,7 +68,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<RelationStrength> GetStrengthAsync(string id1, string id2)
         {
-            if (await TryLoadIndexAsync())
+            if (await TryLoadIndexAsync().ConfigureAwait(false))
             {
                 var index = _cachedIndex;
                 if (index != null)
@@ -80,7 +77,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
-            return await ComputeStrengthRealtimeAsync(id1, id2);
+            return await ComputeStrengthRealtimeAsync(id1, id2).ConfigureAwait(false);
         }
 
         private async Task<bool> TryLoadIndexAsync()
@@ -88,7 +85,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (_indexLoaded)
                 return _cachedIndex != null;
 
-            await _indexLoadLock.WaitAsync();
+            await _indexLoadLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (_indexLoaded)
@@ -97,16 +94,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 var epoch = Volatile.Read(ref _epoch);
 
                 var indexPath = Path.Combine(
-                    StoragePathHelper.GetProjectConfigPath(), 
-                    "guides", 
+                    StoragePathHelper.GetProjectConfigPath(),
+                    "guides",
                     "relation_strength_index.json");
 
                 if (File.Exists(indexPath))
                 {
                     try
                     {
-                        var json = await File.ReadAllTextAsync(indexPath);
-                        var index = JsonSerializer.Deserialize<RelationStrengthIndex>(json, JsonOptions);
+                        await using var stream = File.OpenRead(indexPath);
+                        var index = await JsonSerializer.DeserializeAsync<RelationStrengthIndex>(stream, JsonOptions).ConfigureAwait(false);
 
                         if (epoch != Volatile.Read(ref _epoch))
                             return false;
@@ -135,7 +132,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private async Task<RelationStrength> ComputeStrengthRealtimeAsync(string id1, string id2)
         {
-            await EnsureCacheLoadedAsync();
+            await EnsureCacheLoadedAsync().ConfigureAwait(false);
 
             RelationStrength? explicitStrength = null;
             if (_explicitRelationsCache != null)
@@ -152,7 +149,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
-            if (_plotRulesCache?.Any(c => 
+            if (_plotRulesCache?.Any(c =>
             {
                 var participants = GetParticipants(c);
                 return participants.Contains(id1) && participants.Contains(id2);
@@ -175,7 +172,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (_cacheExpiry > DateTime.UtcNow)
                 return;
 
-            await _cacheLoadLock.WaitAsync();
+            await _cacheLoadLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (_cacheExpiry > DateTime.UtcNow)
@@ -187,14 +184,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 var blueprintsTask = LoadBlueprintsAsync();
                 var relationshipsTask = LoadCharacterRelationshipsAsync();
 
-                await Task.WhenAll(plotRulesTask, blueprintsTask, relationshipsTask);
+                await Task.WhenAll(plotRulesTask, blueprintsTask, relationshipsTask).ConfigureAwait(false);
 
                 if (epoch != Volatile.Read(ref _epoch))
                     return;
 
-                var relationships = await relationshipsTask;
-                _plotRulesCache = await plotRulesTask;
-                _blueprintsCache = await blueprintsTask;
+                var relationships = await relationshipsTask.ConfigureAwait(false);
+                _plotRulesCache = await plotRulesTask.ConfigureAwait(false);
+                _blueprintsCache = await blueprintsTask.ConfigureAwait(false);
                 _relationshipsCache = relationships;
                 _explicitRelationsCache = BuildExplicitRelations(_relationshipsCache);
                 _characterRulesCache = _relationshipsCache;
@@ -228,8 +225,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             try
             {
-                var plotRules = await LoadPlotRulesAsync();
-                var blueprints = await LoadBlueprintsAsync();
+                var plotRulesTask = LoadPlotRulesAsync();
+                var blueprintsTask = LoadBlueprintsAsync();
+                await Task.WhenAll(plotRulesTask, blueprintsTask).ConfigureAwait(false);
+                var plotRules = await plotRulesTask.ConfigureAwait(false);
+                var blueprints = await blueprintsTask.ConfigureAwait(false);
 
                 foreach (var plotRule in plotRules)
                 {
@@ -290,10 +290,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 .ToDictionary(c => c.Name, c => c.Id, StringComparer.OrdinalIgnoreCase);
 
             return SplitNames(castText)
-                .Where(n => nameToId.ContainsKey(n))
-                .Select(n => nameToId[n])
+                .Select(n => nameToId.TryGetValue(n, out var id) ? id : null)
+                .Where(id => id != null)
                 .Distinct()
-                .ToList();
+                .ToList()!;
         }
 
         private RelationStrength DetermineStrengthByRelationType(string relationType)
@@ -308,14 +308,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private async Task<List<PlotRulesData>> LoadPlotRulesAsync()
         {
-            var path = Path.Combine(StoragePathHelper.GetStorageRoot(), 
+            var path = Path.Combine(StoragePathHelper.GetStorageRoot(),
                 "Modules", "Design", "Elements", "PlotRules", "plot_rules.json");
             if (!File.Exists(path))
                 return new List<PlotRulesData>();
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                return JsonSerializer.Deserialize<List<PlotRulesData>>(json, JsonOptions) ?? new List<PlotRulesData>();
+                await using var stream = File.OpenRead(path);
+                return await JsonSerializer.DeserializeAsync<List<PlotRulesData>>(stream, JsonOptions).ConfigureAwait(false) ?? new List<PlotRulesData>();
             }
             catch (Exception ex)
             {
@@ -326,9 +326,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private async Task<List<Models.Generate.ChapterBlueprint.BlueprintData>> LoadBlueprintsAsync()
         {
-            var path = Path.Combine(StoragePathHelper.GetStorageRoot(), 
+            var path = Path.Combine(StoragePathHelper.GetStorageRoot(),
                 "Modules", "Generate", "ChapterBlueprint", "Blueprint");
-            return await LoadItemsFromDirectoryAsync<Models.Generate.ChapterBlueprint.BlueprintData>(path);
+            return await LoadItemsFromDirectoryAsync<Models.Generate.ChapterBlueprint.BlueprintData>(path).ConfigureAwait(false);
         }
 
         private async Task<List<T>> LoadItemsFromDirectoryAsync<T>(string directoryPath)
@@ -341,8 +341,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 try
                 {
-                    var json = await File.ReadAllTextAsync(file);
-                    var item = JsonSerializer.Deserialize<T>(json, JsonOptions);
+                    await using var stream = File.OpenRead(file);
+                    var item = await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions).ConfigureAwait(false);
                     if (item != null)
                         items.Add(item);
                 }
@@ -379,22 +379,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
             public string? StrengthHint { get; set; }
         }
 
-        private class RelationshipNetwork
-        {
-            public int Version { get; set; }
-            public string OwnerId { get; set; } = string.Empty;
-            public string OwnerName { get; set; } = string.Empty;
-            public List<RelationEntry> Relations { get; set; } = new();
-        }
-
-        private class RelationEntry
-        {
-            public string TargetId { get; set; } = string.Empty;
-            public string RelationType { get; set; } = string.Empty;
-            public string? Status { get; set; }
-            public string? StrengthHint { get; set; }
-        }
-
         private static string GetPairKey(string id1, string id2)
         {
             return string.Compare(id1, id2, StringComparison.Ordinal) < 0 ? $"{id1}_{id2}" : $"{id2}_{id1}";
@@ -425,8 +409,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                var data = JsonSerializer.Deserialize<List<CharacterRulesData>>(json, JsonOptions);
+                await using var stream = File.OpenRead(path);
+                var data = await JsonSerializer.DeserializeAsync<List<CharacterRulesData>>(stream, JsonOptions).ConfigureAwait(false);
                 if (data != null)
                     result.AddRange(data);
             }
@@ -490,7 +474,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public void UpgradeStrength(string id1, string id2, RelationStrength newStrength)
         {
             var key = GetKey(id1, id2);
-            if (!Pairs.ContainsKey(key) || Pairs[key] < newStrength)
+            if (!Pairs.TryGetValue(key, out var cur) || cur < newStrength)
                 Pairs[key] = newStrength;
         }
 

@@ -1,5 +1,5 @@
+using System.Collections.Generic;
 using System.Text;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Framework.UI.Workspace.Services.Spec;
 using TM.Services.Framework.AI.SemanticKernel.Prompts.Developer;
@@ -55,7 +55,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts
             bool includeBusinessPrompt = false,
             CreativeSpec? spec = null)
         {
-            var systemPrompt = BuildSystemPromptForMode(mode, includeBusinessPrompt, spec);
+            var isIdentityQuestion = BehaviorPromptProvider.IsIdentityQuestion(userInput);
+            var systemPrompt = BuildSystemPromptForMode(mode, includeBusinessPrompt, spec, isIdentityQuestion);
             var userPrompt = BehaviorPromptProvider.BuildUserPrompt(mode, userInput);
 
             return new ChatPromptParts
@@ -68,25 +69,27 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts
         private static string BuildSystemPromptForMode(
             ChatMode mode,
             bool includeBusinessPrompt,
-            CreativeSpec? spec)
+            CreativeSpec? spec,
+            bool isIdentityQuestion = false)
         {
             var sb = new StringBuilder();
+            var rawSpecPrompt = includeBusinessPrompt && spec != null
+                ? LoadSpecTemplateRawPrompt(spec.TemplateName)
+                : null;
+            var hasRawSpecPrompt = !string.IsNullOrWhiteSpace(rawSpecPrompt);
+            var structuredSpecPrompt = BuildStructuredSpecPromptForBusiness(spec, hasRawSpecPrompt);
 
             sb.Append(GetDeveloperPrompt());
 
             sb.Append("\n\n");
             sb.Append(GetModeTemplate(mode));
 
-            if (includeBusinessPrompt && spec != null)
+            if (hasRawSpecPrompt)
             {
-                var rawPrompt = LoadSpecTemplateRawPrompt(spec.TemplateName);
-                if (!string.IsNullOrWhiteSpace(rawPrompt))
-                {
-                    sb.Append("\n\n");
-                    sb.Append("<genre_spec priority=\"highest\" source=\"prompt_library\">\n");
-                    sb.Append(rawPrompt);
-                    sb.Append("\n</genre_spec>");
-                }
+                sb.Append("\n\n");
+                sb.Append("<genre_spec priority=\"highest\" source=\"prompt_library\">\n");
+                sb.Append(rawSpecPrompt);
+                sb.Append("\n</genre_spec>");
             }
 
             if (includeBusinessPrompt)
@@ -95,18 +98,17 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts
                 sb.Append(GetDialogueBusinessPrompt());
             }
 
-            if (spec != null)
+            if (!string.IsNullOrWhiteSpace(structuredSpecPrompt))
             {
-                var specPrompt = BuildSpecPrompt(spec);
-                if (!string.IsNullOrWhiteSpace(specPrompt))
-                {
-                    sb.Append("\n\n");
-                    sb.Append(specPrompt);
-                }
+                sb.Append("\n\n");
+                sb.Append(structuredSpecPrompt);
             }
 
-            sb.Append("\n\n");
-            sb.Append(GetAnalysisAnswerSpec());
+            if (!includeBusinessPrompt && !isIdentityQuestion)
+            {
+                sb.Append("\n\n");
+                sb.Append(GetAnalysisAnswerSpec());
+            }
 
             return sb.ToString();
         }
@@ -129,6 +131,60 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts
             }
         }
 
+        private static string BuildStructuredSpecPromptForBusiness(CreativeSpec? spec, bool hasRawSpecPrompt)
+        {
+            if (spec == null)
+                return string.Empty;
+
+            if (!hasRawSpecPrompt)
+                return BuildSpecPrompt(spec);
+
+            var parts = new List<string>();
+
+            if (!string.IsNullOrWhiteSpace(spec.WritingStyle))
+                parts.Add($"项目当前写作风格（覆盖题材模板同名要求）：{spec.WritingStyle}");
+
+            if (!string.IsNullOrWhiteSpace(spec.Pov))
+                parts.Add($"项目当前叙事视角（覆盖题材模板同名要求）：{spec.Pov}");
+
+            if (!string.IsNullOrWhiteSpace(spec.Tone))
+                parts.Add($"项目当前语气基调（覆盖题材模板同名要求）：{spec.Tone}");
+
+            if (spec.TargetWordCount.HasValue)
+            {
+                parts.Add($"项目当前目标字数（覆盖题材模板同名要求）：{spec.TargetWordCount.Value} 字（仅统计正文，不含标题与 <chapter_changes> 标签内的内容）");
+            }
+
+            if (spec.ParagraphLength.HasValue)
+                parts.Add($"项目当前段落长度偏好：约{spec.ParagraphLength}字");
+
+            if (spec.DialogueRatio.HasValue)
+                parts.Add($"项目当前对话比例（覆盖题材模板同名要求）：约{spec.DialogueRatio * 100:F0}%");
+
+            if (spec.MustInclude?.Any(v => !string.IsNullOrWhiteSpace(v)) == true)
+                parts.Add($"项目额外必须包含：{string.Join("、", spec.MustInclude.Where(v => !string.IsNullOrWhiteSpace(v)))}");
+
+            if (spec.MustAvoid?.Any(v => !string.IsNullOrWhiteSpace(v)) == true)
+                parts.Add($"项目额外避免内容：{string.Join("、", spec.MustAvoid.Where(v => !string.IsNullOrWhiteSpace(v)))}");
+
+            if (spec.CharacterFocus?.Any(v => !string.IsNullOrWhiteSpace(v)) == true)
+                parts.Add($"项目当前聚焦角色：{string.Join("、", spec.CharacterFocus.Where(v => !string.IsNullOrWhiteSpace(v)))}");
+
+            if (!string.IsNullOrWhiteSpace(spec.SceneDescription))
+                parts.Add($"项目当前场景描述：{spec.SceneDescription}");
+
+            if (!string.IsNullOrWhiteSpace(spec.EmotionalArc))
+                parts.Add($"项目当前情感曲线：{spec.EmotionalArc}");
+
+            if (!string.IsNullOrWhiteSpace(spec.PlotPoints))
+                parts.Add($"项目当前剧情要点：{spec.PlotPoints}");
+
+            if (parts.Count == 0)
+                return string.Empty;
+
+            return "<creative_spec_overrides priority=\"highest\" source=\"project_settings\" override_target=\"genre_spec\">\n" + string.Join("\n", parts) + "\n</creative_spec_overrides>";
+        }
+
         #endregion
 
         #region Shortcuts
@@ -136,11 +192,6 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts
         public static ChatPromptParts BuildSimplePromptParts(ChatMode mode, string userInput)
         {
             return BuildPromptParts(mode, userInput, includeBusinessPrompt: false, spec: null);
-        }
-
-        public static ChatPromptParts BuildWritingPromptParts(ChatMode mode, string userInput, CreativeSpec? spec = null)
-        {
-            return BuildPromptParts(mode, userInput, includeBusinessPrompt: true, spec: spec);
         }
 
         #endregion

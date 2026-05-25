@@ -3,12 +3,11 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
-    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-    xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout">
 <dm:TwoColumnEditorLayout
-    LeftIcon="📚"
+    LeftIcon="{DynamicResource Icon.Books}"
     LeftTitle="分卷列表"
-    RightIcon="📚"
+    RightIcon="{DynamicResource Icon.Books}"
     RightTitle="分卷编辑"
     ItemsSource="{Binding TreeData}"
     ShowSearch="True"
@@ -31,10 +30,9 @@
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="*"/>
-                <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="📌" Title="卷基本信息" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Pin}" Title="卷基本信息" Margin="0,0,0,10">
                 <Grid>
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="2*"/>
@@ -72,22 +70,15 @@
                 </Grid>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🎭" Title="卷主题" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormVolumeTheme, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Theater}" Title="卷主题" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormVolumeTheme, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="🎯" Title="卷阶段目标" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormStageGoal, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                         AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
-                         Height="Auto" VerticalAlignment="Stretch"
-                         BorderThickness="0" Background="Transparent"/>
-            </layout:IconHeaderGroupBox>
-
-            <layout:IconHeaderGroupBox Grid.Row="3" Icon="🧮" Title="预计字数" Margin="0">
-                <TextBox Text="{Binding FormEstimatedWordCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Target}" Title="卷阶段目标" Margin="0">
+                <TextBox Text="{Binding FormStageGoal, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
@@ -105,36 +96,36 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="⚔️" Title="卷主冲突" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormMainConflict, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Swords}" Title="卷主冲突" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormMainConflict, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🚫" Title="对抗源/压力来源" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormPressureSource, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Forbidden}" Title="对抗源/压力来源" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormPressureSource, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="🔄" Title="关键转折/大事件" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormKeyEvents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Refresh}" Title="关键转折/大事件" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormKeyEvents, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="3" Icon="🌅" Title="卷开篇状态" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormOpeningState, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Sunrise}" Title="卷开篇状态" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormOpeningState, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="4" Icon="🏁" Title="卷收束状态" Margin="0">
-                <TextBox Text="{Binding FormEndingState, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="4" Icon="{DynamicResource Icon.Flag}" Title="卷收束状态" Margin="0">
+                <TextBox Text="{Binding FormEndingState, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
@@ -150,22 +141,22 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="📊" Title="章节分配总览" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormChapterAllocationOverview, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Chart}" Title="章节分配总览" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormChapterAllocationOverview, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🧩" Title="剧情分配（结构化）" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormPlotAllocation, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Puzzle}" Title="剧情分配（结构化）" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormPlotAllocation, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="💡" Title="章节生成提示" Margin="0">
-                <TextBox Text="{Binding FormChapterGenerationHints, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Lightbulb}" Title="章节生成提示" Margin="0">
+                <TextBox Text="{Binding FormChapterGenerationHints, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
@@ -181,22 +172,22 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="👤" Title="出场角色" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormReferencedCharacterNames, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.User}" Title="出场角色" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormReferencedCharacterNames, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🏛️" Title="涉及势力" Margin="0,0,0,10">
-                <TextBox Text="{Binding FormReferencedFactionNames, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Institution}" Title="涉及势力" Margin="0,0,0,10">
+                <TextBox Text="{Binding FormReferencedFactionNames, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="📍" Title="涉及地点" Margin="0">
-                <TextBox Text="{Binding FormReferencedLocationNames, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.MapPin}" Title="涉及地点" Margin="0">
+                <TextBox Text="{Binding FormReferencedLocationNames, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>

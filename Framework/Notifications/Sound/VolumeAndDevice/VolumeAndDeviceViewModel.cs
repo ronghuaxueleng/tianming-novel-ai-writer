@@ -1,18 +1,17 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
-using TM.Framework.Notifications.Sound.VolumeAndDevice;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.Notifications.Sound.Services;
 
 namespace TM.Framework.Notifications.Sound.VolumeAndDevice
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class VolumeAndDeviceViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class VolumeAndDeviceViewModel : INotifyPropertyChanged, IDisposable
     {
         private double _systemVolume = 80;
         private double _notificationVolume = 100;
@@ -29,6 +28,9 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
 
         private AudioDeviceInfo? _selectedOutputDevice;
         private AudioDeviceInfo? _selectedInputDevice;
+
+        private System.Threading.Timer? _volumeDebounceTimer;
+        private System.Threading.Timer? _eqDebounceTimer;
 
         private readonly VolumeAndDeviceSettings _settings;
         private readonly SystemVolumeController _volumeController;
@@ -65,13 +67,65 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
             SaveSettingsCommand = new RelayCommand(SaveSettings);
             ResetAllCommand = new RelayCommand(ResetAll);
 
-            InitializeDevices();
-
-            AsyncSettingsLoader.RunOrDefer(() =>
+            _volumeDebounceTimer = new System.Threading.Timer(_ =>
             {
-                _settings.LoadSettings();
+                try { _volumeController.SetMasterVolume(_systemVolume); }
+                catch (Exception ex) { TM.App.Log($"[音量与设备] 设置系统音量失败: {ex.Message}"); }
+            }, null, System.Threading.Timeout.InfiniteTimeSpan, System.Threading.Timeout.InfiniteTimeSpan);
+
+            _eqDebounceTimer = new System.Threading.Timer(_ =>
+            {
+                var (bass, midBass, mid, midTreble, treble) = (_bassLevel, _midBassLevel, _midLevel, _midTrebleLevel, _trebleLevel);
+                try
+                {
+                    _equalizer.SetBassGain(bass);
+                    _equalizer.SetMidBassGain(midBass);
+                    _equalizer.SetMidGain(mid);
+                    _equalizer.SetMidTrebleGain(midTreble);
+                    _equalizer.SetTrebleGain(treble);
+                }
+                catch (Exception ex) { TM.App.Log($"[音量与设备] 应用均衡器失败: {ex.Message}"); }
+            }, null, System.Threading.Timeout.InfiniteTimeSpan, System.Threading.Timeout.InfiniteTimeSpan);
+
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
+            {
+                List<AudioDeviceInfo> outputDevices;
+                List<AudioDeviceInfo> inputDevices;
+                double masterVolume;
+                try
+                {
+                    outputDevices = _deviceManager.GetOutputDevices();
+                    inputDevices = _deviceManager.GetInputDevices();
+                    masterVolume = _volumeController.GetMasterVolume();
+                    TM.App.Log($"[音量与设备] 找到 {outputDevices.Count} 个输出设备，{inputDevices.Count} 个输入设备");
+                    TM.App.Log($"[音量与设备] 当前系统音量: {masterVolume:F0}%");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[音量与设备] 初始化设备失败: {ex.Message}");
+                    outputDevices = new List<AudioDeviceInfo>
+                    {
+                        new() { DeviceId = "output_default", DeviceName = "扬声器/耳机", DeviceType = "输出", IsDefault = true, Status = "已连接" }
+                    };
+                    inputDevices = new List<AudioDeviceInfo>
+                    {
+                        new() { DeviceId = "input_default", DeviceName = "麦克风", DeviceType = "输入", IsDefault = true, Status = "已连接" }
+                    };
+                    masterVolume = 80;
+                }
+
+                await _settings.LoadSettingsAsync().ConfigureAwait(false);
+
                 return () =>
                 {
+                    OutputDevices.ReplaceAll(outputDevices);
+                    InputDevices.ReplaceAll(inputDevices);
+                    SelectedOutputDevice = OutputDevices.FirstOrDefault(d => d.IsDefault);
+                    SelectedInputDevice = InputDevices.FirstOrDefault(d => d.IsDefault);
+                    _systemVolume = masterVolume;
+                    OnPropertyChanged(nameof(SystemVolume));
+                    OnPropertyChanged(nameof(SystemVolumeText));
+
                     NotificationVolume = _settings.NotificationVolume;
                     EffectVolume = _settings.EffectVolume;
                     IsMuted = _settings.IsMuted;
@@ -104,14 +158,7 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
                     OnPropertyChanged(nameof(SystemVolume));
                     OnPropertyChanged(nameof(SystemVolumeText));
 
-                    try
-                    {
-                        _volumeController.SetMasterVolume(value);
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[音量与设备] 设置系统音量失败: {ex.Message}");
-                    }
+                    _volumeDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
                 }
             }
         }
@@ -169,12 +216,12 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public double BassLevel
         {
             get => _bassLevel;
-            set 
-            { 
-                _bassLevel = value; 
-                OnPropertyChanged(nameof(BassLevel)); 
+            set
+            {
+                _bassLevel = value;
+                OnPropertyChanged(nameof(BassLevel));
                 OnPropertyChanged(nameof(BassLevelText));
-                _equalizer.SetBassGain(value);
+                _eqDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
             }
         }
         public string BassLevelText => $"{BassLevel:+0;-0;0}";
@@ -182,12 +229,12 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public double MidBassLevel
         {
             get => _midBassLevel;
-            set 
-            { 
-                _midBassLevel = value; 
-                OnPropertyChanged(nameof(MidBassLevel)); 
+            set
+            {
+                _midBassLevel = value;
+                OnPropertyChanged(nameof(MidBassLevel));
                 OnPropertyChanged(nameof(MidBassLevelText));
-                _equalizer.SetMidBassGain(value);
+                _eqDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
             }
         }
         public string MidBassLevelText => $"{MidBassLevel:+0;-0;0}";
@@ -195,12 +242,12 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public double MidLevel
         {
             get => _midLevel;
-            set 
-            { 
-                _midLevel = value; 
-                OnPropertyChanged(nameof(MidLevel)); 
+            set
+            {
+                _midLevel = value;
+                OnPropertyChanged(nameof(MidLevel));
                 OnPropertyChanged(nameof(MidLevelText));
-                _equalizer.SetMidGain(value);
+                _eqDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
             }
         }
         public string MidLevelText => $"{MidLevel:+0;-0;0}";
@@ -208,12 +255,12 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public double MidTrebleLevel
         {
             get => _midTrebleLevel;
-            set 
-            { 
-                _midTrebleLevel = value; 
-                OnPropertyChanged(nameof(MidTrebleLevel)); 
+            set
+            {
+                _midTrebleLevel = value;
+                OnPropertyChanged(nameof(MidTrebleLevel));
                 OnPropertyChanged(nameof(MidTrebleLevelText));
-                _equalizer.SetMidTrebleGain(value);
+                _eqDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
             }
         }
         public string MidTrebleLevelText => $"{MidTrebleLevel:+0;-0;0}";
@@ -221,12 +268,12 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public double TrebleLevel
         {
             get => _trebleLevel;
-            set 
-            { 
-                _trebleLevel = value; 
-                OnPropertyChanged(nameof(TrebleLevel)); 
+            set
+            {
+                _trebleLevel = value;
+                OnPropertyChanged(nameof(TrebleLevel));
                 OnPropertyChanged(nameof(TrebleLevelText));
-                _equalizer.SetTrebleGain(value);
+                _eqDebounceTimer?.Change(50, System.Threading.Timeout.Infinite);
             }
         }
         public string TrebleLevelText => $"{TrebleLevel:+0;-0;0}";
@@ -237,8 +284,8 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
             set { _equalizerPreset = value; OnPropertyChanged(nameof(EqualizerPreset)); }
         }
 
-        public ObservableCollection<AudioDeviceInfo> OutputDevices { get; } = new();
-        public ObservableCollection<AudioDeviceInfo> InputDevices { get; } = new();
+        public RangeObservableCollection<AudioDeviceInfo> OutputDevices { get; } = new();
+        public RangeObservableCollection<AudioDeviceInfo> InputDevices { get; } = new();
 
         public AudioDeviceInfo? SelectedOutputDevice
         {
@@ -289,67 +336,6 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         #endregion
 
         #region 方法
-
-        private void InitializeDevices()
-        {
-            try
-            {
-                var outputDevices = _deviceManager.GetOutputDevices();
-                var inputDevices = _deviceManager.GetInputDevices();
-
-                OutputDevices.Clear();
-                InputDevices.Clear();
-
-                foreach (var device in outputDevices)
-                {
-                    OutputDevices.Add(device);
-                }
-
-                foreach (var device in inputDevices)
-                {
-                    InputDevices.Add(device);
-                }
-
-                SelectedOutputDevice = OutputDevices.FirstOrDefault(d => d.IsDefault);
-                SelectedInputDevice = InputDevices.FirstOrDefault(d => d.IsDefault);
-
-                _systemVolume = _volumeController.GetMasterVolume();
-                OnPropertyChanged(nameof(SystemVolume));
-                OnPropertyChanged(nameof(SystemVolumeText));
-
-                TM.App.Log($"[音量与设备] 找到 {OutputDevices.Count} 个输出设备，{InputDevices.Count} 个输入设备");
-                TM.App.Log($"[音量与设备] 当前系统音量: {_systemVolume:F0}%");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[音量与设备] 初始化设备失败: {ex.Message}");
-                InitializeSimulatedDevices();
-            }
-        }
-
-        private void InitializeSimulatedDevices()
-        {
-            OutputDevices.Add(new AudioDeviceInfo
-            {
-                DeviceId = "output_default",
-                DeviceName = "扬声器/耳机",
-                DeviceType = "输出",
-                IsDefault = true,
-                Status = "已连接"
-            });
-
-            InputDevices.Add(new AudioDeviceInfo
-            {
-                DeviceId = "input_default",
-                DeviceName = "麦克风",
-                DeviceType = "输入",
-                IsDefault = true,
-                Status = "已连接"
-            });
-
-            SelectedOutputDevice = OutputDevices.FirstOrDefault(d => d.IsDefault);
-            SelectedInputDevice = InputDevices.FirstOrDefault(d => d.IsDefault);
-        }
 
         private void ApplyQuietPreset()
         {
@@ -450,7 +436,7 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
             catch (Exception ex)
             {
                 TM.App.Log($"[音量与设备] 测试输出设备失败: {ex.Message}");
-                StandardDialog.ShowError($"播放测试音失败: {ex.Message}", "设备测试失败");
+                StandardDialog.ShowError($"播放测试音失败：{ex.Message}", "设备测试失败");
             }
         }
 
@@ -472,7 +458,7 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
             catch (Exception ex)
             {
                 TM.App.Log($"[音量与设备] 测试输入设备失败: {ex.Message}");
-                StandardDialog.ShowError($"测试输入设备失败: {ex.Message}", "设备测试失败");
+                StandardDialog.ShowError($"测试输入设备失败：{ex.Message}", "设备测试失败");
             }
         }
 
@@ -501,40 +487,7 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
             catch (Exception ex)
             {
                 TM.App.Log($"[音量与设备] 保存设置失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败: {ex.Message}", "错误");
-            }
-        }
-
-        private void LoadSettings()
-        {
-            try
-            {
-                _settings.LoadSettings();
-
-                NotificationVolume = _settings.NotificationVolume;
-                EffectVolume = _settings.EffectVolume;
-                IsMuted = _settings.IsMuted;
-                BassLevel = _settings.BassLevel;
-                MidBassLevel = _settings.MidBassLevel;
-                MidLevel = _settings.MidLevel;
-                MidTrebleLevel = _settings.MidTrebleLevel;
-                TrebleLevel = _settings.TrebleLevel;
-                EqualizerPreset = _settings.EqualizerPreset;
-
-                if (!string.IsNullOrEmpty(_settings.OutputDeviceId))
-                {
-                    SelectedOutputDevice = OutputDevices.FirstOrDefault(d => d.DeviceId == _settings.OutputDeviceId);
-                }
-                if (!string.IsNullOrEmpty(_settings.InputDeviceId))
-                {
-                    SelectedInputDevice = InputDevices.FirstOrDefault(d => d.DeviceId == _settings.InputDeviceId);
-                }
-
-                TM.App.Log("[音量与设备] 设置已加载");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[音量与设备] 加载设置失败: {ex.Message}");
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败");
             }
         }
 
@@ -542,7 +495,15 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         {
             _settings.ResetToDefaults();
 
-            LoadSettings();
+            NotificationVolume = _settings.NotificationVolume;
+            EffectVolume = _settings.EffectVolume;
+            IsMuted = _settings.IsMuted;
+            BassLevel = _settings.BassLevel;
+            MidBassLevel = _settings.MidBassLevel;
+            MidLevel = _settings.MidLevel;
+            MidTrebleLevel = _settings.MidTrebleLevel;
+            TrebleLevel = _settings.TrebleLevel;
+            EqualizerPreset = _settings.EqualizerPreset;
 
             ResetEqualizer();
 
@@ -556,6 +517,14 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         protected void OnPropertyChanged(string propertyName)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        public void Dispose()
+        {
+            _volumeDebounceTimer?.Dispose();
+            _volumeDebounceTimer = null;
+            _eqDebounceTimer?.Dispose();
+            _eqDebounceTimer = null;
         }
 
         #endregion

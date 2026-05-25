@@ -1,16 +1,14 @@
 using System;
 using System.ComponentModel;
 using System.Reflection;
+using System.Windows.Media;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
-using TM.Framework.User.Security.PasswordProtection;
 using TM.Framework.User.Account.PasswordSecurity;
-using TM.Framework.User.Account.PasswordSecurity.Services;
 
 namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class PasswordLockViewModel : INotifyPropertyChanged
     {
         private bool _enablePasswordLock;
@@ -29,23 +27,24 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
         {
             _lockSettings = lockSettings;
             _passwordSettings = passwordSettings;
-            SaveSettingsCommand = new RelayCommand(SaveSettings);
+            SaveSettingsCommand = new AsyncRelayCommand(SaveSettingsAsync);
             TestLockCommand = new RelayCommand(TestLock, () => EnablePasswordLock && HasPassword);
             SetPasswordCommand = new RelayCommand(SetPassword);
-            QuickSetupCommand = new RelayCommand<string>(QuickSetup);
-            SetEmergencyCodeCommand = new RelayCommand(SetEmergencyCode);
+            QuickSetupCommand = new RelayCommand<string>(async param => await QuickSetupAsync(param));
+            SetEmergencyCodeCommand = new AsyncRelayCommand(SetEmergencyCodeAsync);
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var config = _lockSettings.LoadConfig();
+                var config = await _lockSettings.LoadConfigAsync().ConfigureAwait(false);
                 var weekLock = _lockSettings.GetLockHistoryCount(7);
                 var weekFail = _lockSettings.GetUnlockFailureCount(7);
+                var hasPwd = _lockSettings.HasPasswordSet();
                 return () =>
                 {
                     EnablePasswordLock = config.EnablePasswordLock;
                     LockOnStartup = config.LockOnStartup;
                     LockOnSwitch = config.LockOnSwitch;
-                    HasPassword = _lockSettings.HasPasswordSet();
+                    HasPassword = hasPwd;
                     WeekLockCount = weekLock;
                     WeekFailureCount = weekFail;
                     CheckPasswordStrength();
@@ -107,12 +106,17 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                     _hasPassword = value;
                     OnPropertyChanged(nameof(HasPassword));
                     OnPropertyChanged(nameof(PasswordStatusText));
+                    OnPropertyChanged(nameof(PasswordStatusIcon));
                     OnPropertyChanged(nameof(PasswordStatusColor));
                 }
             }
         }
 
-        public string PasswordStatusText => HasPassword ? "✅ 已设置密码" : "❌ 未设置密码";
+        public string PasswordStatusText => HasPassword ? "已设置密码" : "未设置密码";
+
+        public ImageSource? PasswordStatusIcon => HasPassword
+            ? IconHelper.TryGet("Icon.CheckCircle")
+            : IconHelper.TryGet("Icon.Error");
 
         public string PasswordStatusColor => HasPassword ? "SuccessColor" : "DangerColor";
 
@@ -186,7 +190,7 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
 
         #region 方法
 
-        private void SaveSettings()
+        private System.Threading.Tasks.Task SaveSettingsAsync()
         {
             try
             {
@@ -201,7 +205,7 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                     {
                         SetPassword();
                     }
-                    return;
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }
 
                 var config = _lockSettings.LoadConfig();
@@ -209,7 +213,8 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                 config.LockOnStartup = LockOnStartup;
                 config.LockOnSwitch = LockOnSwitch;
 
-                if (_lockSettings.SaveConfig(config))
+                var saved = _lockSettings.SaveConfig(config);
+                if (saved)
                 {
                     GlobalToast.Success("保存成功", "密码锁定设置已保存");
                     TM.App.Log("[PasswordLockViewModel] 设置保存成功");
@@ -222,8 +227,9 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordLockViewModel] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"保存设置时出错: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
+            return System.Threading.Tasks.Task.CompletedTask;
         }
 
         private void TestLock()
@@ -236,7 +242,7 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordLockViewModel] 测试锁定失败: {ex.Message}");
-                GlobalToast.Error("测试失败", $"触发锁定时出错: {ex.Message}");
+                GlobalToast.Error("测试失败", $"测试失败：{ex.Message}");
             }
         }
 
@@ -255,11 +261,11 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordLockViewModel] 提示失败: {ex.Message}");
-                GlobalToast.Error("错误", $"无法显示提示: {ex.Message}");
+                GlobalToast.Error("错误", $"操作失败：{ex.Message}");
             }
         }
 
-        private void QuickSetup(string? preset)
+        private async System.Threading.Tasks.Task QuickSetupAsync(string? preset)
         {
             try
             {
@@ -278,7 +284,6 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                         var config = _lockSettings.LoadConfig();
                         config.EnableAutoLock = true;
                         config.AutoLockMinutes = 5;
-                        _lockSettings.SaveConfig(config);
                         GlobalToast.Success("已应用", "高安全配置：启动锁定 + 切换锁定 + 5分钟自动锁定");
                         break;
 
@@ -289,7 +294,6 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                         config = _lockSettings.LoadConfig();
                         config.EnableAutoLock = true;
                         config.AutoLockMinutes = 15;
-                        _lockSettings.SaveConfig(config);
                         GlobalToast.Success("已应用", "平衡配置：启动锁定 + 15分钟自动锁定");
                         break;
 
@@ -299,22 +303,21 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
                         LockOnSwitch = false;
                         config = _lockSettings.LoadConfig();
                         config.EnableAutoLock = false;
-                        _lockSettings.SaveConfig(config);
                         GlobalToast.Success("已应用", "便利配置：仅启动锁定");
                         break;
                 }
 
-                SaveSettings();
+                await SaveSettingsAsync();
                 TM.App.Log($"[PasswordLockViewModel] 应用快捷设置: {preset}");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordLockViewModel] 快捷设置失败: {ex.Message}");
-                GlobalToast.Error("设置失败", $"应用快捷设置时出错: {ex.Message}");
+                GlobalToast.Error("设置失败", $"设置失败：{ex.Message}");
             }
         }
 
-        private void SetEmergencyCode()
+        private System.Threading.Tasks.Task SetEmergencyCodeAsync()
         {
             try
             {
@@ -327,16 +330,17 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
 
                 if (string.IsNullOrWhiteSpace(code))
                 {
-                    return;
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }
 
                 if (code.Length < 6 || code.Length > 20)
                 {
                     GlobalToast.Warning("长度不符", "紧急解锁码长度必须在6-20位之间");
-                    return;
+                    return System.Threading.Tasks.Task.CompletedTask;
                 }
 
-                if (_lockSettings.SetEmergencyCode(code))
+                var saved = _lockSettings.SetEmergencyCode(code);
+                if (saved)
                 {
                     GlobalToast.Success("设置成功", "紧急解锁码已设置");
                     OnPropertyChanged(nameof(HasEmergencyCode));
@@ -349,8 +353,9 @@ namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordLockViewModel] 设置紧急解锁码失败: {ex.Message}");
-                GlobalToast.Error("设置失败", $"设置紧急解锁码时出错: {ex.Message}");
+                GlobalToast.Error("设置失败", $"设置失败：{ex.Message}");
             }
+            return System.Threading.Tasks.Task.CompletedTask;
         }
 
         private void CheckPasswordStrength()

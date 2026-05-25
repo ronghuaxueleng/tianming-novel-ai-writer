@@ -8,6 +8,14 @@ namespace TM.Framework.Common.Behaviors
 {
     public static class SmoothScrollBehavior
     {
+        private static readonly System.Windows.Media.Animation.CubicEase _cachedEase;
+
+        static SmoothScrollBehavior()
+        {
+            _cachedEase = new System.Windows.Media.Animation.CubicEase { EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut };
+            _cachedEase.Freeze();
+        }
+
         #region 附加属性定义
 
         public static readonly DependencyProperty EnableSmoothScrollProperty =
@@ -102,21 +110,16 @@ namespace TM.Framework.Common.Behaviors
 
                 targetOffset = Math.Max(0, Math.Min(scrollViewer.ScrollableHeight, targetOffset));
 
-                var animation = new DoubleAnimation
+                var animation = new DoubleAnimation(
+                    scrollViewer.VerticalOffset,
+                    targetOffset,
+                    new Duration(TimeSpan.FromMilliseconds(duration)))
                 {
-                    From = scrollViewer.VerticalOffset,
-                    To = targetOffset,
-                    Duration = TimeSpan.FromMilliseconds(duration),
-                    EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut }
+                    EasingFunction = _cachedEase
                 };
+                animation.Freeze();
 
-                var storyboard = new Storyboard();
-                storyboard.Children.Add(animation);
-
-                Storyboard.SetTarget(animation, scrollViewer);
-                Storyboard.SetTargetProperty(animation, new PropertyPath(ScrollViewerBehavior.VerticalOffsetProperty));
-
-                storyboard.Begin();
+                scrollViewer.BeginAnimation(ScrollViewerBehavior.VerticalOffsetProperty, animation);
 
                 e.Handled = true;
             }

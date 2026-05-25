@@ -3,11 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
-using TM.Framework.Common.Services;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
@@ -61,7 +58,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<ForeshadowingStatistics> GetStatisticsAsync()
         {
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
 
             return new ForeshadowingStatistics
             {
@@ -78,7 +75,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<List<ForeshadowingStatusEntry>> GetOverdueForeshadowingsAsync()
         {
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
 
             return guide.Foreshadowings.Values
                 .Where(f => f.IsOverdue)
@@ -88,33 +85,35 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task MarkAsSetupAsync(string foreshadowId, string chapterId)
         {
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
 
-            if (!guide.Foreshadowings.ContainsKey(foreshadowId))
+            if (!guide.Foreshadowings.TryGetValue(foreshadowId, out var setupEntry))
             {
-                guide.Foreshadowings[foreshadowId] = new ForeshadowingStatusEntry { Name = foreshadowId };
+                setupEntry = new ForeshadowingStatusEntry { Name = foreshadowId };
+                guide.Foreshadowings[foreshadowId] = setupEntry;
                 TM.App.Log($"[Foreshadowing] 自动注册新伏笔: {foreshadowId}");
             }
 
-            guide.Foreshadowings[foreshadowId].IsSetup = true;
-            guide.Foreshadowings[foreshadowId].ActualSetupChapter = chapterId;
+            setupEntry.IsSetup = true;
+            setupEntry.ActualSetupChapter = chapterId;
             _guideManager.MarkDirty(GuideFileName);
             TM.App.Log($"[Foreshadowing] 已标记 {foreshadowId} 在 {chapterId} 埋设");
         }
 
         public async Task MarkAsResolvedAsync(string foreshadowId, string chapterId)
         {
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
 
-            if (!guide.Foreshadowings.ContainsKey(foreshadowId))
+            if (!guide.Foreshadowings.TryGetValue(foreshadowId, out var resolveEntry))
             {
-                guide.Foreshadowings[foreshadowId] = new ForeshadowingStatusEntry { Name = foreshadowId };
+                resolveEntry = new ForeshadowingStatusEntry { Name = foreshadowId };
+                guide.Foreshadowings[foreshadowId] = resolveEntry;
                 TM.App.Log($"[Foreshadowing] 自动注册新伏笔: {foreshadowId}");
             }
 
-            guide.Foreshadowings[foreshadowId].IsResolved = true;
-            guide.Foreshadowings[foreshadowId].IsOverdue  = false;
-            guide.Foreshadowings[foreshadowId].ActualPayoffChapter = chapterId;
+            resolveEntry.IsResolved = true;
+            resolveEntry.IsOverdue = false;
+            resolveEntry.ActualPayoffChapter = chapterId;
             _guideManager.MarkDirty(GuideFileName);
             TM.App.Log($"[Foreshadowing] 已标记 {foreshadowId} 在 {chapterId} 揭示");
         }
@@ -124,7 +123,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var parsedCurrent = ChapterParserHelper.ParseChapterId(currentChapterId);
             if (!parsedCurrent.HasValue) return;
 
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Foreshadowings)
@@ -156,7 +155,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task RemoveChapterDataAsync(string chapterId)
         {
-            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName);
+            var guide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>(GuideFileName).ConfigureAwait(false);
             var modified = false;
 
             var latestChapterId = GetLatestExistingChapterId();

@@ -1,4 +1,3 @@
 @echo off
-chcp 65001 >nul 2>&1
-start powershell -NoProfile -ExecutionPolicy Bypass -NoExit -File "%~dp0è°ƒè¯•\å¯åŠ¨_è°ƒè¯•.ps1"
+start powershell -NoProfile -ExecutionPolicy Bypass -NoExit -File "%~dp0µ÷ÊÔ\Æô¶¯_µ÷ÊÔ.ps1"
 

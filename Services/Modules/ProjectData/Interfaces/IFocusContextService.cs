@@ -1,4 +1,4 @@
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Context;
 
 namespace TM.Services.Modules.ProjectData.Interfaces
@@ -7,11 +7,7 @@ namespace TM.Services.Modules.ProjectData.Interfaces
     {
         Task<DesignFocusContext> GetDesignContextAsync(string focusId, string targetLayer);
 
-        Task<DesignFocusContext> GetDesignContextAsync(string focusId, string targetLayer, string? sourceBookId);
-
         Task<GenerateFocusContext> GetGenerateContextAsync(string focusId, string targetLayer);
-
-        Task<GenerateFocusContext> GetGenerateContextAsync(string focusId, string targetLayer, string? sourceBookId);
 
         Task<GlobalSummary> GetGlobalSummaryAsync();
 

@@ -1,28 +1,37 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.ComponentModel;
-using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Controls.Primitives;
-using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
 using System.Windows.Threading;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Appearance.Animation.ThemeTransition;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.AI.SemanticKernel;
 
 namespace TM.Framework.UI.Windows
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public partial class UnifiedWindow : Window
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public partial class UnifiedWindow : Window, IModalOverlayHost
     {
+        public void SetModalOverlay(bool visible)
+        {
+            if (ModalDimOverlay != null)
+                ModalDimOverlay.IsBusy = visible;
+        }
+
         public event Action? CreativeWindowRequested;
+
+        private bool _hasStartedPreWarm;
 
         private bool _isMaximized = false;
         private bool _suppressTabChecked;
+        private bool _hasExternalSharedBounds;
+
+        public bool IsCustomMaximized => _isMaximized;
 
         private IAIGeneratingState? GetGeneratingState()
         {
@@ -60,6 +69,19 @@ namespace TM.Framework.UI.Windows
             if (cmd?.CanExecute(null) == true) cmd.Execute(null);
         }
 
+        private bool ConfirmAndCancelAIIfGenerating(string actionDesc)
+        {
+            if (!IsAICurrentlyGenerating()) return true;
+            if (StandardDialog.ShowConfirm(
+                $"AI正在生成中，{actionDesc}将中断本次生成。\n\n是否仍要切换？",
+                "切换确认") != true)
+            {
+                return false;
+            }
+            CancelAIIfGenerating();
+            return true;
+        }
+
         private bool _isStandaloneMode = false;
         public bool IsStandaloneMode
         {
@@ -82,22 +104,212 @@ namespace TM.Framework.UI.Windows
         }
 
         private bool _isPinned = false;
-        private double _normalWidth = 1000;
-        private double _normalHeight = 700;
+        private double _normalWidth = 1400;
+        private double _normalHeight = 1000;
         private double _normalLeft = 0;
         private double _normalTop = 0;
-        private UnifiedWindowSettings _settings;
+        private UnifiedWindowSettings _settings = new();
         private INotifyPropertyChanged? _trackedAIStateSource;
+
+        private static Brush? _cachedOverlayTextBrush;
+        public static void InvalidateOverlayBrushCache() => _cachedOverlayTextBrush = null;
+
+        private static readonly CubicEase _easeIn = FreezeCubic(EasingMode.EaseIn);
+        private static readonly CubicEase _easeOut = FreezeCubic(EasingMode.EaseOut);
+        private static CubicEase FreezeCubic(EasingMode mode) { var e = new CubicEase { EasingMode = mode }; e.Freeze(); return e; }
 
         private UserControl? _activeView;
         private readonly HashSet<UserControl> _hostedViews = new();
+        private bool _viewSwitchEnabled = true;
+        private TimeSpan _switchInDuration = TimeSpan.FromMilliseconds(120);
+        private Duration _fadeOutDuration = new(TimeSpan.FromMilliseconds(60));
+        private ViewSwitchEffect _viewSwitchEffect = ViewSwitchEffect.Fade;
+
+        private DateTime _lastSwitchAt = DateTime.MinValue;
+        private static readonly TimeSpan _rapidSwitchThreshold = TimeSpan.FromMilliseconds(80);
+        private DoubleAnimation? _fadeInAnimTemplate;
+        private DoubleAnimation? _scaleInAnim;
+        private DoubleAnimation? _tyInAnim;
+        private DoubleAnimation? _txSlideInL;
+        private DoubleAnimation? _txSlideInR;
+        private DoubleAnimation? _tySlideUp;
+        private DoubleAnimation? _tySlideDown;
 
         private void SwitchToView(UserControl? newView)
         {
             if (newView == null || newView == _activeView) return;
-            if (_activeView != null)
-                _activeView.Visibility = Visibility.Collapsed;
 
+            EnsureViewHosted(newView);
+
+            var oldView = _activeView;
+            _activeView = newView;
+
+            var now = DateTime.UtcNow;
+            bool isRapidSwitch = (now - _lastSwitchAt) < _rapidSwitchThreshold;
+            _lastSwitchAt = now;
+
+            if (oldView != null)
+            {
+                oldView.BeginAnimation(UIElement.OpacityProperty, null);
+                oldView.Opacity = 1;
+                oldView.RenderTransform = null;
+
+                if (!isRapidSwitch && _viewSwitchEnabled && _viewSwitchEffect != ViewSwitchEffect.None)
+                {
+                    var capturedOld = oldView;
+                    var fadeOut = new DoubleAnimation(1, 0, _fadeOutDuration)
+                    {
+                        EasingFunction = _easeIn
+                    };
+                    fadeOut.Completed += (_, _) =>
+                    {
+                        if (ReferenceEquals(_activeView, capturedOld))
+                        {
+                            capturedOld.BeginAnimation(UIElement.OpacityProperty, null);
+                            capturedOld.Opacity = 1;
+                            return;
+                        }
+                        capturedOld.BeginAnimation(UIElement.OpacityProperty, null);
+                        capturedOld.Opacity = 1;
+                        capturedOld.Visibility = Visibility.Hidden;
+                    };
+                    fadeOut.Freeze();
+                    oldView.BeginAnimation(UIElement.OpacityProperty, fadeOut);
+                }
+                else
+                {
+                    oldView.Visibility = Visibility.Hidden;
+                }
+            }
+
+            newView.BeginAnimation(UIElement.OpacityProperty, null);
+            newView.Opacity = 1;
+            newView.RenderTransform = null;
+            newView.Visibility = Visibility.Visible;
+
+            if (isRapidSwitch || !_viewSwitchEnabled || _viewSwitchEffect == ViewSwitchEffect.None)
+                return;
+
+            PlayNewViewAnimation(newView);
+        }
+
+        private void PlayNewViewAnimation(UserControl view)
+        {
+            var dur = new Duration(_switchInDuration);
+            var ease = _easeOut;
+
+            ScaleTransform? scale = null;
+            TranslateTransform? translate = null;
+
+            switch (_viewSwitchEffect)
+            {
+                case ViewSwitchEffect.FadeScale:
+                    scale = new ScaleTransform(0.985, 0.985);
+                    translate = new TranslateTransform(0, 8);
+                    break;
+                case ViewSwitchEffect.SlideUp:
+                    translate = new TranslateTransform(0, 18);
+                    break;
+                case ViewSwitchEffect.SlideDown:
+                    translate = new TranslateTransform(0, -18);
+                    break;
+                case ViewSwitchEffect.SlideLeft:
+                    translate = new TranslateTransform(18, 0);
+                    break;
+                case ViewSwitchEffect.SlideRight:
+                    translate = new TranslateTransform(-18, 0);
+                    break;
+            }
+
+            if (scale != null || translate != null)
+            {
+                var group = new TransformGroup();
+                group.Children.Add(scale ?? new ScaleTransform(1, 1));
+                group.Children.Add(translate ?? new TranslateTransform(0, 0));
+                view.RenderTransform = group;
+                view.RenderTransformOrigin = new Point(0.5, 0.5);
+            }
+
+            view.Opacity = 0;
+            var fadeIn = (DoubleAnimation)_fadeInAnimTemplate!.Clone();
+            fadeIn.Completed += (_, _) =>
+            {
+                view.BeginAnimation(UIElement.OpacityProperty, null);
+                view.Opacity = 1;
+                view.RenderTransform = null;
+            };
+            view.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+
+            if (scale != null)
+            {
+                scale.BeginAnimation(ScaleTransform.ScaleXProperty, _scaleInAnim);
+                scale.BeginAnimation(ScaleTransform.ScaleYProperty, _scaleInAnim);
+            }
+
+            if (translate != null)
+            {
+                if (translate.X != 0)
+                {
+                    var txCached = translate.X == 18 ? _txSlideInL : translate.X == -18 ? _txSlideInR : null;
+                    if (txCached != null)
+                        translate.BeginAnimation(TranslateTransform.XProperty, txCached);
+                    else
+                    {
+                        var txAnim = new DoubleAnimation(translate.X, 0, dur) { EasingFunction = ease };
+                        txAnim.Freeze();
+                        translate.BeginAnimation(TranslateTransform.XProperty, txAnim);
+                    }
+                }
+                if (translate.Y != 0)
+                {
+                    var tyCached = translate.Y == 8 ? _tyInAnim : translate.Y == 18 ? _tySlideUp : translate.Y == -18 ? _tySlideDown : null;
+                    if (tyCached != null)
+                        translate.BeginAnimation(TranslateTransform.YProperty, tyCached);
+                    else
+                    {
+                        var tyAnim = new DoubleAnimation(translate.Y, 0, dur) { EasingFunction = ease };
+                        tyAnim.Freeze();
+                        translate.BeginAnimation(TranslateTransform.YProperty, tyAnim);
+                    }
+                }
+            }
+        }
+
+        private void RebuildAnimationCache()
+        {
+            var dur = new Duration(_switchInDuration);
+            var ease = _easeOut;
+            var fi = new DoubleAnimation(0, 1, dur) { EasingFunction = ease }; fi.Freeze(); _fadeInAnimTemplate = fi;
+            var si = new DoubleAnimation(0.985, 1, dur) { EasingFunction = ease }; si.Freeze(); _scaleInAnim = si;
+            var ty = new DoubleAnimation(8, 0, dur) { EasingFunction = ease }; ty.Freeze(); _tyInAnim = ty;
+            var txL = new DoubleAnimation(18, 0, dur) { EasingFunction = ease }; txL.Freeze(); _txSlideInL = txL;
+            var txR = new DoubleAnimation(-18, 0, dur) { EasingFunction = ease }; txR.Freeze(); _txSlideInR = txR;
+            var tyU = new DoubleAnimation(18, 0, dur) { EasingFunction = ease }; tyU.Freeze(); _tySlideUp = tyU;
+            var tyD = new DoubleAnimation(-18, 0, dur) { EasingFunction = ease }; tyD.Freeze(); _tySlideDown = tyD;
+        }
+
+        private void LoadViewSwitchSettings()
+        {
+            try
+            {
+                var settingsFile = StoragePathHelper.GetFilePath("Framework", "Appearance/Animation/ThemeTransition", "settings.json");
+                AsyncSettingsLoader.LoadOrDefer<ThemeTransitionSettings>(settingsFile, s =>
+                {
+                    _viewSwitchEnabled = s.ViewSwitchEnabled;
+                    _switchInDuration = TimeSpan.FromMilliseconds(s.ViewSwitchInMs);
+                    _fadeOutDuration = new Duration(TimeSpan.FromMilliseconds(s.ViewSwitchOutMs));
+                    _viewSwitchEffect = s.ViewSwitchEffect;
+                    RebuildAnimationCache();
+                }, "ViewSwitch_UnifiedWindow");
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[UnifiedWindow] 加载视图切换设置失败: {ex.Message}");
+            }
+        }
+
+        private void EnsureViewHosted(UserControl newView)
+        {
             if (newView.Parent is DependencyObject parent && !ReferenceEquals(parent, ViewHostPanel))
             {
                 switch (parent)
@@ -130,8 +342,8 @@ namespace TM.Framework.UI.Windows
             {
                 ViewHostPanel.Children.Add(newView);
             }
-            newView.Visibility = Visibility.Visible;
-            _activeView = newView;
+
+            newView.Visibility = Visibility.Hidden;
         }
 
         private static readonly object _debugLogLock = new();
@@ -155,14 +367,72 @@ namespace TM.Framework.UI.Windows
             System.Diagnostics.Debug.WriteLine($"[UnifiedWindow] {key}: {ex.Message}");
         }
 
+        public Rect GetSharedWindowBounds()
+        {
+            var left = _isMaximized ? _normalLeft : Left;
+            var top = _isMaximized ? _normalTop : Top;
+            var width = _isMaximized ? _normalWidth : (ActualWidth > 0 ? ActualWidth : Width);
+            var height = _isMaximized ? _normalHeight : (ActualHeight > 0 ? ActualHeight : Height);
+            return new Rect(left, top, width, height);
+        }
+
+        public void ApplySharedWindowBounds(double left, double top, double width, double height, bool isMaximized)
+        {
+            _hasExternalSharedBounds = true;
+            _normalLeft = left;
+            _normalTop = top;
+            _normalWidth = width;
+            _normalHeight = height;
+
+            if (isMaximized)
+            {
+                if (_isMaximized)
+                {
+                    return;
+                }
+
+                Left = left;
+                Top = top;
+                Width = width;
+                Height = height;
+                MaximizeWindow();
+                return;
+            }
+
+            if (_isMaximized)
+            {
+                RestoreWindow();
+                return;
+            }
+
+            Left = left;
+            Top = top;
+            Width = width;
+            Height = height;
+        }
+
+        public void StartPreWarm()
+        {
+            if (_hasStartedPreWarm)
+            {
+                return;
+            }
+
+            _hasStartedPreWarm = true;
+            if (DataContext is UnifiedWindowViewModel viewModel)
+            {
+                _ = viewModel.PreWarmAllViewsAsync();
+            }
+        }
+
         public UnifiedWindow()
         {
             InitializeComponent();
 
             DataContext = ServiceLocator.Get<UnifiedWindowViewModel>();
 
-            _settings = UnifiedWindowSettings.Load();
-            LoadWindowState();
+            LoadViewSwitchSettings();
+            RebuildAnimationCache();
 
             Loaded += OnWindowLoaded;
             Activated += (_, __) =>
@@ -175,24 +445,71 @@ namespace TM.Framework.UI.Windows
             Closing += OnUnifiedWindowClosing;
 
             if (DataContext is UnifiedWindowViewModel vm)
+            {
                 SubscribeViewModelForOverlay(vm);
+                vm.PropertyChanged += OnViewModelPropertyChangedForTree;
+            }
 
             DataContextChanged += (_, e) =>
             {
                 if (e.OldValue is UnifiedWindowViewModel oldVm)
+                {
                     UnsubscribeViewModelForOverlay(oldVm);
+                    oldVm.PropertyChanged -= OnViewModelPropertyChangedForTree;
+                }
                 if (e.NewValue is UnifiedWindowViewModel newVm)
+                {
+                    _hasStartedPreWarm = false;
+                    _hasPlayedInitialTreeAnimation = false;
                     SubscribeViewModelForOverlay(newVm);
+                    newVm.PropertyChanged += OnViewModelPropertyChangedForTree;
+                }
             };
 
             Closed += (_, __) =>
             {
                 if (DataContext is UnifiedWindowViewModel vmToCancel)
                 {
-                    vmToCancel.CancelPreWarm();
+                    vmToCancel.Dispose();
                 }
                 CleanupOverlaySubscriptions();
             };
+        }
+
+        private bool _hasPlayedInitialTreeAnimation;
+
+        private void OnViewModelPropertyChangedForTree(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(UnifiedWindowViewModel.TreeNodes)) return;
+
+            if (_hasPlayedInitialTreeAnimation) return;
+            _hasPlayedInitialTreeAnimation = true;
+            PlayTreeAnimation();
+        }
+
+        private void PlayTreeAnimation()
+        {
+            var target = TreeViewBorder;
+            if (target == null) return;
+
+            target.BeginAnimation(UIElement.OpacityProperty, null);
+
+            var translate = new TranslateTransform(0, 8);
+            target.RenderTransform = translate;
+            target.RenderTransformOrigin = new Point(0.5, 0.5);
+
+            var dur = new Duration(_switchInDuration);
+            var ease = _easeOut;
+
+            var fadeIn = (DoubleAnimation)_fadeInAnimTemplate!.Clone();
+            fadeIn.Completed += (_, _) =>
+            {
+                target.BeginAnimation(UIElement.OpacityProperty, null);
+                target.Opacity = 1;
+                target.RenderTransform = null;
+            };
+            target.BeginAnimation(UIElement.OpacityProperty, fadeIn);
+            translate.BeginAnimation(TranslateTransform.YProperty, _tyInAnim);
         }
 
         private void OnUnifiedWindowClosing(object? sender, CancelEventArgs e)
@@ -220,6 +537,7 @@ namespace TM.Framework.UI.Windows
         private void SubscribeViewModelForOverlay(UnifiedWindowViewModel vm)
         {
             vm.PropertyChanged += OnViewModelPropertyChangedForOverlay;
+            vm.PreWarmViewCallback = PreHostView;
             SwitchToView(vm.CurrentView);
             UpdateTrackedAIStateSource(vm.CurrentView);
         }
@@ -227,6 +545,28 @@ namespace TM.Framework.UI.Windows
         private void UnsubscribeViewModelForOverlay(UnifiedWindowViewModel vm)
         {
             vm.PropertyChanged -= OnViewModelPropertyChangedForOverlay;
+            vm.PreWarmViewCallback = null;
+        }
+
+        private void PreHostView(UserControl view)
+        {
+            try
+            {
+                if (ReferenceEquals(view.Parent, ViewHostPanel)) return;
+                if (_hostedViews.Add(view))
+                {
+                    view.HorizontalAlignment = HorizontalAlignment.Stretch;
+                    view.VerticalAlignment = VerticalAlignment.Stretch;
+                }
+                if (view.Parent is Panel oldPanel)
+                    oldPanel.Children.Remove(view);
+                view.Visibility = Visibility.Hidden;
+                ViewHostPanel.Children.Add(view);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[UnifiedWindow] PreHostView 失败: {ex.Message}");
+            }
         }
 
         private void CleanupOverlaySubscriptions()
@@ -271,7 +611,7 @@ namespace TM.Framework.UI.Windows
                 || e.PropertyName == nameof(IAIGeneratingState.IsBatchGenerating)
                 || e.PropertyName == nameof(IAIGeneratingState.BatchProgressText))
             {
-                Dispatcher.InvokeAsync(SyncAIGenerateOverlay, DispatcherPriority.Normal);
+                Dispatcher.InvokeAsync(SyncAIGenerateOverlay, DispatcherPriority.Background);
             }
         }
 
@@ -328,498 +668,6 @@ namespace TM.Framework.UI.Windows
             }
         }
 
-        private void SyncAIGenerateOverlay()
-        {
-            if (AIGenerateOverlay == null)
-            {
-                return;
-            }
-
-            TextBlock? overlayTextBlock = null;
-            if (AIGenerateOverlay.OverlayContent is StackPanel sp && sp.Children.Count > 1)
-            {
-                overlayTextBlock = sp.Children[1] as TextBlock;
-            }
-
-            bool isGenerating = false;
-            bool isBatch = false;
-            string? batchText = null;
-
-            if (DataContext is UnifiedWindowViewModel windowVm
-                && windowVm.CurrentView?.DataContext is IAIGeneratingState state)
-            {
-                isGenerating = state.IsAIGenerating;
-                isBatch = state.IsBatchGenerating;
-                batchText = state.BatchProgressText;
-            }
-
-            var shouldBusy = isGenerating || isBatch;
-            AIGenerateOverlay.IsBusy = shouldBusy;
-
-            if (overlayTextBlock == null)
-            {
-                return;
-            }
-
-            if (!string.IsNullOrWhiteSpace(batchText))
-            {
-                overlayTextBlock.Text = batchText;
-                overlayTextBlock.Foreground = isBatch ? Brushes.Black : Brushes.White;
-            }
-            else
-            {
-                overlayTextBlock.Text = "正在生成...";
-                overlayTextBlock.Foreground = Brushes.White;
-            }
-        }
-
-        private void OnWindowLoaded(object sender, RoutedEventArgs e)
-        {
-            EnsureOwner();
-            if (DataContext is UnifiedWindowViewModel viewModel)
-            {
-                _ = viewModel.PreWarmAllViewsAsync();
-            }
-        }
-
-        private void InitializeWindowPosition()
-        {
-            var workArea = SystemParameters.WorkArea;
-
-            Left = (workArea.Width - Width) / 2 + workArea.Left;
-            Top = (workArea.Height - Height) / 2 + workArea.Top;
-        }
-
-        private void OnTitleBarMouseDown(object sender, MouseButtonEventArgs e)
-        {
-            if (e.LeftButton == MouseButtonState.Pressed)
-            {
-                if (e.ClickCount == 2)
-                {
-                    ToggleMaximize();
-                }
-                else
-                {
-                    if (_isMaximized)
-                    {
-                        RestoreWindow();
-
-                        var point = e.GetPosition(this);
-                        Left = e.GetPosition(null).X - point.X;
-                        Top = e.GetPosition(null).Y - point.Y;
-                    }
-
-                    DragMove();
-                }
-            }
-        }
-
-        private void OnPinToggleClick(object sender, RoutedEventArgs e)
-        {
-            _isPinned = !_isPinned;
-            Topmost = _isPinned;
-            UpdatePinButtonState();
-            _settings.IsPinned = _isPinned;
-            _settings.Save();
-        }
-
-        private void UpdatePinButtonState()
-        {
-            if (PinButtonContent == null || PinButtonLabel == null)
-            {
-                return;
-            }
-
-            if (_isPinned)
-            {
-                PinButtonContent.Opacity = 1.0;
-                PinButtonLabel.SetResourceReference(TextBlock.ForegroundProperty, "PrimaryColor");
-            }
-            else
-            {
-                PinButtonContent.Opacity = 0.4;
-                PinButtonLabel.ClearValue(TextBlock.ForegroundProperty);
-            }
-        }
-
-        private void OnMaximizeClick(object sender, RoutedEventArgs e)
-        {
-            ToggleMaximize();
-        }
-
-        private void OnCreativeWindowClick(object sender, RoutedEventArgs e)
-        {
-            if (IsAICurrentlyGenerating())
-            {
-                var confirmed = StandardDialog.ShowConfirm(
-                    "AI正在生成中，切换到创作台将中断本次生成。\n\n是否仍要切换？",
-                    "切换确认");
-                if (confirmed != true)
-                {
-                    return;
-                }
-
-                CancelAIIfGenerating();
-            }
-            CreativeWindowRequested?.Invoke();
-            Hide();
-        }
-
-        private void OnMinimizeClick(object sender, RoutedEventArgs e)
-        {
-            if (_isStandaloneMode)
-            {
-                WindowState = WindowState.Minimized;
-            }
-            else
-            {
-                Hide();
-            }
-        }
-
-        private void OnCloseClick(object sender, RoutedEventArgs e)
-        {
-            CancelAIIfGenerating();
-
-            SaveWindowState();
-
-            Owner?.Activate();
-
-            Close();
-        }
-
-        private void ToggleMaximize()
-        {
-            if (_isMaximized)
-            {
-                RestoreWindow();
-            }
-            else
-            {
-                MaximizeWindow();
-            }
-        }
-
-        private void MaximizeWindow()
-        {
-            _normalLeft = Left;
-            _normalTop = Top;
-            _normalWidth = Width;
-            _normalHeight = Height;
-
-            var workArea = SystemParameters.WorkArea;
-
-            Left = workArea.Left;
-            Top = workArea.Top;
-            Width = workArea.Width;
-            Height = workArea.Height;
-
-            _isMaximized = true;
-
-            UpdateMaximizeButton();
-        }
-
-        private void RestoreWindow()
-        {
-            Left = _normalLeft;
-            Top = _normalTop;
-            Width = _normalWidth;
-            Height = _normalHeight;
-
-            _isMaximized = false;
-
-            UpdateMaximizeButton();
-        }
-
-        private void UpdateMaximizeButton()
-        {
-            if (MaximizeButton != null)
-            {
-                var stackPanel = MaximizeButton.Content as StackPanel;
-                if (stackPanel != null && stackPanel.Children.Count > 0)
-                {
-                    var iconText = stackPanel.Children[0] as TextBlock;
-                    var labelText = stackPanel.Children[1] as TextBlock;
-
-                    if (iconText != null && labelText != null)
-                    {
-                        if (_isMaximized)
-                        {
-                            iconText.Text = "❐";
-                            labelText.Text = "还原";
-                        }
-                        else
-                        {
-                            iconText.Text = "□";
-                            labelText.Text = "最大化";
-                        }
-                    }
-                }
-            }
-        }
-
-        private void OnTabChecked(object sender, RoutedEventArgs e)
-        {
-            if (_suppressTabChecked)
-            {
-                return;
-            }
-
-            var radioButton = sender as RadioButton;
-            if (radioButton?.DataContext == null) return;
-
-            var viewModel = DataContext as UnifiedWindowViewModel;
-            if (viewModel == null) return;
-
-            var targetTab = radioButton.DataContext as UnifiedWindowViewModel.SettingsTab;
-
-            if (IsAICurrentlyGenerating())
-            {
-                var confirmed = StandardDialog.ShowConfirm(
-                    "AI正在生成中，切换功能将中断本次生成。\n\n是否仍要切换？",
-                    "切换确认");
-                if (confirmed != true)
-                {
-                    _suppressTabChecked = true;
-                    Dispatcher.InvokeAsync(() =>
-                    {
-                        try
-                        {
-                            if (targetTab != null)
-                            {
-                                targetTab.IsSelected = false;
-                            }
-
-                            if (viewModel.SelectedTab != null)
-                            {
-                                viewModel.SelectedTab.IsSelected = true;
-                            }
-                        }
-                        finally
-                        {
-                            _suppressTabChecked = false;
-                        }
-                    }, DispatcherPriority.Render);
-                    return;
-                }
-
-                CancelAIIfGenerating();
-            }
-
-            viewModel.SelectedTab = radioButton.DataContext as UnifiedWindowViewModel.SettingsTab;
-        }
-
-        private void OnPersonalModeClick(object sender, MouseButtonEventArgs e)
-        {
-            if (DataContext is UnifiedWindowViewModel viewModel)
-            {
-                if (IsAICurrentlyGenerating())
-                {
-                    var confirmed = StandardDialog.ShowConfirm(
-                        "AI正在生成中，切换模式将中断本次生成。\n\n是否仍要切换？",
-                        "切换确认");
-                    if (confirmed != true)
-                    {
-                        return;
-                    }
-
-                    CancelAIIfGenerating();
-                }
-                viewModel.CurrentMode = UnifiedWindowViewModel.WindowMode.Settings;
-                UpdateModeButtonStyles(true);
-                TM.App.Log("[UnifiedWindow] 切换到个人模式");
-            }
-        }
-
-        private void OnWritingModeClick(object sender, MouseButtonEventArgs e)
-        {
-            if (DataContext is UnifiedWindowViewModel viewModel)
-            {
-                if (IsAICurrentlyGenerating())
-                {
-                    var confirmed = StandardDialog.ShowConfirm(
-                        "AI正在生成中，切换模式将中断本次生成。\n\n是否仍要切换？",
-                        "切换确认");
-                    if (confirmed != true)
-                    {
-                        return;
-                    }
-
-                    CancelAIIfGenerating();
-                }
-                viewModel.CurrentMode = UnifiedWindowViewModel.WindowMode.Writing;
-                UpdateModeButtonStyles(false);
-                TM.App.Log("[UnifiedWindow] 切换到写作模式");
-            }
-        }
-
-        private void OnCancelAIGenerationClick(object sender, RoutedEventArgs e)
-        {
-            try
-            {
-                ServiceLocator.Get<SKChatService>().CancelCurrentRequest();
-            }
-            catch (Exception ex)
-            {
-                DebugLogOnce(nameof(OnCancelAIGenerationClick), ex);
-                return;
-            }
-
-            if (DataContext is not UnifiedWindowViewModel windowVm)
-            {
-                return;
-            }
-
-            var view = windowVm.CurrentView as FrameworkElement;
-            var vm = view?.DataContext;
-            if (vm == null)
-            {
-                return;
-            }
-
-            if (vm is not IAIGeneratingState state)
-            {
-                return;
-            }
-
-            var cmd = state.CancelBatchGenerationCommand;
-            if (cmd == null || !cmd.CanExecute(null))
-            {
-                return;
-            }
-
-            cmd.Execute(null);
-        }
-
-        private void UpdateModeButtonStyles(bool isPersonalMode)
-        {
-            if (PersonalModeButton != null && WritingModeButton != null && 
-                PersonalModeText != null && WritingModeText != null)
-            {
-                if (isPersonalMode)
-                {
-                    PersonalModeButton.SetResourceReference(Border.BackgroundProperty, "PrimaryColor");
-                    PersonalModeText.Foreground = System.Windows.Media.Brushes.White;
-                    PersonalModeText.FontWeight = System.Windows.FontWeights.Medium;
-
-                    WritingModeButton.Background = System.Windows.Media.Brushes.Transparent;
-                    WritingModeText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-                    WritingModeText.FontWeight = System.Windows.FontWeights.Normal;
-                }
-                else
-                {
-                    WritingModeButton.SetResourceReference(Border.BackgroundProperty, "PrimaryColor");
-                    WritingModeText.Foreground = System.Windows.Media.Brushes.White;
-                    WritingModeText.FontWeight = System.Windows.FontWeights.Medium;
-
-                    PersonalModeButton.Background = System.Windows.Media.Brushes.Transparent;
-                    PersonalModeText.SetResourceReference(TextBlock.ForegroundProperty, "TextSecondary");
-                    PersonalModeText.FontWeight = System.Windows.FontWeights.Normal;
-                }
-            }
-        }
-
-        private void OnGridSplitterDragCompleted(object sender, DragCompletedEventArgs e)
-        {
-            if (LeftColumn != null)
-            {
-                var width = LeftColumn.Width.Value;
-                _settings.LeftColumnWidth = width;
-                _settings.Save();
-                TM.App.Log($"[UnifiedWindow] 左侧栏宽度已保存: {width}");
-            }
-        }
-
-        private void SaveWindowState()
-        {
-            try
-            {
-                if (!_isMaximized)
-                {
-                    _settings.Width = Width;
-                    _settings.Height = Height;
-                }
-                else
-                {
-                    _settings.Width = _normalWidth;
-                    _settings.Height = _normalHeight;
-                }
-
-                _settings.IsMaximized = _isMaximized;
-
-                if (LeftColumn != null)
-                {
-                    _settings.LeftColumnWidth = LeftColumn.Width.Value;
-                }
-
-                if (DataContext is UnifiedWindowViewModel viewModel)
-                {
-                    _settings.CurrentMode = viewModel.CurrentMode == UnifiedWindowViewModel.WindowMode.Writing ? "Writing" : "Settings";
-                    _settings.SelectedTabName = viewModel.SelectedTab?.ModuleName ?? "";
-                }
-
-                _settings.IsPinned = _isPinned;
-
-                _settings.Save();
-
-                TM.App.Log($"[UnifiedWindow] 窗口状态已保存 - 位置: ({_settings.Left}, {_settings.Top}), 大小: {_settings.Width}x{_settings.Height}, 模式: {_settings.CurrentMode}");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[UnifiedWindow] 保存窗口状态异常: {ex.Message}");
-            }
-        }
-
-        private void LoadWindowState()
-        {
-            try
-            {
-                if (_settings.Width > 0 && _settings.Height > 0)
-                {
-                    Width = _settings.Width;
-                    Height = _settings.Height;
-                }
-
-                InitializeWindowPosition();
-
-                if (LeftColumn != null && _settings.LeftColumnWidth > 0)
-                {
-                    LeftColumn.Width = new GridLength(_settings.LeftColumnWidth);
-                }
-
-                if (_settings.IsMaximized)
-                {
-                    Dispatcher.BeginInvoke(new Action(() => MaximizeWindow()), System.Windows.Threading.DispatcherPriority.Loaded);
-                }
-
-                _isPinned = _settings.IsPinned;
-                Topmost = _isPinned;
-                Dispatcher.BeginInvoke(new Action(UpdatePinButtonState), System.Windows.Threading.DispatcherPriority.Loaded);
-
-                if (DataContext is UnifiedWindowViewModel viewModel)
-                {
-                    var targetMode = _settings.CurrentMode == "Writing"
-                        ? UnifiedWindowViewModel.WindowMode.Writing
-                        : UnifiedWindowViewModel.WindowMode.Settings;
-                    viewModel.CurrentMode = targetMode;
-                    UpdateModeButtonStyles(targetMode == UnifiedWindowViewModel.WindowMode.Settings);
-
-                    if (!string.IsNullOrEmpty(_settings.SelectedTabName))
-                    {
-                        var tab = viewModel.Tabs.FirstOrDefault(
-                            t => t.ModuleName == _settings.SelectedTabName);
-                        if (tab != null)
-                            viewModel.SelectedTab = tab;
-                    }
-                }
-
-                TM.App.Log($"[UnifiedWindow] 窗口状态已加载 - 位置: ({Left}, {Top}), 大小: {Width}x{Height}, 模式: {_settings.CurrentMode}, Tab: {_settings.SelectedTabName}");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[UnifiedWindow] 加载窗口状态异常: {ex.Message}");
-                InitializeWindowPosition();
-            }
-        }
     }
 }
+

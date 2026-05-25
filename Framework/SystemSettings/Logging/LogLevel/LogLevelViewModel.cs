@@ -1,19 +1,19 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.Settings;
 
 namespace TM.Framework.SystemSettings.Logging.LogLevel
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LogLevelViewModel : INotifyPropertyChanged
     {
         private LogLevelSettings _settings = null!;
@@ -23,6 +23,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
         private readonly LogManager _logManager;
         private LevelStatistics _statistics = null!;
         private System.Windows.Threading.DispatcherTimer _statsTimer = null!;
+        private static readonly Random _random = new Random();
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -56,10 +57,10 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                 LogLevelEnum.Fatal
             };
 
-            ModuleLevels = new ObservableCollection<ModuleLevelItem>();
+            ModuleLevels = new RangeObservableCollection<ModuleLevelItem>();
 
-            ChangeHistory = new ObservableCollection<LevelChangeRecord>();
-            LevelStatisticsItems = new ObservableCollection<LevelStatisticsItem>();
+            ChangeHistory = new RangeObservableCollection<LevelChangeRecord>();
+            LevelStatisticsItems = new RangeObservableCollection<LevelStatisticsItem>();
 
             PresetNames = new List<string>(LevelPreset.StandardPresets.Keys);
 
@@ -74,11 +75,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
 
             AsyncSettingsLoader.LoadOrDefer<List<LevelChangeRecord>>(_historyFilePath, history =>
             {
-                ChangeHistory.Clear();
-                foreach (var record in history.Take(100))
-                {
-                    ChangeHistory.Add(record);
-                }
+                ChangeHistory.ReplaceAll(history.Take(100).ToList());
             }, "LogLevel.History");
             AsyncSettingsLoader.LoadOrDefer<LevelStatistics>(_statisticsFilePath, s =>
             {
@@ -86,13 +83,13 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                 RefreshStatistics();
             }, "LogLevel.Stats");
 
-            SaveCommand = new RelayCommand(SaveSettings);
+            SaveCommand = new RelayCommand(() => SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}")));
             ResetCommand = new RelayCommand(ResetSettings);
             AddModuleCommand = new RelayCommand(AddModule);
             RemoveModuleCommand = new RelayCommand(RemoveModule);
             ApplyPresetCommand = new RelayCommand(param => ApplyPreset((param as string)!));
             ViewHistoryCommand = new RelayCommand(ViewHistory);
-            ClearHistoryCommand = new RelayCommand(ClearHistory);
+            ClearHistoryCommand = new AsyncRelayCommand(ClearHistory);
             RefreshStatsCommand = new RelayCommand(RefreshStatistics);
             ResetStatsCommand = new RelayCommand(ResetStatistics);
 
@@ -108,8 +105,8 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
         public LogLevelEnum GlobalLevel
         {
             get => _settings.GlobalLevel;
-            set 
-            { 
+            set
+            {
                 if (_settings.GlobalLevel != value)
                 {
                     var oldLevel = _settings.GlobalLevel;
@@ -130,11 +127,11 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
 
         public List<LogLevelEnum> LogLevels { get; } = null!;
 
-        public ObservableCollection<ModuleLevelItem> ModuleLevels { get; } = null!;
+        public RangeObservableCollection<ModuleLevelItem> ModuleLevels { get; } = null!;
 
-        public ObservableCollection<LevelChangeRecord> ChangeHistory { get; } = null!;
+        public RangeObservableCollection<LevelChangeRecord> ChangeHistory { get; } = null!;
 
-        public ObservableCollection<LevelStatisticsItem> LevelStatisticsItems { get; } = null!;
+        public RangeObservableCollection<LevelStatisticsItem> LevelStatisticsItems { get; } = null!;
 
         public List<string> PresetNames { get; } = null!;
 
@@ -150,23 +147,19 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
 
         public string GetLevelColor(LogLevelEnum level)
         {
-            return _settings.LevelColors.ContainsKey(level) ? _settings.LevelColors[level] : "#FFFFFF";
+            return _settings.LevelColors.TryGetValue(level, out var color) ? color : "#FFFFFF";
         }
 
         private void LoadModuleLevels()
         {
-            ModuleLevels.Clear();
-            foreach (var kvp in _settings.ModuleLevels)
+            ModuleLevels.ReplaceAll(_settings.ModuleLevels.Select(kvp => new ModuleLevelItem
             {
-                ModuleLevels.Add(new ModuleLevelItem
-                {
-                    ModuleName = kvp.Key,
-                    Level = kvp.Value
-                });
-            }
+                ModuleName = kvp.Key,
+                Level = kvp.Value
+            }).ToList());
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
@@ -185,12 +178,14 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpLls = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLls, json);
+                var tmpLls = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLls))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default);
+                }
                 File.Move(tmpLls, _settingsFilePath, overwrite: true);
 
-                _logManager.Reload();
+                await _logManager.ReloadAsync();
 
                 TM.App.Log($"[LogLevel] 保存设置成功");
                 GlobalToast.Success("保存成功", "日志级别设置已保存");
@@ -198,7 +193,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
             catch (Exception ex)
             {
                 TM.App.Log($"[LogLevel] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"无法保存日志级别设置: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         }
 
@@ -215,7 +210,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                 OnPropertyChanged(nameof(GlobalLevel));
                 OnPropertyChanged(nameof(MinimumLevel));
                 LoadModuleLevels();
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}"));
                 TM.App.Log($"[LogLevel] 重置设置成功");
                 GlobalToast.Info("已重置", "日志级别设置已恢复为默认值");
             }
@@ -276,17 +271,16 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                 Reason = reason
             };
 
-            ChangeHistory.Insert(0, record);
+            var list = ChangeHistory.ToList();
+            list.Insert(0, record);
+            if (list.Count > 100)
+                list.RemoveRange(100, list.Count - 100);
+            ChangeHistory.ReplaceAll(list);
 
-            while (ChangeHistory.Count > 100)
-            {
-                ChangeHistory.RemoveAt(ChangeHistory.Count - 1);
-            }
-
-            SaveChangeHistory();
+            SaveChangeHistory().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}"));
         }
 
-        private async void SaveChangeHistory()
+        private async Task SaveChangeHistory()
         {
             try
             {
@@ -296,9 +290,11 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(ChangeHistory.ToList(), JsonHelper.Default);
-                var tmpLlh = _historyFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLlh, json);
+                var tmpLlh = _historyFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLlh))
+                {
+                    await JsonSerializer.SerializeAsync(stream, ChangeHistory.ToList(), JsonHelper.Default);
+                }
                 File.Move(tmpLlh, _historyFilePath, overwrite: true);
             }
             catch (Exception ex)
@@ -321,23 +317,30 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
             StandardDialog.ShowInfo(historyText, $"级别变更历史（最近{Math.Min(20, ChangeHistory.Count)}条）");
         }
 
-        private void ClearHistory()
+        private async Task ClearHistory()
         {
-            var result = StandardDialog.ShowConfirm(
-                "是否清空所有级别变更历史记录？",
-                "确认清空"
-            );
-
-            if (result)
+            try
             {
-                ChangeHistory.Clear();
-                SaveChangeHistory();
-                TM.App.Log($"[LogLevel] 清空变更历史成功");
-                GlobalToast.Success("清空成功", "级别变更历史已清空");
+                var result = StandardDialog.ShowConfirm(
+                    "是否清空所有级别变更历史记录？",
+                    "确认清空"
+                );
+
+                if (result)
+                {
+                    ChangeHistory.Clear();
+                    await SaveChangeHistory();
+                    TM.App.Log($"[LogLevel] 清空变更历史成功");
+                    GlobalToast.Success("清空成功", "级别变更历史已清空");
+                }
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[LogLevel] 清空变更历史失败: {ex.Message}");
             }
         }
 
-        private async void SaveStatistics()
+        private async Task SaveStatistics()
         {
             try
             {
@@ -347,9 +350,11 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_statistics, JsonHelper.Default);
-                var tmpLlst = _statisticsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLlst, json);
+                var tmpLlst = _statisticsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLlst))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _statistics, JsonHelper.Default);
+                }
                 File.Move(tmpLlst, _statisticsFilePath, overwrite: true);
             }
             catch (Exception ex)
@@ -362,21 +367,14 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
         {
             try
             {
-                LevelStatisticsItems.Clear();
-
-                foreach (var level in LogLevels)
+                var statItems = LogLevels.Select(level => new LevelStatisticsItem
                 {
-                    var count = _statistics.LevelCounts.ContainsKey(level) ? _statistics.LevelCounts[level] : 0;
-                    var percentage = _statistics.GetLevelPercentage(level);
-
-                    LevelStatisticsItems.Add(new LevelStatisticsItem
-                    {
-                        Level = level,
-                        Count = count,
-                        Percentage = percentage,
-                        Color = GetLevelColor(level)
-                    });
-                }
+                    Level = level,
+                    Count = _statistics.LevelCounts.TryGetValue(level, out var cnt) ? cnt : 0,
+                    Percentage = _statistics.GetLevelPercentage(level),
+                    Color = GetLevelColor(level)
+                }).ToList();
+                LevelStatisticsItems.ReplaceAll(statItems);
 
                 TM.App.Log($"[LogLevel] 刷新统计信息: 总计 {_statistics.TotalLogs} 条日志");
             }
@@ -396,7 +394,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
             if (result)
             {
                 _statistics = new LevelStatistics();
-                SaveStatistics();
+                SaveStatistics().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}"));
                 RefreshStatistics();
                 TM.App.Log($"[LogLevel] 重置统计信息成功");
                 GlobalToast.Success("重置成功", "级别统计信息已重置");
@@ -407,13 +405,12 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
         {
             try
             {
-                var random = new Random();
-                var level = (LogLevelEnum)random.Next(0, 6);
+                var level = (LogLevelEnum)_random.Next(0, 6);
                 _statistics.IncrementLevel(level);
 
                 if (_statistics.TotalLogs % 10 == 0)
                 {
-                    SaveStatistics();
+                    SaveStatistics().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}"));
                     RefreshStatistics();
                 }
             }
@@ -449,14 +446,14 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
                 OnPropertyChanged(nameof(MinimumLevel));
                 LoadModuleLevels();
 
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogLevelViewModel] {ex.Message}"));
 
                 GlobalToast.Success("预设已应用", $"{preset.Name}: {preset.Description}");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[LogLevel] 应用预设失败: {ex.Message}");
-                GlobalToast.Error("应用失败", $"无法应用预设方案: {ex.Message}");
+                GlobalToast.Error("应用失败", $"应用失败：{ex.Message}");
             }
         }
 

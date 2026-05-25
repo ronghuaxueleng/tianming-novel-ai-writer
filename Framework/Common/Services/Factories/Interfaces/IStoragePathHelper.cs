@@ -18,8 +18,6 @@ namespace TM.Framework.Common.Services.Factories
 
         string GetProjectChaptersPath();
 
-        string GetProjectCategoriesPath();
-
         string GetProjectValidationPath();
 
         string GetProjectHistoryPath();
@@ -27,8 +25,6 @@ namespace TM.Framework.Common.Services.Factories
         string[] GetAllProjects();
 
         bool CreateProject(string projectName);
-
-        string GetFrameworkPath(string subPath);
 
         string GetFrameworkStoragePath(string subPath);
 

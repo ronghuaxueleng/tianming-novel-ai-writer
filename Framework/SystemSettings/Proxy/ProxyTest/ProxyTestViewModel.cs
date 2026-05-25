@@ -1,21 +1,20 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Proxy.Services;
 
 namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ProxyTestViewModel : INotifyPropertyChanged
     {
         private readonly string _settingsFile;
@@ -75,8 +74,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
         public bool HasResult => LastResult != null;
 
-        public ObservableCollection<ProxyTestResult> TestHistory { get; } = new();
-        public ObservableCollection<ScheduledTest> ScheduledTests { get; } = new();
+        public RangeObservableCollection<ProxyTestResult> TestHistory { get; } = new();
+        public RangeObservableCollection<ScheduledTest> ScheduledTests { get; } = new();
         public TestStatistics? Statistics { get; private set; }
         public TestTrendAnalysis? TrendAnalysis { get; private set; }
 
@@ -103,15 +102,13 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             ScheduleTestCommand = new RelayCommand(ScheduleTest);
             BatchTestCommand = new AsyncRelayCommand(BatchTestAsync);
             GenerateTestReportCommand = new RelayCommand(GenerateTestReport);
-            ExportTestDataCommand = new RelayCommand(ExportTestData);
+            ExportTestDataCommand = new RelayCommand(() => ExportTestData().SafeFireAndForget(ex => TM.App.Log($"[ProxyTestViewModel] {ex.Message}")));
             OneClickVerifyCommand = new AsyncRelayCommand(OneClickVerifyAsync);
 
             AsyncSettingsLoader.LoadOrDefer<ProxyTestSettings>(_settingsFile, s =>
             {
                 _settings = s;
-                ScheduledTests.Clear();
-                foreach (var test in _settings.ScheduledTests)
-                    ScheduledTests.Add(test);
+                ReplaceCollection(ScheduledTests, _settings.ScheduledTests);
                 LoadHistory();
                 CalculateStatistics();
             }, "ProxyTest");
@@ -157,7 +154,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("验证失败", $"一键验证失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 一键验证失败: {ex.Message}");
+                GlobalToast.Error("验证失败", $"验证失败：{ex.Message}");
             }
             finally
             {
@@ -165,15 +163,17 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
                 _settings.LastUpdated = DateTime.Now;
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.CnDefault);
-                var tmpPtv = _settingsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpPtv, json);
+                var tmpPtv = _settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpPtv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.CnDefault);
+                }
                 File.Move(tmpPtv, _settingsFile, overwrite: true);
             }
             catch (Exception ex)
@@ -184,12 +184,13 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
         private void LoadHistory()
         {
-            TestHistory.Clear();
             var history = _proxyTestService.GetHistory();
-            foreach (var result in history)
-            {
-                TestHistory.Add(result);
-            }
+            ReplaceCollection(TestHistory, history);
+        }
+
+        private static void ReplaceCollection<T>(RangeObservableCollection<T> target, IEnumerable<T> items)
+        {
+            target.ReplaceAll(items is IList<T> list ? list : items.ToList());
         }
 
         private async System.Threading.Tasks.Task StartTestAsync()
@@ -218,7 +219,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("测试失败", $"测试过程出错: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 测试过程出错: {ex.Message}");
+                GlobalToast.Error("测试失败", $"测试失败：{ex.Message}");
             }
             finally
             {
@@ -228,7 +230,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
         private void ViewDetailedHistory()
         {
-            if (!TestHistory.Any())
+            if (TestHistory.Count == 0)
             {
                 GlobalToast.Info("无历史", "暂无测试历史");
                 return;
@@ -285,7 +287,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("分析失败", $"趋势分析失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 趋势分析失败: {ex.Message}");
+                GlobalToast.Error("分析失败", $"分析失败：{ex.Message}");
             }
         }
 
@@ -316,10 +319,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
                 if (Math.Abs(test1.DownloadSpeed - test2.DownloadSpeed) > 1000)
                 {
-                    comparison.Differences.Add($"速度差异: {Math.Abs(test1.DownloadSpeed - test2.DownloadSpeed)/1024:F1}KB/s");
+                    comparison.Differences.Add($"速度差异: {Math.Abs(test1.DownloadSpeed - test2.DownloadSpeed) / 1024:F1}KB/s");
                 }
 
-                comparison.Summary = comparison.Differences.Any() 
+                comparison.Summary = comparison.Differences.Count > 0
                     ? string.Join(", ", comparison.Differences)
                     : "两次测试结果相近";
 
@@ -327,7 +330,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("对比失败", $"测试对比失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 测试对比失败: {ex.Message}");
+                GlobalToast.Error("对比失败", $"对比失败：{ex.Message}");
             }
         }
 
@@ -346,7 +350,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
             _settings.ScheduledTests.Add(scheduled);
             ScheduledTests.Add(scheduled);
-            SaveSettings();
+            SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyTestViewModel] {ex.Message}"));
 
             GlobalToast.Success("已创建", $"定时测试任务 '{name}' 已创建");
         }
@@ -377,7 +381,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("批量失败", $"批量测试失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 批量测试失败: {ex.Message}");
+                GlobalToast.Error("批量失败", $"批量测试失败：{ex.Message}");
             }
         }
 
@@ -407,11 +412,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("报告失败", $"生成报告失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 生成报告失败: {ex.Message}");
+                GlobalToast.Error("报告失败", $"生成报告失败：{ex.Message}");
             }
         }
 
-        private async void ExportTestData()
+        private async Task ExportTestData()
         {
             try
             {
@@ -423,21 +429,24 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyTest
 
                 if (dialog.ShowDialog() == true)
                 {
-                    var json = JsonSerializer.Serialize(TestHistory.ToList(), JsonHelper.CnDefault);
-                    await File.WriteAllTextAsync(dialog.FileName, json);
+                    await using (var stream = File.Create(dialog.FileName))
+                    {
+                        await JsonSerializer.SerializeAsync(stream, TestHistory.ToList(), JsonHelper.CnDefault);
+                    }
 
                     GlobalToast.Success("导出成功", $"数据已保存到: {dialog.FileName}");
                 }
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("导出失败", $"导出数据失败: {ex.Message}");
+                TM.App.Log($"[ProxyTestViewModel] 导出数据失败: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
         private void CalculateStatistics()
         {
-            if (!TestHistory.Any()) return;
+            if (TestHistory.Count == 0) return;
 
             Statistics = new TestStatistics
             {

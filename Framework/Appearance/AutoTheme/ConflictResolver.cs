@@ -1,7 +1,5 @@
 using System;
 using TM.Framework.Appearance.ThemeManagement;
-using TM.Framework.Appearance.AutoTheme.SystemFollow;
-using TM.Framework.Appearance.AutoTheme.TimeBased;
 
 namespace TM.Framework.Appearance.AutoTheme
 {

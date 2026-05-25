@@ -1,14 +1,18 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
+using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Models.Common;
-using TM.Services.Modules.ProjectData.Models.Design.Worldview;
 
 namespace TM.Services.Modules.ProjectData.Models.Design.Plot
 {
-    public class PlotRulesData : BusinessDataBase, Worldview.ICoreRuleSummaryProvider, IContextStringProvider
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public class PlotRulesData : BusinessDataBase, Worldview.ICoreRuleSummaryProvider, IContextStringProvider, IDependencyTracked
     {
+        [JsonPropertyName("DependencyModuleVersions")]
+        public Dictionary<string, int> DependencyModuleVersions { get; set; } = new();
+
         #region Tab1: 事件概览（Overview）
 
         [JsonPropertyName("TargetVolume")]

@@ -23,10 +23,10 @@ namespace TM.Framework.User.Account.LoginHistory
 
         public string StatusIcon => RiskLevel switch
         {
-            LoginRiskLevel.Critical => "🔴",
-            LoginRiskLevel.High => "🟠",
-            LoginRiskLevel.Medium => "🟡",
-            _ => "🟢"
+            LoginRiskLevel.Critical => "Icon.Error",
+            LoginRiskLevel.High => "Icon.Warning",
+            LoginRiskLevel.Medium => "Icon.Info",
+            _ => "Icon.CheckCircle"
         };
 
         public string StatusText => RiskLevel switch

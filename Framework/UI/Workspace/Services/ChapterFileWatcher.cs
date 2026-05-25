@@ -95,13 +95,15 @@ namespace TM.Framework.UI.Workspace.Services
 
         private void OnFileChanged(object sender, FileSystemEventArgs e)
         {
-            TM.App.Log($"[ChapterFileWatcher] 文件变化: {e.ChangeType} - {e.Name}");
+            if (TM.App.IsDebugMode)
+                TM.App.Log($"[ChapterFileWatcher] 文件变化: {e.ChangeType} - {e.Name}");
             TriggerDebounce();
         }
 
         private void OnFileRenamed(object sender, RenamedEventArgs e)
         {
-            TM.App.Log($"[ChapterFileWatcher] 文件重命名: {e.OldName} -> {e.Name}");
+            if (TM.App.IsDebugMode)
+                TM.App.Log($"[ChapterFileWatcher] 文件重命名: {e.OldName} -> {e.Name}");
             TriggerDebounce();
         }
 
@@ -160,6 +162,7 @@ namespace TM.Framework.UI.Workspace.Services
             }
 
             TM.App.Log("[ChapterFileWatcher] 已释放");
+            GC.SuppressFinalize(this);
         }
     }
 }

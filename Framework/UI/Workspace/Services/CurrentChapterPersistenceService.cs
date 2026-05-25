@@ -3,7 +3,6 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers.Storage;
 
 namespace TM.Framework.UI.Workspace.Services
 {
@@ -41,8 +40,8 @@ namespace TM.Framework.UI.Workspace.Services
                 if (!File.Exists(path))
                     return;
 
-                var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
-                var data = JsonSerializer.Deserialize<CurrentChapterRecord>(json);
+                await using var stream = File.OpenRead(path);
+                var data = await JsonSerializer.DeserializeAsync<CurrentChapterRecord>(stream).ConfigureAwait(false);
 
                 if (data == null || string.IsNullOrEmpty(data.ChapterId))
                     return;
@@ -88,7 +87,6 @@ namespace TM.Framework.UI.Workspace.Services
                 return;
 
             var data = new CurrentChapterRecord { ChapterId = chapterId, ChapterTitle = title ?? string.Empty };
-            var json = JsonSerializer.Serialize(data);
             var path = GetFilePath(projectName);
 
             for (var attempt = 0; attempt <= MaxSaveRetries; attempt++)
@@ -99,8 +97,11 @@ namespace TM.Framework.UI.Workspace.Services
                     if (!Directory.Exists(dir))
                         Directory.CreateDirectory(dir);
 
-                    var tmp = path + ".tmp";
-                    await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                    var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await using (var stream = File.Create(tmp))
+                    {
+                        await JsonSerializer.SerializeAsync(stream, data).ConfigureAwait(false);
+                    }
                     File.Move(tmp, path, overwrite: true);
                     return;
                 }
@@ -121,7 +122,7 @@ namespace TM.Framework.UI.Workspace.Services
 
         private sealed class CurrentChapterRecord
         {
-            [JsonPropertyName("ChapterId")]    public string ChapterId    { get; set; } = string.Empty;
+            [JsonPropertyName("ChapterId")] public string ChapterId { get; set; } = string.Empty;
             [JsonPropertyName("ChapterTitle")] public string ChapterTitle { get; set; } = string.Empty;
         }
     }

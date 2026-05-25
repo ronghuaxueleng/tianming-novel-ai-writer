@@ -7,6 +7,14 @@ namespace TM.Services.Modules.ProjectData.Models.Tracking
     {
         [JsonPropertyName("ChapterId")] public string ChapterId { get; set; } = string.Empty;
 
+        [JsonPropertyName("CorrelationId")] public string CorrelationId { get; set; } = string.Empty;
+
+        [JsonPropertyName("PromptTokenEstimate")] public int PromptTokenEstimate { get; set; }
+
+        [JsonPropertyName("ContextBuildMs")] public long ContextBuildMs { get; set; }
+
+        [JsonPropertyName("AiCallMs")] public long AiCallMs { get; set; }
+
         [JsonPropertyName("Success")] public bool Success { get; set; }
 
         [JsonPropertyName("Content")] public string? Content { get; set; }

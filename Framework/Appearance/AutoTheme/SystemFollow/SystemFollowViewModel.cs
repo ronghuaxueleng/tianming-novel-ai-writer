@@ -1,16 +1,16 @@
 using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
+using TM.Framework.Common.ViewModels;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
 using TM.Framework.Appearance.ThemeManagement;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SystemFollowViewModel : INotifyPropertyChanged
     {
         private readonly SystemFollowController _controller;
@@ -111,9 +111,9 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             set { if (_isMonitoring != value) { _isMonitoring = value; OnPropertyChanged(); } }
         }
 
-        public ObservableCollection<ThemeChangeRecord> ThemeChangeHistory { get; set; } = null!;
+        public RangeObservableCollection<ThemeChangeRecord> ThemeChangeHistory { get; set; } = null!;
 
-        public ObservableCollection<MonitorInfo> Monitors { get; set; } = null!;
+        public RangeObservableCollection<MonitorInfo> Monitors { get; set; } = null!;
 
         private ThemeType _lightThemeMapping;
         public ThemeType LightThemeMapping
@@ -284,8 +284,8 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             _conflictResolver = conflictResolver;
 
             ExclusionPeriods = new ObservableCollection<ExclusionPeriodItem>();
-            ThemeChangeHistory = new ObservableCollection<ThemeChangeRecord>();
-            Monitors = new ObservableCollection<MonitorInfo>();
+            ThemeChangeHistory = new RangeObservableCollection<ThemeChangeRecord>();
+            Monitors = new RangeObservableCollection<MonitorInfo>();
             ConflictWarnings = new ObservableCollection<ConflictWarning>();
 
             _controller.Initialize();
@@ -329,10 +329,48 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             RefreshStatisticsCommand = new RelayCommand(RefreshStatistics);
             DetectConflictsCommand = new RelayCommand(DetectConflicts);
 
-            RefreshSystemInfo();
-            RefreshMonitors();
-            RefreshHistory();
-            RefreshStatistics();
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null)
+            {
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try
+                    {
+                        var theme = _monitor.DetectCurrentTheme();
+                        var highContrast = _monitor.IsHighContrastMode();
+                        var accent = _monitor.GetAccentColor();
+                        var monitoring = _monitor.IsMonitoring;
+                        var status = _monitor.GetSystemStatus();
+                        var monitorList = _monitor.DetectMultipleMonitors();
+
+                        await dispatcher.InvokeAsync(() =>
+                        {
+                            CurrentSystemTheme = theme;
+                            IsHighContrast = highContrast;
+                            AccentColor = accent;
+                            IsMonitoring = monitoring;
+                            SystemDPI = status.DPI;
+                            ColorMode = status.ColorMode;
+                            TransparencyEnabled = status.TransparencyEnabled;
+                            WindowAnimationEnabled = status.WindowAnimationEnabled;
+                            IsAeroEnabled = status.IsAeroEnabled;
+                            ThemeName = status.ThemeName;
+                            if (_settings != null) _settings.LastDetectedTheme = CurrentSystemTheme;
+                            TM.App.Log($"[SystemFollowViewModel] 系统信息已刷新: DPI={SystemDPI}, 色彩={ColorMode}, Aero={IsAeroEnabled}");
+
+                            Monitors.ReplaceAll(monitorList);
+                            TM.App.Log($"[SystemFollowViewModel] 已刷新显示器信息，共 {Monitors.Count} 个");
+
+                            RefreshHistory();
+                            RefreshStatistics();
+                        });
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[SystemFollowViewModel] 初始化刷新失败: {ex.Message}");
+                    }
+                });
+            }
         }
 
         private void ToggleEnabled()
@@ -353,26 +391,34 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         {
             try
             {
-            _controller.TestSwitch();
-            ToastNotification.ShowSuccess("测试成功", "测试切换已执行");
+                _controller.TestSwitch();
+                ToastNotification.ShowSuccess("测试成功", "测试切换已执行");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemFollowViewModel] 测试切换失败: {ex.Message}");
-                StandardDialog.ShowError($"测试切换失败: {ex.Message}", "错误", null);
+                StandardDialog.ShowError($"测试切换失败：{ex.Message}", "测试失败", null);
             }
         }
 
-        private void RefreshSystemInfo()
+        private async void RefreshSystemInfo()
         {
             try
             {
-                CurrentSystemTheme = _monitor.DetectCurrentTheme();
-                IsHighContrast = _monitor.IsHighContrastMode();
-                AccentColor = _monitor.GetAccentColor();
-                IsMonitoring = _monitor.IsMonitoring;
+                var (theme, highContrast, accent, monitoring, status) = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    var t = _monitor.DetectCurrentTheme();
+                    var hc = _monitor.IsHighContrastMode();
+                    var ac = _monitor.GetAccentColor();
+                    var mo = _monitor.IsMonitoring;
+                    var st = _monitor.GetSystemStatus();
+                    return (t, hc, ac, mo, st);
+                });
 
-                var status = _monitor.GetSystemStatus();
+                CurrentSystemTheme = theme;
+                IsHighContrast = highContrast;
+                AccentColor = accent;
+                IsMonitoring = monitoring;
                 SystemDPI = status.DPI;
                 ColorMode = status.ColorMode;
                 TransparencyEnabled = status.TransparencyEnabled;
@@ -394,13 +440,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         {
             try
             {
-                Monitors.Clear();
-                var monitors = _monitor.DetectMultipleMonitors();
-                foreach (var monitor in monitors)
-                {
-                    Monitors.Add(monitor);
-                }
-
+                Monitors.ReplaceAll(_monitor.DetectMultipleMonitors());
                 TM.App.Log($"[SystemFollowViewModel] 已刷新显示器信息，共 {Monitors.Count} 个");
             }
             catch (Exception ex)
@@ -413,13 +453,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
         {
             try
             {
-                ThemeChangeHistory.Clear();
-                var history = _monitor.GetChangeHistory();
-                foreach (var record in history)
-                {
-                    ThemeChangeHistory.Add(record);
-                }
-
+                ThemeChangeHistory.ReplaceAll(_monitor.GetChangeHistory());
                 TM.App.Log($"[SystemFollowViewModel] 已刷新变化历史，共 {ThemeChangeHistory.Count} 条");
             }
             catch (Exception ex)
@@ -501,14 +535,14 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                     Description = p.Description
                 }).ToList();
 
-            _controller.UpdateSettings(_settings);
+                _controller.UpdateSettings(_settings);
 
-            ToastNotification.ShowSuccess("保存成功", "设置已保存");
+                ToastNotification.ShowSuccess("保存成功", "设置已保存");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemFollowViewModel] 应用设置失败: {ex.Message}");
-                StandardDialog.ShowError($"保存设置失败: {ex.Message}", "错误", null);
+                StandardDialog.ShowError($"保存设置失败：{ex.Message}", "保存失败", null);
             }
         }
 
@@ -553,8 +587,8 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                     {
                         Message = conflictInfo.Description,
                         Severity = conflictInfo.Winner == "跟随系统" ? "信息" : "警告",
-                        Recommendation = conflictInfo.Winner == "跟随系统" 
-                            ? "跟随系统优先级更高，将应用系统主题" 
+                        Recommendation = conflictInfo.Winner == "跟随系统"
+                            ? "跟随系统优先级更高，将应用系统主题"
                             : $"定时切换优先级更高，建议调整优先级或禁用其中一个功能"
                     };
 
@@ -574,7 +608,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemFollowViewModel] 冲突检测失败: {ex.Message}");
-                StandardDialog.ShowError($"冲突检测失败: {ex.Message}", "错误", null);
+                StandardDialog.ShowError($"冲突检测失败：{ex.Message}", "检测失败", null);
             }
         }
     }
@@ -599,10 +633,10 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
         public string Icon => Severity switch
         {
-            "错误" => "❌",
-            "警告" => "⚠️",
-            "信息" => "ℹ️",
-            _ => "ℹ️"
+            "错误" => "Icon.Error",
+            "警告" => "Icon.Warning",
+            "信息" => "Icon.Info",
+            _ => "Icon.Info"
         };
     }
 }

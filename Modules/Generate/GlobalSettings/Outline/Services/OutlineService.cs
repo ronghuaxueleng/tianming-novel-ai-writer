@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.StrategicOutline;
 
 namespace TM.Modules.Generate.GlobalSettings.Outline.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class OutlineService : ModuleServiceBase<OutlineCategory, OutlineData>
     {
         public OutlineService()
@@ -15,6 +16,8 @@ namespace TM.Modules.Generate.GlobalSettings.Outline.Services
                 dataFileName: "outline_data.json")
         {
         }
+
+        protected override string? GetEntityTypeKeyForPropagation() => "outline";
 
         public List<OutlineData> GetAllOutlines() => GetAllData();
 
@@ -80,8 +83,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline.Services
                    !string.IsNullOrWhiteSpace(data.OneLineOutline) ||
                    !string.IsNullOrWhiteSpace(data.Theme) ||
                    !string.IsNullOrWhiteSpace(data.OutlineOverview) ||
-                   !string.IsNullOrWhiteSpace(data.VolumeDivision) ||
-                   !string.IsNullOrWhiteSpace(data.EstimatedWordCount);
+                   !string.IsNullOrWhiteSpace(data.VolumeDivision);
         }
     }
 }

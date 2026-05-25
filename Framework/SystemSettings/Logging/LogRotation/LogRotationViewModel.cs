@@ -1,6 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
+using System.Threading.Tasks;
 using System.ComponentModel;
 using System.Reflection;
 using System.Diagnostics;
@@ -10,14 +10,14 @@ using System.Text.Json;
 using System.Windows.Input;
 using System.Windows.Threading;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Logging.LogOutput;
 
 namespace TM.Framework.SystemSettings.Logging.LogRotation
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class LogRotationViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class LogRotationViewModel : INotifyPropertyChanged, IDisposable
     {
         private LogRotationSettings _settings = null!;
         private readonly string _settingsFilePath = null!;
@@ -52,8 +52,8 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                 "settings.json"
             );
 
-            RotationHistories = new ObservableCollection<RotationHistory>();
-            CleanupRecommendations = new ObservableCollection<CleanupRecommendation>();
+            RotationHistories = new RangeObservableCollection<RotationHistory>();
+            CleanupRecommendations = new RangeObservableCollection<CleanupRecommendation>();
 
             AsyncSettingsLoader.LoadOrDefer<LogRotationSettings>(_settingsFilePath, s =>
             {
@@ -73,11 +73,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
 
             AsyncSettingsLoader.LoadOrDefer<List<RotationHistory>>(_historyFilePath, histories =>
             {
-                RotationHistories.Clear();
-                foreach (var history in histories.OrderByDescending(h => h.RotationTime).Take(50))
-                {
-                    RotationHistories.Add(history);
-                }
+                RotationHistories.ReplaceAll(histories.OrderByDescending(h => h.RotationTime).Take(50).ToList());
             }, "LogRotation.History");
 
             _monitoringTimer = new DispatcherTimer
@@ -126,15 +122,15 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                 FileNamingPattern.Sequential
             };
 
-            SaveCommand = new RelayCommand(SaveSettings);
-            ManualRotateCommand = new RelayCommand(ManualRotate);
+            SaveCommand = new RelayCommand(() => SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogRotationViewModel] {ex.Message}")));
+            ManualRotateCommand = new RelayCommand(() => ManualRotateAsync().SafeFireAndForget(ex => TM.App.Log($"[LogRotationViewModel] {ex.Message}")));
             CleanupCommand = new RelayCommand(Cleanup);
             RefreshStatsCommand = new RelayCommand(RefreshStatistics);
             ViewHistoryCommand = new RelayCommand(ViewHistory);
             ClearHistoryCommand = new RelayCommand(ClearHistory);
             ExportHistoryCommand = new RelayCommand(ExportHistory);
             CheckStorageCommand = new RelayCommand(CheckStorageSpace);
-            GenerateCleanupRecommendationsCommand = new RelayCommand(GenerateCleanupRecommendations);
+            GenerateCleanupRecommendationsCommand = new RelayCommand(() => GenerateCleanupRecommendationsAsync().SafeFireAndForget(ex => TM.App.Log($"[LogRotationViewModel] {ex.Message}")));
         }
 
         public RotationType RotationType
@@ -274,8 +270,8 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
         public List<CompressionType> CompressionTypes { get; }
         public List<CleanupStrategy> CleanupStrategies { get; }
         public List<FileNamingPattern> FileNamingPatterns { get; }
-        public ObservableCollection<RotationHistory> RotationHistories { get; }
-        public ObservableCollection<CleanupRecommendation> CleanupRecommendations { get; }
+        public RangeObservableCollection<RotationHistory> RotationHistories { get; }
+        public RangeObservableCollection<CleanupRecommendation> CleanupRecommendations { get; }
 
         public ICommand SaveCommand { get; }
         public ICommand ManualRotateCommand { get; }
@@ -287,7 +283,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
         public ICommand CheckStorageCommand { get; }
         public ICommand GenerateCleanupRecommendationsCommand { get; }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
@@ -297,9 +293,11 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpLrs = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLrs, json);
+                var tmpLrs = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLrs))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default);
+                }
                 File.Move(tmpLrs, _settingsFilePath, overwrite: true);
 
                 TM.App.Log($"[LogRotation] 保存设置成功");
@@ -308,11 +306,11 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             catch (Exception ex)
             {
                 TM.App.Log($"[LogRotation] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"无法保存日志轮转设置: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         }
 
-        private void ManualRotate()
+        private async System.Threading.Tasks.Task ManualRotateAsync()
         {
             var result = StandardDialog.ShowConfirm(
                 "是否立即执行日志文件轮转？",
@@ -334,11 +332,12 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                         var rotatedFile = $"application_{timestamp}.log";
 
                         var testFilePath = Path.Combine(logsPath, originalFile);
-                        long fileSize = 0;
-                        if (File.Exists(testFilePath))
+                        long fileSize = await System.Threading.Tasks.Task.Run(() =>
                         {
-                            fileSize = new FileInfo(testFilePath).Length;
-                        }
+                            if (File.Exists(testFilePath))
+                                return new FileInfo(testFilePath).Length;
+                            return 0L;
+                        }).ConfigureAwait(true);
 
                         sw.Stop();
 
@@ -362,7 +361,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                 {
                     sw.Stop();
                     TM.App.Log($"[LogRotation] 轮转失败: {ex.Message}");
-                    GlobalToast.Error("轮转失败", $"日志文件轮转失败: {ex.Message}");
+                    GlobalToast.Error("轮转失败", $"轮转失败：{ex.Message}");
                 }
             }
         }
@@ -376,45 +375,52 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
 
             if (result)
             {
-                try
-                {
-                    TM.App.Log($"[LogRotation] 手动清理过期日志");
+                _ = CleanupAsync();
+            }
+        }
 
-                    var logsPath = ResolveLogDirectory();
-                    if (Directory.Exists(logsPath))
+        private async System.Threading.Tasks.Task CleanupAsync()
+        {
+            try
+            {
+                TM.App.Log($"[LogRotation] 手动清理过期日志");
+
+                var logsPath = ResolveLogDirectory();
+                var strategy = CleanupStrategy;
+                var maxRetainDays = MaxRetainDays;
+                var maxRetainCount = MaxRetainCount;
+
+                int deletedCount = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    if (!Directory.Exists(logsPath)) return 0;
+
+                    var allFiles = Directory.GetFiles(logsPath, "*.log")
+                        .Select(f => new FileInfo(f))
+                        .OrderByDescending(f => f.LastWriteTime)
+                        .ToList();
+                    int count = 0;
+                    for (int i = 0; i < allFiles.Count; i++)
                     {
-                        var allFiles = Directory.GetFiles(logsPath, "*.log")
-                            .Select(f => new FileInfo(f))
-                            .OrderByDescending(f => f.LastWriteTime)
-                            .ToList();
-                        int deletedCount = 0;
-
-                        for (int i = 0; i < allFiles.Count; i++)
+                        bool shouldDelete = strategy switch
                         {
-                            bool shouldDelete = CleanupStrategy switch
-                            {
-                                CleanupStrategy.ByTime => allFiles[i].LastWriteTime < DateTime.Now.AddDays(-MaxRetainDays),
-                                CleanupStrategy.ByCount => i >= MaxRetainCount,
-                                CleanupStrategy.BySize => i >= MaxRetainCount || allFiles[i].LastWriteTime < DateTime.Now.AddDays(-MaxRetainDays),
-                                _ => allFiles[i].LastWriteTime < DateTime.Now.AddDays(-MaxRetainDays)
-                            };
-                            if (shouldDelete)
-                            {
-                                try { allFiles[i].Delete(); deletedCount++; } catch { }
-                            }
-                        }
-
-                        TM.App.Log($"[LogRotation] 清理完成，删除了 {deletedCount} 个文件");
-                        GlobalToast.Success("清理成功", $"已清理 {deletedCount} 个过期日志文件");
+                            CleanupStrategy.ByTime => allFiles[i].LastWriteTime < DateTime.Now.AddDays(-maxRetainDays),
+                            CleanupStrategy.ByCount => i >= maxRetainCount,
+                            CleanupStrategy.BySize => i >= maxRetainCount || allFiles[i].LastWriteTime < DateTime.Now.AddDays(-maxRetainDays),
+                            _ => allFiles[i].LastWriteTime < DateTime.Now.AddDays(-maxRetainDays)
+                        };
+                        if (shouldDelete) { try { allFiles[i].Delete(); count++; } catch { } }
                     }
+                    return count;
+                }).ConfigureAwait(true);
 
-                    RefreshStatistics();
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[LogRotation] 清理失败: {ex.Message}");
-                    GlobalToast.Error("清理失败", $"过期日志清理失败: {ex.Message}");
-                }
+                TM.App.Log($"[LogRotation] 清理完成，删除了 {deletedCount} 个文件");
+                GlobalToast.Success("清理成功", $"已清理 {deletedCount} 个过期日志文件");
+                RefreshStatistics();
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[LogRotation] 清理失败: {ex.Message}");
+                GlobalToast.Error("清理失败", $"清理失败：{ex.Message}");
             }
         }
 
@@ -431,9 +437,13 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                     var logsPath = ResolveLogDirectory();
                     if (Directory.Exists(logsPath))
                     {
-                        var files = Directory.GetFiles(logsPath, "*.log", SearchOption.AllDirectories);
+                        var files = Directory.GetFiles(logsPath, "*.log", SearchOption.TopDirectoryOnly);
                         fileCount = files.Length;
-                        long totalSize = files.Sum(f => new FileInfo(f).Length);
+                        long totalSize = 0;
+                        foreach (var f in files)
+                        {
+                            try { totalSize += new FileInfo(f).Length; } catch { }
+                        }
                         totalSizeMB = totalSize / (1024 * 1024);
                     }
                 }
@@ -464,7 +474,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        private async void SaveRotationHistory()
+        private async Task SaveRotationHistory()
         {
             try
             {
@@ -474,9 +484,11 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(RotationHistories.ToList(), JsonHelper.Default);
-                var tmpLrh = _historyFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLrh, json);
+                var tmpLrh = _historyFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLrh))
+                {
+                    await JsonSerializer.SerializeAsync(stream, RotationHistories.ToList(), JsonHelper.Default);
+                }
                 File.Move(tmpLrh, _historyFilePath, overwrite: true);
             }
             catch (Exception ex)
@@ -502,14 +514,13 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                 Notes = $"触发原因: {trigger}"
             };
 
-            RotationHistories.Insert(0, history);
+            var list = RotationHistories.ToList();
+            list.Insert(0, history);
+            if (list.Count > 100)
+                list.RemoveRange(100, list.Count - 100);
+            RotationHistories.ReplaceAll(list);
 
-            while (RotationHistories.Count > 100)
-            {
-                RotationHistories.RemoveAt(RotationHistories.Count - 1);
-            }
-
-            SaveRotationHistory();
+            SaveRotationHistory().SafeFireAndForget(ex => TM.App.Log($"[LogRotationViewModel] {ex.Message}"));
         }
 
         private void ViewHistory()
@@ -535,7 +546,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             catch (Exception ex)
             {
                 TM.App.Log($"[LogRotation] 打开日志目录失败: {ex.Message}");
-                GlobalToast.Error("打开失败", $"无法打开日志目录: {ex.Message}");
+                GlobalToast.Error("打开失败", $"打开失败：{ex.Message}");
             }
         }
 
@@ -549,13 +560,13 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             if (result)
             {
                 RotationHistories.Clear();
-                SaveRotationHistory();
+                SaveRotationHistory().SafeFireAndForget(ex => TM.App.Log($"[LogRotationViewModel] {ex.Message}"));
                 TM.App.Log($"[LogRotation] 清空历史记录");
                 GlobalToast.Success("清空完成", "已清空所有轮转历史记录");
             }
         }
 
-        private void ExportHistory()
+        private async void ExportHistory()
         {
             try
             {
@@ -567,10 +578,13 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                 }
 
                 var todayStr = DateTime.Today.ToString("yyyy-MM-dd");
-                var todayFiles = Directory.GetFiles(logDir, $"{todayStr}_*.log", SearchOption.TopDirectoryOnly)
-                    .Select(f => new FileInfo(f))
-                    .OrderByDescending(f => f.LastWriteTime)
-                    .ToList();
+                var todayFiles = await System.Threading.Tasks.Task.Run(() =>
+                    Directory.GetFiles(logDir, $"{todayStr}_*.log", SearchOption.TopDirectoryOnly)
+                        .Select(f => new FileInfo(f))
+                        .OrderByDescending(f => f.LastWriteTime)
+                        .ToList()
+                ).ConfigureAwait(true);
+
                 if (todayFiles.Count == 0)
                 {
                     GlobalToast.Info("无当天日志", "当前日志目录下没有可导出的当天 .log 文件");
@@ -600,14 +614,16 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                     Directory.CreateDirectory(directory);
                 }
 
-                _ = System.Threading.Tasks.Task.Run(() =>
+                _ = System.Threading.Tasks.Task.Run(async () =>
                 {
                     if (string.Equals(Path.GetFullPath(exportPath), Path.GetFullPath(sourceLog.FullName), StringComparison.OrdinalIgnoreCase))
                     {
                         throw new InvalidOperationException("导出位置与源日志文件相同");
                     }
 
-                    File.Copy(sourceLog.FullName, exportPath, overwrite: true);
+                    await using var src = File.OpenRead(sourceLog.FullName);
+                    await using var dst = File.Create(exportPath);
+                    await src.CopyToAsync(dst).ConfigureAwait(false);
                     TM.App.Log($"[LogRotation] 导出当天日志: {sourceLog.FullName} -> {exportPath}");
                 }).ContinueWith(t =>
                 {
@@ -635,7 +651,7 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             catch (Exception ex)
             {
                 TM.App.Log($"[LogRotation] 导出历史失败: {ex.Message}");
-                GlobalToast.Error("导出失败", $"无法导出日志文件: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
@@ -668,16 +684,19 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             }
         }
 
-        private void CheckStorageSpace()
+        private async void CheckStorageSpace()
         {
-            var logsPath = ResolveLogDirectory();
-            var logsSizeMB = CurrentLogsTotalSizeMB;
-            var warnPct = WarningThresholdPercentage;
-            var critPct = CriticalThresholdPercentage;
-
-            _ = System.Threading.Tasks.Task.Run(() =>
+            try
             {
-                try
+                var logsPath = ResolveLogDirectory();
+                var logsSizeMB = CurrentLogsTotalSizeMB;
+                var warnPct = WarningThresholdPercentage;
+                var critPct = CriticalThresholdPercentage;
+                var maxRetainDays = MaxRetainDays;
+                var compressAfterDays = CompressAfterDays;
+                var maxRetainCount = MaxRetainCount;
+
+                var result = await System.Threading.Tasks.Task.Run(() =>
                 {
                     var driveInfo = new DriveInfo(Path.GetPathRoot(logsPath)!);
                     var totalSpaceGB = driveInfo.TotalSize / (1024 * 1024 * 1024);
@@ -693,6 +712,10 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                                        status == StorageStatus.Warning ? $"存储空间不足（已使用{usagePercentage:F1}%）" :
                                        $"存储空间严重不足（已使用{usagePercentage:F1}%）！";
 
+                    var recommendations = status == StorageStatus.Critical
+                        ? ComputeRecommendationsCore(logsPath, usagePercentage, maxRetainDays, compressAfterDays, maxRetainCount)
+                        : new System.Collections.Generic.List<CleanupRecommendation>();
+
                     return (info: new StorageSpaceInfo
                     {
                         DrivePath = driveInfo.Name,
@@ -704,23 +727,21 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
                         Status = status,
                         StatusMessage = statusMessage,
                         LastChecked = DateTime.Now
-                    }, status, statusMessage);
-                }
-                catch (Exception ex)
+                    }, status, statusMessage, recommendations);
+                });
+
+                StorageInfo = result.info;
+                if (result.status == StorageStatus.Critical)
                 {
-                    TM.App.Log($"[LogRotation] 检查存储空间失败: {ex.Message}");
-                    return default;
+                    TM.App.Log($"[LogRotation] 存储空间警告: {result.statusMessage}");
+                    CleanupRecommendations.ReplaceAll(result.recommendations);
+                    TM.App.Log($"[LogRotation] 生成了 {CleanupRecommendations.Count} 条清理建议");
                 }
-            }).ContinueWith(t =>
+            }
+            catch (Exception ex)
             {
-                if (!t.IsCompletedSuccessfully || t.Result == default) return;
-                StorageInfo = t.Result.info;
-                if (t.Result.status == StorageStatus.Critical)
-                {
-                    TM.App.Log($"[LogRotation] 存储空间警告: {t.Result.statusMessage}");
-                    GenerateCleanupRecommendations();
-                }
-            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
+                TM.App.Log($"[LogRotation] 检查存储空间失败: {ex.Message}");
+            }
         }
 
         private void UpdatePrediction()
@@ -780,76 +801,82 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             }
         }
 
-        private void GenerateCleanupRecommendations()
+        private static System.Collections.Generic.List<CleanupRecommendation> ComputeRecommendationsCore(
+            string logsPath, double usagePercentage, int maxRetainDays, int compressAfterDays, int maxRetainCount)
         {
-            CleanupRecommendations.Clear();
+            var result = new System.Collections.Generic.List<CleanupRecommendation>();
+            if (!Directory.Exists(logsPath)) return result;
 
+            var files = Directory.GetFiles(logsPath, "*.log", SearchOption.AllDirectories)
+                .Select(f => new FileInfo(f))
+                .OrderBy(f => f.LastWriteTime)
+                .ToList();
+
+            var expiredFiles = files.Where(f => f.LastWriteTime < DateTime.Now.AddDays(-maxRetainDays)).ToList();
+            if (expiredFiles.Count > 0)
+                result.Add(new CleanupRecommendation
+                {
+                    Action = "删除过期日志",
+                    Reason = $"超过{maxRetainDays}天的日志文件",
+                    EstimatedSpaceToFree = expiredFiles.Sum(f => f.Length) / (1024 * 1024),
+                    FilesToDelete = expiredFiles.Count,
+                    Priority = "高"
+                });
+
+            var uncompressedOldFiles = files.Where(f =>
+                !f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) &&
+                f.LastWriteTime < DateTime.Now.AddDays(-compressAfterDays)).ToList();
+            if (uncompressedOldFiles.Count > 0)
+                result.Add(new CleanupRecommendation
+                {
+                    Action = "压缩旧日志",
+                    Reason = $"超过{compressAfterDays}天的未压缩日志",
+                    EstimatedSpaceToFree = (long)(uncompressedOldFiles.Sum(f => f.Length) * 0.7 / (1024 * 1024)),
+                    FilesToDelete = 0,
+                    Priority = "中"
+                });
+
+            if (files.Count > maxRetainCount)
+            {
+                var excessFiles = files.Count - maxRetainCount;
+                result.Add(new CleanupRecommendation
+                {
+                    Action = "减少日志文件数量",
+                    Reason = $"当前{files.Count}个文件，超过限制{maxRetainCount}个",
+                    EstimatedSpaceToFree = files.Take(excessFiles).Sum(f => f.Length) / (1024 * 1024),
+                    FilesToDelete = excessFiles,
+                    Priority = "中"
+                });
+            }
+
+            if (usagePercentage >= 90)
+                result.Insert(0, new CleanupRecommendation
+                {
+                    Action = "紧急清理空间",
+                    Reason = $"磁盘空间严重不足（{usagePercentage:F1}%）",
+                    EstimatedSpaceToFree = files.Take(files.Count / 2).Sum(f => f.Length) / (1024 * 1024),
+                    FilesToDelete = files.Count / 2,
+                    Priority = "紧急"
+                });
+
+            return result;
+        }
+
+        private async System.Threading.Tasks.Task GenerateCleanupRecommendationsAsync()
+        {
             try
             {
                 var logsPath = ResolveLogDirectory();
-                if (!Directory.Exists(logsPath))
-                {
-                    return;
-                }
+                var usagePct = StorageInfo?.UsagePercentage ?? 0;
+                var maxDays = MaxRetainDays;
+                var compDays = CompressAfterDays;
+                var maxCount = MaxRetainCount;
 
-                var files = Directory.GetFiles(logsPath, "*.log", SearchOption.AllDirectories)
-                    .Select(f => new FileInfo(f))
-                    .OrderBy(f => f.LastWriteTime)
-                    .ToList();
+                var list = await System.Threading.Tasks.Task.Run(
+                    () => ComputeRecommendationsCore(logsPath, usagePct, maxDays, compDays, maxCount)
+                ).ConfigureAwait(true);
 
-                var expiredFiles = files.Where(f => f.LastWriteTime < DateTime.Now.AddDays(-MaxRetainDays)).ToList();
-                if (expiredFiles.Any())
-                {
-                    CleanupRecommendations.Add(new CleanupRecommendation
-                    {
-                        Action = "删除过期日志",
-                        Reason = $"超过{MaxRetainDays}天的日志文件",
-                        EstimatedSpaceToFree = expiredFiles.Sum(f => f.Length) / (1024 * 1024),
-                        FilesToDelete = expiredFiles.Count,
-                        Priority = "高"
-                    });
-                }
-
-                var uncompressedOldFiles = files.Where(f => 
-                    !f.Extension.Equals(".zip", StringComparison.OrdinalIgnoreCase) &&
-                    f.LastWriteTime < DateTime.Now.AddDays(-CompressAfterDays)).ToList();
-                if (uncompressedOldFiles.Any())
-                {
-                    CleanupRecommendations.Add(new CleanupRecommendation
-                    {
-                        Action = "压缩旧日志",
-                        Reason = $"超过{CompressAfterDays}天的未压缩日志",
-                        EstimatedSpaceToFree = (long)(uncompressedOldFiles.Sum(f => f.Length) * 0.7 / (1024 * 1024)),
-                        FilesToDelete = 0,
-                        Priority = "中"
-                    });
-                }
-
-                if (files.Count > MaxRetainCount)
-                {
-                    var excessFiles = files.Count - MaxRetainCount;
-                    CleanupRecommendations.Add(new CleanupRecommendation
-                    {
-                        Action = "减少日志文件数量",
-                        Reason = $"当前{files.Count}个文件，超过限制{MaxRetainCount}个",
-                        EstimatedSpaceToFree = files.Take(excessFiles).Sum(f => f.Length) / (1024 * 1024),
-                        FilesToDelete = excessFiles,
-                        Priority = "中"
-                    });
-                }
-
-                if (StorageInfo?.Status == StorageStatus.Critical)
-                {
-                    CleanupRecommendations.Insert(0, new CleanupRecommendation
-                    {
-                        Action = "紧急清理空间",
-                        Reason = $"磁盘空间严重不足（{StorageInfo.UsagePercentage:F1}%）",
-                        EstimatedSpaceToFree = files.Take(files.Count / 2).Sum(f => f.Length) / (1024 * 1024),
-                        FilesToDelete = files.Count / 2,
-                        Priority = "紧急"
-                    });
-                }
-
+                CleanupRecommendations.ReplaceAll(list);
                 TM.App.Log($"[LogRotation] 生成了 {CleanupRecommendations.Count} 条清理建议");
             }
             catch (Exception ex)
@@ -878,6 +905,12 @@ namespace TM.Framework.SystemSettings.Logging.LogRotation
             OnPropertyChanged(nameof(EnableStorageMonitoring));
             OnPropertyChanged(nameof(WarningThresholdPercentage));
             OnPropertyChanged(nameof(CriticalThresholdPercentage));
+        }
+
+        public void Dispose()
+        {
+            _monitoringTimer?.Stop();
+            GC.SuppressFinalize(this);
         }
     }
 }

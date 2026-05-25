@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Modules.AIAssistant.PromptTools.PromptManagement.Models;
 
 namespace TM.Services.Framework.AI.Interfaces.Prompts

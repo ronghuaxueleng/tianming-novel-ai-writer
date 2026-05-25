@@ -126,7 +126,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
             }
 
             var entertainmentApps = new[] { "spotify", "netflix", "vlc", "potplayer" };
-            if (apps.Any(app => entertainmentApps.Any(ent => app.ToLower().Contains(ent))))
+            if (apps.Any(app => entertainmentApps.Any(ent => app.Contains(ent, StringComparison.OrdinalIgnoreCase))))
             {
                 return "娱乐中";
             }

@@ -1,13 +1,13 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Profile.BasicInfo;
 
 namespace TM.Framework.User.Services
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public sealed class CurrentUserContext : INotifyPropertyChanged
     {
         private string _username = string.Empty;
@@ -21,7 +21,7 @@ namespace TM.Framework.User.Services
         public CurrentUserContext()
         {
             _basicInfoSettings = ServiceLocator.Get<BasicInfoSettings>();
-            Refresh();
+            _ = RefreshAsync();
         }
 
         public string Username
@@ -71,7 +71,6 @@ namespace TM.Framework.User.Services
             try
             {
                 var settings = _basicInfoSettings;
-                settings.LoadSettings();
 
                 var oldUsername = Username;
                 var oldDisplayName = DisplayName;
@@ -91,6 +90,19 @@ namespace TM.Framework.User.Services
             catch (Exception ex)
             {
                 TM.App.Log($"[CurrentUserContext] 刷新用户信息失败: {ex.Message}");
+            }
+        }
+
+        public async System.Threading.Tasks.Task RefreshAsync()
+        {
+            try
+            {
+                await _basicInfoSettings.LoadDataAsync().ConfigureAwait(true);
+                Refresh();
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[CurrentUserContext] 异步刷新用户信息失败: {ex.Message}");
             }
         }
 

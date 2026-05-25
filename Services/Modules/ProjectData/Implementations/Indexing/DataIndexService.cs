@@ -1,17 +1,17 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
+using TM.Services.Modules.ProjectData.Interfaces;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
     public class DataIndexService
     {
-        private readonly GuideContextService _guideContextService;
+        private readonly IGuideContextService _guideContextService;
 
-        public DataIndexService(GuideContextService guideContextService)
+        public DataIndexService(IGuideContextService guideContextService)
         {
             _guideContextService = guideContextService;
 
@@ -52,7 +52,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (_isInitialized)
                 return;
 
-            await _initLock.WaitAsync();
+            await _initLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 if (_isInitialized)
@@ -69,15 +69,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     _idToEntry.Clear();
                 }
 
-                await _guideContextService.InitializeCacheAsync();
+                await _guideContextService.InitializeCacheAsync().ConfigureAwait(false);
                 if (epoch != Volatile.Read(ref _initEpoch))
                     return;
 
-                var characters = await _guideContextService.GetAllCharactersAsync();
-                var locations = await _guideContextService.GetAllLocationsAsync();
-                var factions = await _guideContextService.GetAllFactionsAsync();
-                var plotRules = await _guideContextService.GetAllPlotRulesAsync();
-                var worldRules = await _guideContextService.GetAllWorldRulesAsync();
+                var charactersTask = _guideContextService.GetAllCharactersAsync();
+                var locationsTask = _guideContextService.GetAllLocationsAsync();
+                var factionsTask = _guideContextService.GetAllFactionsAsync();
+                var plotRulesTask = _guideContextService.GetAllPlotRulesAsync();
+                var worldRulesTask = _guideContextService.GetAllWorldRulesAsync();
+                await Task.WhenAll(charactersTask, locationsTask, factionsTask, plotRulesTask, worldRulesTask).ConfigureAwait(false);
+
+                var characters = await charactersTask.ConfigureAwait(false);
+                var locations = await locationsTask.ConfigureAwait(false);
+                var factions = await factionsTask.ConfigureAwait(false);
+                var plotRules = await plotRulesTask.ConfigureAwait(false);
+                var worldRules = await worldRulesTask.ConfigureAwait(false);
 
                 lock (_lock)
                 {
@@ -156,14 +163,31 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (string.IsNullOrEmpty(keyword))
                 return new List<IndexEntry>();
 
+            string[] keys;
             lock (_lock)
             {
-                return _nameToEntries
-                    .Where(kv => kv.Key.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                    .SelectMany(kv => kv.Value)
-                    .Take(maxResults)
-                    .ToList();
+                keys = _nameToEntries.Keys.ToArray();
             }
+
+            var matchedKeys = keys
+                .Where(k => k.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+
+            var result = new List<IndexEntry>();
+            lock (_lock)
+            {
+                foreach (var k in matchedKeys)
+                {
+                    if (_nameToEntries.TryGetValue(k, out var entries))
+                    {
+                        foreach (var entry in entries)
+                        {
+                            result.Add(entry);
+                            if (result.Count >= maxResults) return result;
+                        }
+                    }
+                }
+            }
+            return result;
         }
 
         public IndexEntry? FindById(string id)
@@ -179,30 +203,34 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public List<string> ListIdsByCategory(EntityCategory category)
         {
+            IndexEntry[] snapshot;
             lock (_lock)
             {
-                return _idToEntry.Values
-                    .Where(e => e.Category == category)
-                    .Select(e => e.Id)
-                    .ToList();
+                snapshot = _idToEntry.Values.ToArray();
             }
+            return snapshot
+                .Where(e => e.Category == category)
+                .Select(e => e.Id)
+                .ToList();
         }
 
         public List<IndexEntry> SearchByCategory(EntityCategory category, string keyword, int maxResults = 20)
         {
+            IndexEntry[] snapshot;
             lock (_lock)
             {
-                var query = _idToEntry.Values.Where(e => e.Category == category);
-
-                if (!string.IsNullOrEmpty(keyword))
-                {
-                    query = query.Where(e => 
-                        e.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                        e.Id.Contains(keyword, StringComparison.OrdinalIgnoreCase));
-                }
-
-                return query.Take(maxResults).ToList();
+                snapshot = _idToEntry.Values.ToArray();
             }
+            var query = snapshot.Where(e => e.Category == category);
+
+            if (!string.IsNullOrEmpty(keyword))
+            {
+                query = query.Where(e =>
+                    e.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+                    e.Id.Contains(keyword, StringComparison.OrdinalIgnoreCase));
+            }
+
+            return query.Take(maxResults).ToList();
         }
 
         public void Clear()
@@ -223,7 +251,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 if (_idToEntry.TryGetValue(id, out var oldEntry))
                 {
-                    if (!string.IsNullOrEmpty(oldEntry.Name) && 
+                    if (!string.IsNullOrEmpty(oldEntry.Name) &&
                         _nameToEntries.TryGetValue(oldEntry.Name, out var oldList))
                     {
                         oldList.RemoveAll(e => e.Id == id);

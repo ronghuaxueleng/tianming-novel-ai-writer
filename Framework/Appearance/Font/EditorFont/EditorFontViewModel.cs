@@ -5,13 +5,13 @@ using System.Reflection;
 using System.ComponentModel;
 using System.Linq;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Appearance.Font.Models;
 using TM.Framework.Appearance.Font.Services;
 
 namespace TM.Framework.Appearance.Font.EditorFont
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class EditorFontViewModel : INotifyPropertyChanged
     {
         private ObservableCollection<string> _availableFonts = new();
@@ -22,11 +22,15 @@ namespace TM.Framework.Appearance.Font.EditorFont
         private double _selectedLineHeight;
         private double _selectedLetterSpacing;
         private string _searchText = string.Empty;
+        private System.Windows.Threading.DispatcherTimer? _fontSearchTimer;
 
-        private bool _showMonospaceOnly = false;
-        private bool _enableLigatures = false;
+        private bool _showMonospaceOnly;
+        private bool _enableLigatures;
         private ObservableCollection<string> _supportedLigatures = new();
         private string _ligaturePreviewText = string.Empty;
+
+        private List<string> _cachedAllFonts = new();
+        private TM.Framework.Common.Controls.TreeNodeItem? _selectedFontNode;
 
         private readonly MonospaceFontDetector _monoDetector;
         private readonly LigatureDetector _ligatureDetector;
@@ -46,6 +50,8 @@ namespace TM.Framework.Appearance.Font.EditorFont
 
         private readonly FontPerformanceAnalyzer _performanceAnalyzer;
         private PerformanceReport? _performanceReport;
+        private System.Threading.CancellationTokenSource? _perfTestCts;
+        private bool _isRunningWidthAnalysis;
 
         private readonly ScenePresetService _scenePresetService;
         private ScenePreset? _selectedScene;
@@ -63,7 +69,7 @@ namespace TM.Framework.Appearance.Font.EditorFont
             }
         }
 
-        public ObservableCollection<TM.Framework.Common.Controls.TreeNodeItem> FontTree { get; } = new ObservableCollection<TM.Framework.Common.Controls.TreeNodeItem>();
+        public TM.Framework.Common.ViewModels.RangeObservableCollection<TM.Framework.Common.Controls.TreeNodeItem> FontTree { get; } = new();
 
         public ObservableCollection<string> FontWeightOptions { get; } = new()
         {
@@ -81,9 +87,28 @@ namespace TM.Framework.Appearance.Font.EditorFont
                     _currentSettings.FontFamily = value;
                     OnPropertyChanged(nameof(SelectedFontFamily));
 
-                    UpdateLigatureInfo(value);
-
-                    UpdateOpenTypeFeatures(value);
+                    var capturedFont = value;
+                    _ = System.Threading.Tasks.Task.Run(() =>
+                    {
+                        try
+                        {
+                            var ligatures = _ligatureDetector.GetSupportedLigatures(capturedFont);
+                            var ligaturePreview = ligatures.Count > 0
+                                ? _ligatureDetector.GenerateLigaturePreviewText(ligatures)
+                                : "此字体不支持编程连字";
+                            var features = _openTypeService.GetSupportedFeatures(capturedFont);
+                            System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+                            {
+                                SupportedLigatures = new System.Collections.ObjectModel.ObservableCollection<string>(ligatures);
+                                LigaturePreviewText = ligaturePreview;
+                                OpenTypeFeatures = new System.Collections.ObjectModel.ObservableCollection<OpenTypeFeature>(features);
+                            });
+                        }
+                        catch (System.Exception ex)
+                        {
+                            TM.App.Log($"[EditorFont] 后台解析字体特性失败({capturedFont}): {ex.Message}");
+                        }
+                    });
                 }
             }
         }
@@ -153,7 +178,7 @@ namespace TM.Framework.Appearance.Font.EditorFont
                 {
                     _searchText = value;
                     OnPropertyChanged(nameof(SearchText));
-                    FilterFonts();
+                    ScheduleFontSearch();
                 }
             }
         }
@@ -167,7 +192,7 @@ namespace TM.Framework.Appearance.Font.EditorFont
                 {
                     _showMonospaceOnly = value;
                     OnPropertyChanged(nameof(ShowMonospaceOnly));
-                    FilterFonts();
+                    ScheduleFontSearch();
                 }
             }
         }
@@ -392,10 +417,6 @@ namespace Example
             _selectedLetterSpacing = _currentSettings.LetterSpacing;
             _enableLigatures = _currentSettings.EnableLigatures;
 
-            LoadSystemFonts();
-
-            UpdateLigatureInfo(_selectedFontFamily);
-
             var languages = _codeSampleProvider.GetSupportedLanguages();
             foreach (var lang in languages)
             {
@@ -416,7 +437,27 @@ namespace Example
                 ScenePresets.Add(scene);
             }
 
-            UpdateOpenTypeFeatures(_selectedFontFamily);
+            _monoDetector.InitializeDpi();
+            var initFontFamily = _selectedFontFamily;
+            AsyncSettingsLoader.RunOrDefer(() =>
+            {
+                var fonts = FontManager.GetSystemFonts();
+                var ligatures = _ligatureDetector.GetSupportedLigatures(initFontFamily);
+                var ligaturePreview = ligatures.Count > 0
+                    ? _ligatureDetector.GenerateLigaturePreviewText(ligatures)
+                    : "此字体不支持编程连字";
+                var features = _openTypeService.GetSupportedFeatures(initFontFamily);
+                var treeNodes = BuildFontTreeNodes(fonts.Select(f => (f, _monoDetector.IsMonospace(f))));
+                return () =>
+                {
+                    _cachedAllFonts = fonts;
+                    AvailableFonts = new System.Collections.ObjectModel.ObservableCollection<string>(fonts);
+                    SupportedLigatures = new System.Collections.ObjectModel.ObservableCollection<string>(ligatures);
+                    LigaturePreviewText = ligaturePreview;
+                    OpenTypeFeatures = new System.Collections.ObjectModel.ObservableCollection<OpenTypeFeature>(features);
+                    FontTree.ReplaceAll(treeNodes);
+                };
+            }, "EditorFont");
 
             ApplyCommand = new RelayCommand(ApplySettings);
             SaveCommand = new RelayCommand(SaveSettings);
@@ -430,48 +471,56 @@ namespace Example
             SelectFontCommand = new TM.Framework.Common.Helpers.MVVM.RelayCommand(SelectFontFromTree);
         }
 
-        private void LoadSystemFonts()
-        {
-            try
-            {
-                var fonts = FontManager.GetSystemFonts();
-                AvailableFonts = new ObservableCollection<string>(fonts);
-                TM.App.Log($"[EditorFont] 已加载 {fonts.Count} 个系统字体");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[EditorFont] 加载系统字体失败: {ex.Message}");
-                StandardDialog.ShowError($"加载系统字体失败: {ex.Message}", "错误");
-            }
-        }
-
         private void FilterFonts()
         {
-            var allFonts = FontManager.GetSystemFonts();
-
-            if (ShowMonospaceOnly)
-            {
-                allFonts = allFonts.Where(f => _monoDetector.IsMonospace(f)).ToList();
-            }
+            if (_cachedAllFonts.Count == 0) return;
+            var allFonts = new List<string>(_cachedAllFonts);
 
             if (!string.IsNullOrWhiteSpace(SearchText))
             {
                 allFonts = allFonts.Where(f => f.Contains(SearchText, StringComparison.OrdinalIgnoreCase)).ToList();
             }
 
-            AvailableFonts = new ObservableCollection<string>(allFonts);
-            BuildFontTree();
+            bool monoOnly = ShowMonospaceOnly;
+            var snapshot = allFonts
+                .Select(f => (f, isMono: _monoDetector.IsMonospace(f)))
+                .Where(t => !monoOnly || t.isMono)
+                .ToList();
+            _ = System.Threading.Tasks.Task.Run(() => BuildFontTreeNodes(snapshot))
+                    .ContinueWith(t =>
+                    {
+                        if (t.IsFaulted)
+                        {
+                            TM.App.Log($"[EditorFont] 字体树重建失败: {t.Exception?.GetBaseException().Message}");
+                            return;
+                        }
+                        FontTree.ReplaceAll(t.Result);
+                    }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
             TM.App.Log($"[EditorFont] 过滤字体: 显示 {allFonts.Count} 个 (等宽only={ShowMonospaceOnly})");
         }
 
-        private void BuildFontTree()
+        private void ScheduleFontSearch()
         {
-            FontTree.Clear();
-            foreach (var font in AvailableFonts)
+            if (_fontSearchTimer == null)
             {
-                bool isMono = _monoDetector.IsMonospace(font);
-                string icon = isMono ? "📟" : "🔤";
-                FontTree.Add(new TM.Framework.Common.Controls.TreeNodeItem
+                _fontSearchTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(300)
+                };
+                _fontSearchTimer.Tick += (_, _) => { _fontSearchTimer.Stop(); FilterFonts(); };
+            }
+            _fontSearchTimer.Stop();
+            _fontSearchTimer.Start();
+        }
+
+        private System.Collections.Generic.List<TM.Framework.Common.Controls.TreeNodeItem> BuildFontTreeNodes(
+            System.Collections.Generic.IEnumerable<(string font, bool isMono)> fonts)
+        {
+            var newItems = new System.Collections.Generic.List<TM.Framework.Common.Controls.TreeNodeItem>();
+            foreach (var (font, isMono) in fonts)
+            {
+                var icon = isMono ? IconHelper.TryGet("Icon.Monitor") : IconHelper.TryGet("Icon.Font");
+                newItems.Add(new TM.Framework.Common.Controls.TreeNodeItem
                 {
                     Name = font,
                     Icon = icon,
@@ -480,52 +529,18 @@ namespace Example
                     ShowChildCount = false
                 });
             }
-            OnPropertyChanged(nameof(FontTree));
+            return newItems;
         }
 
         private void SelectFontFromTree(object? parameter)
         {
             if (parameter is TM.Framework.Common.Controls.TreeNodeItem node && node.Tag is string fontName)
             {
-                foreach (var item in FontTree)
-                {
-                    item.IsSelected = false;
-                }
+                if (_selectedFontNode != null)
+                    _selectedFontNode.IsSelected = false;
                 node.IsSelected = true;
+                _selectedFontNode = node;
                 SelectedFontFamily = fontName;
-            }
-        }
-
-        private void UpdateLigatureInfo(string fontName)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(fontName))
-                {
-                    SupportedLigatures = new ObservableCollection<string>();
-                    LigaturePreviewText = "未选择字体";
-                    return;
-                }
-
-                var ligatures = _ligatureDetector.GetSupportedLigatures(fontName);
-                SupportedLigatures = new ObservableCollection<string>(ligatures);
-
-                if (ligatures.Count > 0)
-                {
-                    LigaturePreviewText = _ligatureDetector.GenerateLigaturePreviewText(ligatures);
-                }
-                else
-                {
-                    LigaturePreviewText = "此字体不支持编程连字";
-                }
-
-                TM.App.Log($"[EditorFont] {fontName}: 支持 {ligatures.Count} 个连字");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[EditorFont] 更新连字信息失败: {ex.Message}");
-                SupportedLigatures = new ObservableCollection<string>();
-                LigaturePreviewText = "连字检测失败";
             }
         }
 
@@ -554,29 +569,7 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 重置代码示例失败: {ex.Message}");
-                StandardDialog.ShowError($"重置失败: {ex.Message}", "错误");
-            }
-        }
-
-        private void UpdateOpenTypeFeatures(string fontName)
-        {
-            try
-            {
-                if (string.IsNullOrWhiteSpace(fontName))
-                {
-                    OpenTypeFeatures = new ObservableCollection<OpenTypeFeature>();
-                    return;
-                }
-
-                var features = _openTypeService.GetSupportedFeatures(fontName);
-                OpenTypeFeatures = new ObservableCollection<OpenTypeFeature>(features);
-
-                TM.App.Log($"[EditorFont] {fontName}: 支持 {features.Count} 个OpenType特性");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[EditorFont] 更新OpenType特性失败: {ex.Message}");
-                OpenTypeFeatures = new ObservableCollection<OpenTypeFeature>();
+                StandardDialog.ShowError($"重置失败\n\n错误详情：{ex.Message}", "重置失败");
             }
         }
 
@@ -617,7 +610,7 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 应用预设失败: {ex.Message}");
-                StandardDialog.ShowError($"应用预设失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"应用预设失败\n\n错误详情：{ex.Message}", "应用失败");
             }
         }
 
@@ -642,10 +635,12 @@ namespace Example
             }
         }
 
-        private void RunWidthAnalysis()
+        private async void RunWidthAnalysis()
         {
+            if (_isRunningWidthAnalysis) return;
             try
             {
+                _isRunningWidthAnalysis = true;
                 if (string.IsNullOrWhiteSpace(SelectedFontFamily))
                 {
                     GlobalToast.Warning("未选择字体", "请先选择一个字体");
@@ -654,13 +649,17 @@ namespace Example
 
                 TM.App.Log($"[EditorFont] 开始分析字符宽度: {SelectedFontFamily}");
 
-                var report = _widthAnalyzer.AnalyzeFont(SelectedFontFamily, SelectedFontSize);
+                var family = SelectedFontFamily;
+                var size = SelectedFontSize;
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(System.Windows.Application.Current.MainWindow).PixelsPerDip;
+
+                var report = await System.Threading.Tasks.Task.Run(() => _widthAnalyzer.AnalyzeFont(family, size, dpi));
                 WidthReport = report;
 
                 var resultIcon = report.OverallResult switch
                 {
                     WidthCheckResult.Pass => "✓",
-                    WidthCheckResult.Warning => "⚠️",
+                    WidthCheckResult.Warning => "[!]",
                     WidthCheckResult.Fail => "✗",
                     _ => "?"
                 };
@@ -675,7 +674,11 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 分析失败: {ex.Message}");
-                StandardDialog.ShowError($"分析失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"分析失败\n\n错误详情：{ex.Message}", "分析失败");
+            }
+            finally
+            {
+                _isRunningWidthAnalysis = false;
             }
         }
 
@@ -690,7 +693,7 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 应用字体失败: {ex.Message}");
-                StandardDialog.ShowError($"应用字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"应用字体失败\n\n错误详情：{ex.Message}", "应用失败");
             }
         }
 
@@ -708,7 +711,7 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 保存字体失败: {ex.Message}");
-                StandardDialog.ShowError($"保存字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"保存字体失败\n\n错误详情：{ex.Message}", "保存失败");
             }
         }
 
@@ -731,11 +734,11 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 重置字体失败: {ex.Message}");
-                StandardDialog.ShowError($"重置字体失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"重置字体失败\n\n错误详情：{ex.Message}", "重置失败");
             }
         }
 
-        private void RunPerformanceTest()
+        private async void RunPerformanceTest()
         {
             try
             {
@@ -745,16 +748,26 @@ namespace Example
                     return;
                 }
 
+                _perfTestCts?.Cancel();
+                _perfTestCts?.Dispose();
+                _perfTestCts = new System.Threading.CancellationTokenSource();
+                var ct = _perfTestCts.Token;
+
                 TM.App.Log($"[EditorFont] 开始性能测试: {SelectedFontFamily}");
 
-                var report = _performanceAnalyzer.AnalyzePerformance(SelectedFontFamily, SelectedFontSize);
+                var family = SelectedFontFamily;
+                var size = SelectedFontSize;
+                var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(System.Windows.Application.Current.MainWindow).PixelsPerDip;
+
+                var report = await System.Threading.Tasks.Task.Run(() => _performanceAnalyzer.AnalyzePerformance(family, size, pixelsPerDip: dpi, ct: ct), ct);
+                ct.ThrowIfCancellationRequested();
                 PerformanceReport = report;
 
                 var ratingIcon = report.Rating switch
                 {
-                    PerformanceRating.Excellent => "⚡",
+                    PerformanceRating.Excellent => "SSD",
                     PerformanceRating.Good => "✓",
-                    PerformanceRating.Fair => "⚠️",
+                    PerformanceRating.Fair => "[!]",
                     PerformanceRating.Poor => "✗",
                     _ => "?"
                 };
@@ -766,10 +779,14 @@ namespace Example
 
                 TM.App.Log($"[EditorFont] 性能测试完成: {report.Summary}");
             }
+            catch (OperationCanceledException)
+            {
+                TM.App.Log("[EditorFont] 性能测试已取消");
+            }
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 性能测试失败: {ex.Message}");
-                StandardDialog.ShowError($"性能测试失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"性能测试失败\n\n错误详情：{ex.Message}", "测试失败");
             }
         }
 
@@ -823,7 +840,7 @@ namespace Example
             catch (Exception ex)
             {
                 TM.App.Log($"[EditorFont] 应用场景失败: {ex.Message}");
-                StandardDialog.ShowError($"应用场景失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"应用场景失败\n\n错误详情：{ex.Message}", "应用失败");
             }
         }
 

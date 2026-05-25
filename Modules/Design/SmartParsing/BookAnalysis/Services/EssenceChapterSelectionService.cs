@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using TM.Modules.Design.SmartParsing.BookAnalysis.Crawler;
-using TM.Services.Framework.AI.Core;
 using TM.Services.Framework.AI.Interfaces.AI;
 
 namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services

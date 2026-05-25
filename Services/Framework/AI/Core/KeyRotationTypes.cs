@@ -5,11 +5,5 @@ public record KeySelection(string KeyId, string ApiKey, string? Remark);
 public enum KeyUseResult
 {
     Success,
-    AuthFailure,
-    Forbidden,
-    RateLimited,
-    QuotaExhausted,
-    ServerError,
-    NetworkError,
-    Unknown
+    AuthFailure, Forbidden, RateLimited, QuotaExhausted, ServerError, NetworkError, ModelNotFound, InvalidRequest, ContentFiltered, StreamNotSupported, Unknown
 }

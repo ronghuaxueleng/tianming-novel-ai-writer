@@ -1,23 +1,23 @@
 using System;
 using System.Globalization;
 using System.Threading;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Preferences.Locale
 {
     public class LocaleService
     {
-        private LocaleSettings Settings => ServiceLocator.Get<LocaleSettings>();
+        private readonly LocaleSettings _settings;
 
-        public LocaleService()
+        public LocaleService(LocaleSettings settings)
         {
+            _settings = settings;
         }
 
-        public void ApplyAtStartup()
+        public async System.Threading.Tasks.Task ApplyAtStartupAsync()
         {
             try
             {
-                var data = Settings.LoadSettings();
+                var data = await _settings.LoadSettingsAsync();
 
                 if (!string.IsNullOrEmpty(data.Language))
                 {
@@ -48,42 +48,42 @@ namespace TM.Framework.User.Preferences.Locale
             }
         }
 
-        public void UpdateLanguage(string language, string languageName)
+        public async System.Threading.Tasks.Task UpdateLanguageAsync(string language, string languageName)
         {
-            var settings = Settings.LoadSettings();
+            var settings = await _settings.LoadSettingsAsync();
             settings.Language = language;
             settings.LanguageName = languageName;
-            Settings.SaveSettings(settings);
+            _settings.SaveSettings(settings);
             TM.App.Log($"[LocaleService] 更新语言: {languageName} ({language})");
         }
 
-        public void UpdateTimeZone(string timeZoneId)
+        public async System.Threading.Tasks.Task UpdateTimeZoneAsync(string timeZoneId)
         {
-            var loadedSettings = Settings.LoadSettings();
+            var loadedSettings = await _settings.LoadSettingsAsync();
             loadedSettings.TimeZoneId = timeZoneId;
-            Settings.SaveSettings(loadedSettings);
+            _settings.SaveSettings(loadedSettings);
             TM.App.Log($"[LocaleService] 更新时区: {timeZoneId}");
         }
 
-        public void UpdateDateFormat(string format)
+        public async System.Threading.Tasks.Task UpdateDateFormatAsync(string format)
         {
-            var loadedSettings = Settings.LoadSettings();
+            var loadedSettings = await _settings.LoadSettingsAsync();
             loadedSettings.DateFormat = format;
-            Settings.SaveSettings(loadedSettings);
+            _settings.SaveSettings(loadedSettings);
             TM.App.Log($"[LocaleService] 更新日期格式: {format}");
         }
 
-        public void UpdateNumberFormat(string format)
+        public async System.Threading.Tasks.Task UpdateNumberFormatAsync(string format)
         {
-            var loadedSettings = Settings.LoadSettings();
+            var loadedSettings = await _settings.LoadSettingsAsync();
             loadedSettings.NumberFormat = format;
-            Settings.SaveSettings(loadedSettings);
+            _settings.SaveSettings(loadedSettings);
             TM.App.Log($"[LocaleService] 更新数字格式: {format}");
         }
 
         public void ResetToDefaults()
         {
-            Settings.ResetToDefaults();
+            _settings.ResetToDefaults();
             TM.App.Log("[LocaleService] 重置为默认语言区域设置");
         }
     }

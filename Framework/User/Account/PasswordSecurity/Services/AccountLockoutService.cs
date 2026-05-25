@@ -1,10 +1,7 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.PasswordSecurity.Services
@@ -18,14 +15,15 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
         {
             _securitySettings = securitySettings;
             _apiService = apiService;
+            _ = Task.Run(async () => { try { await IsAccountLockedAsync().ConfigureAwait(false); } catch { } });
         }
 
         #region 锁定检查
 
-        public bool IsAccountLocked()
+        public async Task<bool> IsAccountLockedAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
 
             if (data.IsPermanentlyLocked)
             {
@@ -37,14 +35,13 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
             {
                 if (DateTime.Now < data.LockedUntil.Value)
                 {
-                    var remaining = data.LockedUntil.Value - DateTime.Now;
                     TM.App.Log("[ALS] locked");
                     return true;
                 }
                 else
                 {
                     data.LockedUntil = null;
-                    settings.SaveLockoutData(data);
+                    settings.SaveLockoutDataAsync(data).SafeFireAndForget(ex => TM.App.Log($"[AccountLockoutService] 展期解锁保存失败: {ex.Message}"));
                     TM.App.Log("[ALS] unlock");
                 }
             }
@@ -52,10 +49,10 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
             return false;
         }
 
-        public string GetLockoutTimeRemaining()
+        public async Task<string> GetLockoutTimeRemainingAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
 
             if (data.IsPermanentlyLocked)
                 return "永久锁定";
@@ -77,10 +74,10 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
 
         #region 失败计数
 
-        public void RecordFailedAttempt()
+        public async Task RecordFailedAttemptAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
             data.FailedAttempts++;
 
             var attempt = new LoginAttemptRecord
@@ -93,15 +90,15 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
 
             ApplyLockoutPolicy(data);
 
-            settings.SaveLockoutData(data);
+            settings.SaveLockoutDataAsync(data).SafeFireAndForget(ex => TM.App.Log($"[AccountLockoutService] 记录失败保存失败: {ex.Message}"));
 
             TM.App.Log($"[AccountLockoutService] 登录失败 (第{data.FailedAttempts}次)");
         }
 
-        public void ResetFailedAttempts()
+        public async Task ResetFailedAttemptsAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
 
             if (data.FailedAttempts > 0)
             {
@@ -124,13 +121,13 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
                 data.AttemptHistory = data.AttemptHistory.Skip(data.AttemptHistory.Count - 20).ToList();
             }
 
-            settings.SaveLockoutData(data);
+            settings.SaveLockoutDataAsync(data).SafeFireAndForget(ex => TM.App.Log($"[AccountLockoutService] 重置失败计数保存失败: {ex.Message}"));
         }
 
-        public int GetFailedAttempts()
+        public async Task<int> GetFailedAttemptsAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
             return data.FailedAttempts;
         }
 
@@ -145,45 +142,41 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
             {
                 data.IsPermanentlyLocked = true;
                 data.LockedUntil = DateTime.MaxValue;
-                TM.App.Log("[AccountLockoutService] ⚠️ 账户已永久锁定（失败15次）");
+                TM.App.Log("[AccountLockoutService] [!] 账户已永久锁定（失败15次）");
             }
             else if (data.FailedAttempts >= 10)
             {
                 data.LockedUntil = DateTime.Now.AddHours(1);
-                TM.App.Log("[AccountLockoutService] ⚠️ 账户锁定1小时（失败10次）");
+                TM.App.Log("[AccountLockoutService] [!] 账户锁定1小时（失败10次）");
             }
             else if (data.FailedAttempts >= 5)
             {
                 data.LockedUntil = DateTime.Now.AddMinutes(15);
-                TM.App.Log("[AccountLockoutService] ⚠️ 账户锁定15分钟（失败5次）");
+                TM.App.Log("[AccountLockoutService] [!] 账户锁定15分钟（失败5次）");
             }
-        }
-
-        public void UnlockAccount()
-        {
-            _ = UnlockAccountAsync();
         }
 
         public async Task<bool> UnlockAccountAsync()
         {
             try
             {
-                var apiResult = await _apiService.UnlockAccountAsync();
+                var apiResult = await _apiService.UnlockAccountAsync().ConfigureAwait(false);
                 if (!apiResult.Success)
                 {
                     TM.App.Log($"[AccountLockoutService] 服务器解锁失败: {apiResult.Message}");
+                    return false;
                 }
 
                 var settings = _securitySettings;
-                var data = settings.LoadLockoutData();
+                var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
 
                 data.FailedAttempts = 0;
                 data.LockedUntil = null;
                 data.IsPermanentlyLocked = false;
 
-                settings.SaveLockoutData(data);
+                await settings.SaveLockoutDataAsync(data).ConfigureAwait(false);
 
-                TM.App.Log("[AccountLockoutService] 账户已手动解锁");
+                TM.App.Log("[AccountLockoutService] 账户已手动解锁（服务端+本地）");
                 return true;
             }
             catch (Exception ex)
@@ -197,27 +190,29 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
         {
             try
             {
-                var apiResult = await _apiService.GetLockoutStatusAsync();
+                var apiResult = await _apiService.GetLockoutStatusAsync().ConfigureAwait(false);
                 if (apiResult.Success && apiResult.Data != null)
                 {
                     var settings = _securitySettings;
-                    var data = settings.LoadLockoutData();
+                    var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
 
                     data.FailedAttempts = apiResult.Data.FailedAttempts;
                     data.LockedUntil = apiResult.Data.LockedUntil;
                     data.IsPermanentlyLocked = apiResult.Data.IsPermanentlyLocked;
 
-                    settings.SaveLockoutData(data);
+                    await settings.SaveLockoutDataAsync(data).ConfigureAwait(false);
                     TM.App.Log("[AccountLockoutService] 锁定状态已从服务器同步");
                     return true;
                 }
 
+                await _securitySettings.LoadLockoutDataAsync().ConfigureAwait(false);
                 TM.App.Log($"[AccountLockoutService] 服务器同步失败: {apiResult.Message}");
                 return false;
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountLockoutService] 同步锁定状态失败: {ex.Message}");
+                try { await _securitySettings.LoadLockoutDataAsync().ConfigureAwait(false); } catch { }
                 return false;
             }
         }
@@ -226,10 +221,10 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
 
         #region 登录历史
 
-        public List<LoginAttemptRecord> GetRecentAttempts(int count = 5)
+        public async Task<List<LoginAttemptRecord>> GetRecentAttemptsAsync(int count = 5)
         {
             var settings = _securitySettings;
-            var data = settings.LoadLockoutData();
+            var data = await settings.LoadLockoutDataAsync().ConfigureAwait(false);
             return data.AttemptHistory
                 .OrderByDescending(a => a.Timestamp)
                 .Take(count)

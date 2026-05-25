@@ -1,4 +1,4 @@
-<UserControl x:Class="TM.Framework.Common.Controls.DataManagement.FunctionalDetailForm"
+﻿<UserControl x:Class="TM.Framework.Common.Controls.DataManagement.FunctionalDetailForm"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
@@ -15,7 +15,7 @@
                                    Title="{Binding HeaderTitle, ElementName=Root}"
                                    Margin="0,0,0,15">
             <layout:IconHeaderGroupBox.Style>
-                <Style TargetType="layout:IconHeaderGroupBox">
+                <Style TargetType="layout:IconHeaderGroupBox" BasedOn="{StaticResource StandardGroupBoxStyle}">
                     <Setter Property="Visibility" Value="Visible"/>
                     <Style.Triggers>
                         <DataTrigger Binding="{Binding ShowBasicFields, ElementName=Root}" Value="False">
@@ -43,9 +43,9 @@
                 </ContentPresenter.Style>
             </ContentPresenter>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="📝" Title="新建模式">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Edit}" Title="新建模式">
                 <layout:IconHeaderGroupBox.Style>
-                    <Style TargetType="layout:IconHeaderGroupBox">
+                    <Style TargetType="layout:IconHeaderGroupBox" BasedOn="{StaticResource StandardGroupBoxStyle}">
                         <Setter Property="Visibility" Value="Collapsed"/>
                         <Style.Triggers>
                             <DataTrigger Binding="{Binding IsCreateMode}" Value="True">
@@ -63,6 +63,7 @@
                                Foreground="{DynamicResource TextTertiary}"/>
 
                     <StackPanel Margin="0,10,0,0">
+
                         <TextBlock FontSize="17" FontWeight="SemiBold" Foreground="{DynamicResource TextSecondary}" Margin="0,2,0,0"
                                    Text="1. 类型与所属分类"/>
                         <StackPanel Margin="12,4,0,0">
@@ -73,7 +74,7 @@
                             <TextBlock FontSize="16" TextWrapping="Wrap" Foreground="{DynamicResource TextTertiary}" Margin="0,2,0,2" LineHeight="23"
                                        Text="• 所属分类：用于确定新建内容的归属（数据必须选；分类可选）"/>
                             <TextBlock FontSize="16" TextWrapping="Wrap" Foreground="{DynamicResource TextTertiary}" Margin="0,2,0,2" LineHeight="23"
-                                       Text="• 左侧树：单击选中；双击或右键【编辑】可修改当前条目"/>
+                                       Text="• 左侧树：单击选中并进入编辑态；右键菜单可进行删除等操作"/>
                         </StackPanel>
 
                         <TextBlock FontSize="17" TextWrapping="Wrap" Foreground="{DynamicResource TextTertiary}" Margin="0,10,0,0" LineHeight="24"
@@ -85,7 +86,7 @@
                         <TextBlock FontSize="17" TextWrapping="Wrap" Foreground="{DynamicResource TextTertiary}" Margin="0,6,0,0" LineHeight="24"
                                    Text="5. AI智能生成：自动补全业务字段（需选中数据）"/>
                         <TextBlock FontSize="17" TextWrapping="Wrap" Foreground="{DynamicResource TextTertiary}" Margin="0,6,0,0" LineHeight="24"
-                                   Text="6. 左侧树：单击选中，双击编辑"/>
+                                   Text="6. 左侧树：单击选中并进入编辑态"/>
                     </StackPanel>
                 </StackPanel>
             </layout:IconHeaderGroupBox>

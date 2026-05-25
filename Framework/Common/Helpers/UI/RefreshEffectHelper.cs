@@ -138,9 +138,11 @@ namespace TM.Framework.Common.Helpers.UI
             return source as ContextMenu;
         }
 
-        private static void PlayRefreshAnimation(FrameworkElement target)
+        private static readonly DoubleAnimation _refreshAnimation = CreateRefreshAnimation();
+
+        private static DoubleAnimation CreateRefreshAnimation()
         {
-            var animation = new DoubleAnimation
+            var a = new DoubleAnimation
             {
                 From = 1.0,
                 To = 0.7,
@@ -148,8 +150,13 @@ namespace TM.Framework.Common.Helpers.UI
                 AutoReverse = true,
                 RepeatBehavior = new RepeatBehavior(1)
             };
+            a.Freeze();
+            return a;
+        }
 
-            target.BeginAnimation(UIElement.OpacityProperty, animation);
+        private static void PlayRefreshAnimation(FrameworkElement target)
+        {
+            target.BeginAnimation(UIElement.OpacityProperty, _refreshAnimation);
         }
     }
 }

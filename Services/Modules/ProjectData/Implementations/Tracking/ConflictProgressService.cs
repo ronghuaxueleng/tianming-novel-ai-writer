@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -35,7 +33,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             foreach (var vol in volNumbers.OrderByDescending(v => v))
             {
                 var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+                    GuideManager.GetVolumeFileName(BaseFileName, vol)).ConfigureAwait(false);
                 if (guide.Conflicts.TryGetValue(conflictId, out var entry))
                     return entry;
             }
@@ -45,14 +43,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task UpdateConflictProgressAsync(string chapterId, ConflictProgressChange change)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(volFile).ConfigureAwait(false);
 
             if (!guide.Conflicts.ContainsKey(change.ConflictId))
             {
-                var displayName = await TryResolveConflictDisplayNameAsync(change.ConflictId) ?? change.ConflictId;
+                var displayName = await TryResolveConflictDisplayNameAsync(change.ConflictId).ConfigureAwait(false) ?? change.ConflictId;
                 guide.Conflicts[change.ConflictId] = new ConflictProgressEntry
                 {
-                    Name   = displayName,
+                    Name = displayName,
                     Status = "pending"
                 };
                 TM.App.Log($"[ConflictProgress] 自动注册新冲突: {change.ConflictId} (Name={displayName})");
@@ -70,7 +68,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Event = change.Event,
                 Status = change.NewStatus,
                 Description = $"{oldStatus} → {change.NewStatus}",
-                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance
+                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance,
+                CausedBy = change.CausedBy ?? string.Empty
             });
 
             if (!conflictEntry.InvolvedChapters.Contains(chapterId))
@@ -85,7 +84,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Conflicts)
@@ -141,7 +140,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
                 if (!File.Exists(elementsPath)) return null;
 
-                var json = await File.ReadAllTextAsync(elementsPath);
+                var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return null;
@@ -158,22 +157,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { TM.App.Log($"[ConflictProgress] 读取冲突名失败: {ex.Message}"); }
             return null;
         }
 
         public async Task<List<ConflictProgressEntry>> GetActiveConflictsAsync()
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<ConflictProgressGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var merged = new System.Collections.Generic.Dictionary<string, ConflictProgressEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<ConflictProgressGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 foreach (var (id, entry) in guide.Conflicts)
                     merged[id] = entry;
-            }
-            return merged.Values.Where(c => c.Status == "active" || c.Status == "climax").ToList();
+            return merged.Values.Where(c =>
+                string.Equals(c.Status, "active", StringComparison.OrdinalIgnoreCase)
+                || string.Equals(c.Status, "climax", StringComparison.OrdinalIgnoreCase)).ToList();
         }
 
     }

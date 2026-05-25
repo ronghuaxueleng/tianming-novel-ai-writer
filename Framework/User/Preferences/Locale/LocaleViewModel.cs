@@ -1,17 +1,17 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.Globalization;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Preferences.Locale
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LocaleViewModel : INotifyPropertyChanged
     {
         private readonly LocaleService _service;
@@ -55,15 +55,19 @@ namespace TM.Framework.User.Preferences.Locale
         public ObservableCollection<LanguageItem> AvailableLanguages { get; set; }
 
         private string _selectedTimeZone = "China Standard Time";
+        private string? _cachedTimeZoneDisplay;
         public string SelectedTimeZone
         {
             get => _selectedTimeZone;
             set
             {
                 _selectedTimeZone = value;
+                _cachedTimeZoneDisplay = null;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(TimeZoneDisplay));
-                _service.UpdateTimeZone(value);
+                _ = _service.UpdateTimeZoneAsync(value).ContinueWith(t =>
+                    TM.App.Log($"[LocaleViewModel] 更新时区失败: {t.Exception?.InnerException?.Message}"),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
         }
 
@@ -73,17 +77,21 @@ namespace TM.Framework.User.Preferences.Locale
         {
             get
             {
+                if (_cachedTimeZoneDisplay != null)
+                    return _cachedTimeZoneDisplay;
+
                 try
                 {
                     var tz = TimeZoneInfo.FindSystemTimeZoneById(SelectedTimeZone);
                     var offset = tz.BaseUtcOffset;
-                    return $"UTC{(offset >= TimeSpan.Zero ? "+" : "")}{offset.TotalHours:F1}";
+                    _cachedTimeZoneDisplay = $"UTC{(offset >= TimeSpan.Zero ? "+" : "")}{offset.TotalHours:F1}";
                 }
                 catch (Exception ex)
                 {
                     DebugLogOnce(nameof(TimeZoneDisplay), ex);
-                    return "UTC+8.0";
+                    _cachedTimeZoneDisplay = "UTC+8.0";
                 }
+                return _cachedTimeZoneDisplay;
             }
         }
 
@@ -96,7 +104,9 @@ namespace TM.Framework.User.Preferences.Locale
                 _selectedDateFormat = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(DateFormatPreview));
-                _service.UpdateDateFormat(value);
+                _ = _service.UpdateDateFormatAsync(value).ContinueWith(t =>
+                    TM.App.Log($"[LocaleViewModel] 更新日期格式失败: {t.Exception?.InnerException?.Message}"),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
         }
 
@@ -113,7 +123,9 @@ namespace TM.Framework.User.Preferences.Locale
                 _selectedNumberFormat = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(NumberFormatPreview));
-                _service.UpdateNumberFormat(value);
+                _ = _service.UpdateNumberFormatAsync(value).ContinueWith(t =>
+                    TM.App.Log($"[LocaleViewModel] 更新数字格式失败: {t.Exception?.InnerException?.Message}"),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
         }
 
@@ -158,11 +170,18 @@ namespace TM.Framework.User.Preferences.Locale
             InitializeOptions();
             AsyncSettingsLoader.RunOrDefer(() =>
             {
-                var s = _settings.LoadSettings();
+                var tzList = TimeZoneInfo.GetSystemTimeZones()
+                    .Take(20).Select(tz => new TimeZoneItem { Id = tz.Id, DisplayName = tz.DisplayName }).ToArray();
+                return () => { AvailableTimeZones = new ObservableCollection<TimeZoneItem>(tzList); OnPropertyChanged(nameof(AvailableTimeZones)); };
+            }, "Locale_Tz");
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
+            {
+                var s = await _settings.LoadSettingsAsync().ConfigureAwait(false);
                 return () =>
                 {
                     _selectedLanguage = s.Language;
                     _selectedTimeZone = s.TimeZoneId;
+                    _cachedTimeZoneDisplay = null;
                     _selectedDateFormat = s.DateFormat;
                     _selectedNumberFormat = s.NumberFormat;
                     OnPropertyChanged(nameof(SelectedLanguage));
@@ -178,17 +197,8 @@ namespace TM.Framework.User.Preferences.Locale
 
         private void InitializeOptions()
         {
-            AvailableLanguages.Add(new LanguageItem { Code = "zh-CN", Name = "简体中文", Icon = "🇨🇳" });
-            AvailableLanguages.Add(new LanguageItem { Code = "en-US", Name = "English", Icon = "🇺🇸" });
-
-            foreach (var tz in TimeZoneInfo.GetSystemTimeZones().Take(20))
-            {
-                AvailableTimeZones.Add(new TimeZoneItem
-                {
-                    Id = tz.Id,
-                    DisplayName = tz.DisplayName
-                });
-            }
+            AvailableLanguages.Add(new LanguageItem { Code = "zh-CN", Name = "简体中文", Icon = "中" });
+            AvailableLanguages.Add(new LanguageItem { Code = "en-US", Name = "English", Icon = "EN" });
 
             AvailableDateFormats.Add("yyyy-MM-dd");
             AvailableDateFormats.Add("dd/MM/yyyy");
@@ -208,6 +218,7 @@ namespace TM.Framework.User.Preferences.Locale
 
                 _selectedLanguage = settings.Language;
                 _selectedTimeZone = settings.TimeZoneId;
+                _cachedTimeZoneDisplay = null;
                 _selectedDateFormat = settings.DateFormat;
                 _selectedNumberFormat = settings.NumberFormat;
 
@@ -233,7 +244,9 @@ namespace TM.Framework.User.Preferences.Locale
             var lang = AvailableLanguages.FirstOrDefault(l => l.Code == SelectedLanguage);
             if (lang != null)
             {
-                _service.UpdateLanguage(lang.Code, lang.Name);
+                _ = _service.UpdateLanguageAsync(lang.Code, lang.Name).ContinueWith(t =>
+                    TM.App.Log($"[LocaleViewModel] 更新语言失败: {t.Exception?.InnerException?.Message}"),
+                    TaskContinuationOptions.OnlyOnFaulted);
             }
         }
 
@@ -257,7 +270,7 @@ namespace TM.Framework.User.Preferences.Locale
             catch (Exception ex)
             {
                 TM.App.Log($"[LocaleViewModel] 重置失败: {ex.Message}");
-                GlobalToast.Error("重置失败", ex.Message);
+                GlobalToast.Error("重置失败", $"重置失败：{ex.Message}");
             }
         }
 
@@ -272,8 +285,11 @@ namespace TM.Framework.User.Preferences.Locale
 
                 if (result == true)
                 {
-                    _service.UpdateLanguage(SelectedLanguage, 
-                        AvailableLanguages.First(l => l.Code == SelectedLanguage).Name);
+                    _ = _service.UpdateLanguageAsync(SelectedLanguage,
+                        AvailableLanguages.First(l => l.Code == SelectedLanguage).Name)
+                        .ContinueWith(t =>
+                            TM.App.Log($"[LocaleViewModel] 保存语言设置失败: {t.Exception?.InnerException?.Message}"),
+                            TaskContinuationOptions.OnlyOnFaulted);
 
                     GlobalToast.Info("重启应用", "应用将在2秒后重启...");
                     TM.App.Log($"[LocaleViewModel] 准备重启应用以应用语言: {SelectedLanguage}");
@@ -301,7 +317,7 @@ namespace TM.Framework.User.Preferences.Locale
                             }
                             catch (Exception ex)
                             {
-                                GlobalToast.Error("重启失败", $"重启应用时出错：{ex.Message}");
+                                GlobalToast.Error("重启失败", $"重启失败：{ex.Message}");
                                 TM.App.Log($"[LocaleViewModel] 重启应用异常: {ex.Message}");
                             }
                         });
@@ -311,7 +327,7 @@ namespace TM.Framework.User.Preferences.Locale
             catch (Exception ex)
             {
                 TM.App.Log($"[LocaleViewModel] 应用语言失败: {ex.Message}");
-                GlobalToast.Error("应用失败", ex.Message);
+                GlobalToast.Error("应用失败", $"应用失败：{ex.Message}");
             }
         }
 

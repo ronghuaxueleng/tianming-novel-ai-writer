@@ -1,6 +1,4 @@
 using System;
-using System.IO;
-using System.Text.Json;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.User.Preferences.Display
@@ -21,33 +19,39 @@ namespace TM.Framework.User.Preferences.Display
         {
             if (_cachedSettings != null) return _cachedSettings;
 
-            LoadData();
             _cachedSettings = Data;
-            TM.App.Log("[DisplaySettings] loaded");
+            TM.App.Log("[DisplaySettings] loaded (from constructor default/async)");
             return _cachedSettings;
         }
 
         public bool SaveSettings(DisplayModel settings)
         {
-            try
-            {
-                settings.LastModified = DateTime.Now;
-                Data = settings;
-                SaveData();
-                _cachedSettings = settings;
-                TM.App.Log($"[DisplaySettings] 保存显示设置: 功能栏={settings.ShowFunctionBar}, 密度={settings.ListDensity}");
-                return true;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[DisplaySettings] 保存设置失败: {ex.Message}");
-                return false;
-            }
+            settings.LastModified = DateTime.Now;
+            Data = settings;
+            _cachedSettings = settings;
+            _ = SaveDataAsync();
+            TM.App.Log($"[DisplaySettings] 保存显示设置: 功能栏={settings.ShowFunctionBar}, 密度={settings.ListDensity}");
+            return true;
+        }
+
+        public async System.Threading.Tasks.Task<DisplayModel> LoadSettingsAsync()
+        {
+            if (_cachedSettings != null) return _cachedSettings;
+            await LoadDataAsync().ConfigureAwait(false);
+            _cachedSettings = Data;
+            TM.App.Log("[DisplaySettings] async loaded");
+            return _cachedSettings;
         }
 
         public DisplayModel GetCurrentSettings()
         {
             return _cachedSettings ?? LoadSettings();
+        }
+
+        public override void ResetToDefaults()
+        {
+            base.ResetToDefaults();
+            _cachedSettings = Data;
         }
 
         public void ClearCache()

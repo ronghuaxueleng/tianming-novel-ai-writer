@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+﻿using System.Text.RegularExpressions;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
 {

@@ -1,0 +1,12 @@
+[
+  {
+    "Id": "CSSBT_BUILTIN_1",
+    "Name": "短篇蓝图库",
+    "Icon": "Icon.Book",
+    "ParentCategory": null,
+    "Level": 1,
+    "Order": 1,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  }
+]

@@ -1,9 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Services.Modules.ProjectData.Models.Validation;
 
 namespace TM.Services.Modules.ProjectData.Interfaces
 {

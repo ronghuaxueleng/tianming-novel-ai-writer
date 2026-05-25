@@ -31,6 +31,10 @@ namespace TM.Services.Modules.ProjectData.Implementations.Tracking.Rules
             set => _abilityLossKeywords = value ?? new List<string>();
         }
 
+        public bool EnablePledgeConstraintCheck { get; set; }
+
+        public bool EnableDeadlineConstraintCheck { get; set; }
+
         public static LedgerRuleSet CreateUniversalDefault()
         {
             return new LedgerRuleSet
@@ -57,7 +61,9 @@ namespace TM.Services.Modules.ProjectData.Implementations.Tracking.Rules
                     ["Tier-5"] = 50
                 },
                 EnableAbilityLossRequiresEvent = false,
-                AbilityLossKeywords = new List<string>()
+                AbilityLossKeywords = new List<string>(),
+                EnablePledgeConstraintCheck = true,
+                EnableDeadlineConstraintCheck = true
             };
         }
     }

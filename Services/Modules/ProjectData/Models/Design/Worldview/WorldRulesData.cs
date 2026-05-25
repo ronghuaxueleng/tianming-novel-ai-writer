@@ -1,13 +1,18 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
+using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Models.Common;
 
 namespace TM.Services.Modules.ProjectData.Models.Design.Worldview
 {
-    public class WorldRulesData : BusinessDataBase, ICoreRuleSummaryProvider, IContextStringProvider
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public class WorldRulesData : BusinessDataBase, ICoreRuleSummaryProvider, IContextStringProvider, IDependencyTracked
     {
+        [JsonPropertyName("DependencyModuleVersions")]
+        public Dictionary<string, int> DependencyModuleVersions { get; set; } = new();
+
         #region Tab1: 核心设定（Rules）
 
         [JsonPropertyName("OneLineSummary")]

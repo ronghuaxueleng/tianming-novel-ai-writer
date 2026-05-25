@@ -3,13 +3,11 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
+using System.Threading;
 using System.Threading.Tasks;
 using TM.Framework.User.Profile.BasicInfo;
 using TM.Framework.User.Services;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Account.Login
 {
@@ -17,17 +15,24 @@ namespace TM.Framework.User.Account.Login
     {
         private readonly string _accountsFile;
         private readonly string _rememberedFile;
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
         private readonly ApiService _apiService;
         private readonly AuthTokenManager _authTokenManager;
         private readonly BasicInfoSettings _basicInfoSettings;
+        private readonly TM.Services.Framework.AI.BuiltInConfigSyncService _builtInConfigSync;
 
-        public LoginService(ApiService apiService, AuthTokenManager authTokenManager, BasicInfoSettings basicInfoSettings)
+        public LoginService(
+            ApiService apiService,
+            AuthTokenManager authTokenManager,
+            BasicInfoSettings basicInfoSettings,
+            TM.Services.Framework.AI.BuiltInConfigSyncService builtInConfigSync)
         {
             _accountsFile = StoragePathHelper.GetFilePath("Framework", "User/Account/Login", "accounts.json");
             _rememberedFile = StoragePathHelper.GetFilePath("Framework", "User/Account/Login", "remembered.json");
             _apiService = apiService;
             _authTokenManager = authTokenManager;
             _basicInfoSettings = basicInfoSettings;
+            _builtInConfigSync = builtInConfigSync;
         }
 
         public async Task<LoginVerifyResult> VerifyLoginAsync(string username, string password)
@@ -42,22 +47,37 @@ namespace TM.Framework.User.Account.Login
                 return new LoginVerifyResult { Success = false, ErrorMessage = "请输入密码" };
             }
 
-            var apiResult = await _apiService.LoginAsync(new TM.Framework.User.Services.LoginRequest
-            {
-                Username = username,
-                Password = password
-            });
+            const int maxRetries = 2;
+            ApiResponse<LoginResult>? apiResult = null;
 
-            if (apiResult.Success && apiResult.Data != null)
+            for (int attempt = 0; attempt <= maxRetries; attempt++)
+            {
+                apiResult = await _apiService.LoginAsync(new TM.Framework.User.Services.LoginRequest
+                {
+                    Username = username,
+                    Password = password
+                });
+
+                if (apiResult.Success || (apiResult.ErrorCode != ApiErrorCodes.NETWORK_ERROR && apiResult.ErrorCode != ApiErrorCodes.NETWORK_TIMEOUT))
+                    break;
+
+                if (attempt < maxRetries)
+                {
+                    TM.App.Log($"[LoginService] 网络失败，{attempt + 1}/{maxRetries} 次重试...");
+                    await Task.Delay(1000);
+                }
+            }
+
+            if (apiResult!.Success && apiResult.Data != null)
             {
                 _authTokenManager.SaveTokens(apiResult.Data);
 
                 var syncTask = SyncAccountToLocalAsync(username, password);
-                var switchTask = Task.Run(() =>
+                var switchTask = Task.Run(async () =>
                 {
                     try
                     {
-                        _basicInfoSettings.SwitchUser(username);
+                        await _basicInfoSettings.SwitchUserAsync(username).ConfigureAwait(false);
                     }
                     catch (Exception ex)
                     {
@@ -67,18 +87,32 @@ namespace TM.Framework.User.Account.Login
 
                 await Task.WhenAll(syncTask, switchTask);
 
+                try
+                {
+                    await _builtInConfigSync.SyncAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[LoginService] 天命模型配置同步异常: {ex.Message}");
+                }
+
                 TM.App.Log($"[LoginService] API登录成功: {username}");
                 return new LoginVerifyResult { Success = true };
             }
 
-            var errorMessage = apiResult.Message ?? "登录失败";
-
-            if (apiResult.ErrorCode == ApiErrorCodes.NETWORK_ERROR)
+            var errorMessage = apiResult.ErrorCode switch
             {
-                errorMessage = "网络连接失败，请检查网络后重试";
-            }
+                ApiErrorCodes.NETWORK_ERROR => "网络连接失败，请检查网络后重试",
+                ApiErrorCodes.NETWORK_TIMEOUT => "连接超时，请检查网络后重试",
+                ApiErrorCodes.SERVER_UNAVAILABLE => "服务器维护中，请稍后再试",
+                ApiErrorCodes.SERVER_ERROR => "服务器异常，请稍后再试",
+                ApiErrorCodes.RATE_LIMITED => "操作过于频繁，请稍后再试",
+                ApiErrorCodes.ACCOUNT_LOCKED => apiResult.Message ?? "账号已锁定，请稍后重试",
+                ApiErrorCodes.ACCOUNT_DISABLED => apiResult.Message ?? "账号已被禁用",
+                _ => apiResult.Message ?? "登录失败"
+            };
 
-            TM.App.Log($"[LoginService] 登录失败: {errorMessage} - {username}");
+            TM.App.Log($"[LoginService] 登录失败: [{apiResult.ErrorCode}] {errorMessage} - {username}");
             return new LoginVerifyResult { Success = false, ErrorMessage = errorMessage, ErrorCode = apiResult.ErrorCode };
         }
 
@@ -116,7 +150,7 @@ namespace TM.Framework.User.Account.Login
             }
         }
 
-        public async Task<LoginVerifyResult> CreateAccountAsync(string username, string password, string? licenseKey)
+        public async Task<LoginVerifyResult> CreateAccountAsync(string username, string password, string? licenseKey, string? inviteCode = null)
         {
             if (string.IsNullOrWhiteSpace(username))
             {
@@ -142,27 +176,32 @@ namespace TM.Framework.User.Account.Login
             {
                 Username = username,
                 Password = password,
-                CardKey = licenseKey ?? string.Empty
+                CardKey = licenseKey ?? string.Empty,
+                InviteCode = inviteCode
             });
 
             if (apiResult.Success && apiResult.Data != null)
             {
                 _authTokenManager.SaveTokens(apiResult.Data);
 
-                await SyncAccountToLocalAsync(username, password);
+                var syncTask = SyncAccountToLocalAsync(username, password);
+                var profileTask = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _basicInfoSettings.EnsureProfileExistsAsync(username).ConfigureAwait(false);
+                        await _basicInfoSettings.SwitchUserAsync(username).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[LoginService] 创建账号后初始化用户资料失败: {ex.Message}");
+                    }
+                });
 
-                try
-                {
-                    _basicInfoSettings.EnsureProfileExists(username);
-                    _basicInfoSettings.SwitchUser(username);
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[LoginService] 创建账号后初始化用户资料失败: {ex.Message}");
-                }
+                await Task.WhenAll(syncTask, profileTask);
 
                 TM.App.Log($"[LoginService] API注册成功: {username}");
-                return new LoginVerifyResult { Success = true };
+                return new LoginVerifyResult { Success = true, InviteCode = apiResult.Data.InviteCode };
             }
 
             var errorMessage = apiResult.Message ?? "注册失败";
@@ -186,7 +225,11 @@ namespace TM.Framework.User.Account.Login
         }
 
         public void SaveRememberedAccount(string username, bool rememberAccount, bool rememberPassword, string? encryptedPassword)
+            => _ = SaveRememberedAccountAsync(username, rememberAccount, rememberPassword, encryptedPassword);
+
+        public async System.Threading.Tasks.Task SaveRememberedAccountAsync(string username, bool rememberAccount, bool rememberPassword, string? encryptedPassword)
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var remembered = new RememberedAccount
@@ -199,9 +242,10 @@ namespace TM.Framework.User.Account.Login
                 };
 
                 var json = JsonSerializer.Serialize(remembered, JsonHelper.Default);
-                var tmpR = _rememberedFile + ".tmp";
-                File.WriteAllText(tmpR, json);
-                File.Move(tmpR, _rememberedFile, overwrite: true);
+                var tmp = _rememberedFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                var target = _rememberedFile;
+                await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                File.Move(tmp, target, overwrite: true);
 
                 TM.App.Log($"[LoginService] 已保存记住的账号: {username}");
             }
@@ -209,51 +253,10 @@ namespace TM.Framework.User.Account.Login
             {
                 TM.App.Log($"[LoginService] 保存记住账号失败: {ex.Message}");
             }
-        }
-
-        public string? GetRememberedAccount()
-        {
-            try
+            finally
             {
-                if (File.Exists(_rememberedFile))
-                {
-                    var json = File.ReadAllText(_rememberedFile);
-                    var remembered = JsonSerializer.Deserialize<RememberedAccount>(json);
-                    if (remembered?.RememberAccount == true && !string.IsNullOrWhiteSpace(remembered.Username))
-                    {
-                        return remembered.Username;
-                    }
-                }
+                _saveLock.Release();
             }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginService] 读取记住账号失败: {ex.Message}");
-            }
-
-            return null;
-        }
-
-        public RememberedAccount? GetRememberedAccountInfo()
-        {
-            try
-            {
-                if (!File.Exists(_rememberedFile))
-                    return null;
-
-                var json = File.ReadAllText(_rememberedFile);
-                var remembered = JsonSerializer.Deserialize<RememberedAccount>(json);
-                if (remembered == null)
-                    return null;
-
-                if (remembered.RememberAccount && !string.IsNullOrWhiteSpace(remembered.Username))
-                    return remembered;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginService] 读取记住账号失败: {ex.Message}");
-            }
-
-            return null;
         }
 
         public void ClearRememberedAccount()
@@ -288,33 +291,34 @@ namespace TM.Framework.User.Account.Login
             }
         }
 
-        public bool HasAnyAccount()
+        public async System.Threading.Tasks.Task<List<UserAccount>> GetAllAccountsAsync()
         {
-            var accounts = LoadAccounts();
-            return accounts.Count > 0;
+            var accounts = await LoadAccountsAsync().ConfigureAwait(false);
+            return accounts;
         }
 
-        public List<UserAccount> GetAllAccounts()
-        {
-            return LoadAccounts();
-        }
-
-        private List<UserAccount> LoadAccounts()
+        public async System.Threading.Tasks.Task<RememberedAccount?> GetRememberedAccountInfoAsync()
         {
             try
             {
-                if (File.Exists(_accountsFile))
-                {
-                    var json = File.ReadAllText(_accountsFile);
-                    return JsonSerializer.Deserialize<List<UserAccount>>(json) ?? new List<UserAccount>();
-                }
+                if (!File.Exists(_rememberedFile))
+                    return null;
+                var json = await File.ReadAllTextAsync(_rememberedFile).ConfigureAwait(false);
+                var remembered = JsonSerializer.Deserialize<RememberedAccount>(json);
+                if (remembered?.RememberAccount == true && !string.IsNullOrWhiteSpace(remembered.Username))
+                    return remembered;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[LoginService] 加载账号列表失败: {ex.Message}");
+                TM.App.Log($"[LoginService] 异步读取记住账号失败: {ex.Message}");
             }
+            return null;
+        }
 
-            return new List<UserAccount>();
+        public async System.Threading.Tasks.Task<string?> GetRememberedAccountAsync()
+        {
+            var info = await GetRememberedAccountInfoAsync().ConfigureAwait(false);
+            return info?.Username;
         }
 
         private async Task<List<UserAccount>> LoadAccountsAsync()
@@ -323,8 +327,8 @@ namespace TM.Framework.User.Account.Login
             {
                 if (File.Exists(_accountsFile))
                 {
-                    var json = await File.ReadAllTextAsync(_accountsFile);
-                    return JsonSerializer.Deserialize<List<UserAccount>>(json) ?? new List<UserAccount>();
+                    await using var stream = File.OpenRead(_accountsFile);
+                    return await JsonSerializer.DeserializeAsync<List<UserAccount>>(stream) ?? new List<UserAccount>();
                 }
             }
             catch (Exception ex)
@@ -335,30 +339,9 @@ namespace TM.Framework.User.Account.Login
             return new List<UserAccount>();
         }
 
-        private void SaveAccounts(List<UserAccount> accounts)
-        {
-            try
-            {
-                var directory = Path.GetDirectoryName(_accountsFile);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.Serialize(accounts, JsonHelper.Default);
-                var tmpA = _accountsFile + ".tmp";
-                File.WriteAllText(tmpA, json);
-                File.Move(tmpA, _accountsFile, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginService] 保存账号列表失败: {ex.Message}");
-                throw;
-            }
-        }
-
         private async System.Threading.Tasks.Task SaveAccountsAsync(List<UserAccount> accounts)
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var directory = Path.GetDirectoryName(_accountsFile);
@@ -367,15 +350,21 @@ namespace TM.Framework.User.Account.Login
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(accounts, JsonHelper.Default);
-                var tmpAa = _accountsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpAa, json);
+                var tmpAa = _accountsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpAa))
+                {
+                    await JsonSerializer.SerializeAsync(stream, accounts, JsonHelper.Default);
+                }
                 File.Move(tmpAa, _accountsFile, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginService] 异步保存账号列表失败: {ex.Message}");
                 throw;
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
 
@@ -401,5 +390,6 @@ namespace TM.Framework.User.Account.Login
         public bool Success { get; set; }
         public string? ErrorMessage { get; set; }
         public string? ErrorCode { get; set; }
+        public string? InviteCode { get; set; }
     }
 }

@@ -14,25 +14,27 @@ namespace TM.Framework.Common.Search
             if (string.IsNullOrEmpty(targetText))
                 return 0;
 
-            var target = targetText.ToLower();
-            var key = keyword.ToLower();
+            var cmp = StringComparison.OrdinalIgnoreCase;
 
-            if (target == key)
+            if (targetText.Equals(keyword, cmp))
                 return 10000;
 
-            if (target.StartsWith(key))
+            if (targetText.StartsWith(keyword, cmp))
                 return 5000;
 
-            if (target.Contains(key))
-                return 2000 + (100 - target.IndexOf(key));
+            var idx = targetText.IndexOf(keyword, cmp);
+            if (idx >= 0)
+                return 2000 + (100 - idx);
 
-            var words = target.Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
+            var targetLower = targetText.ToLower();
+            var keyLower = keyword.ToLower();
+            var words = targetLower.Split(new[] { ' ', '-', '_', '.' }, StringSplitOptions.RemoveEmptyEntries);
             var firstLetters = string.Join("", words.Select(w => w.Length > 0 ? w[0].ToString() : ""));
 
-            if (firstLetters.Contains(key))
+            if (firstLetters.Contains(keyLower, cmp))
                 return 500;
 
-            if (words.Any(w => ContainsAllChars(w, key)))
+            if (words.Any(w => ContainsAllChars(w, keyLower)))
                 return 300;
 
             if (additionalFields != null && additionalFields.Length > 0)
@@ -41,16 +43,15 @@ namespace TM.Framework.Common.Search
                 {
                     if (!string.IsNullOrEmpty(field))
                     {
-                        var fieldLower = field.ToLower();
-
-                        if (fieldLower == key)
+                        if (field.Equals(keyword, cmp))
                             return 800;
 
-                        if (fieldLower.StartsWith(key))
+                        if (field.StartsWith(keyword, cmp))
                             return 600;
 
-                        if (fieldLower.Contains(key))
-                            return 400 + (50 - Math.Min(fieldLower.IndexOf(key), 50));
+                        var fIdx = field.IndexOf(keyword, cmp);
+                        if (fIdx >= 0)
+                            return 400 + (50 - Math.Min(fIdx, 50));
                     }
                 }
             }
@@ -65,8 +66,8 @@ namespace TM.Framework.Common.Search
         }
 
         public static List<T> FilterAndSort<T>(
-            IEnumerable<T> items, 
-            string keyword, 
+            IEnumerable<T> items,
+            string keyword,
             Func<T, string> getTargetText,
             Func<T, string[]>? getAdditionalFields = null)
         {

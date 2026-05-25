@@ -1,5 +1,5 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Models.Common;
@@ -7,6 +7,7 @@ using TM.Services.Modules.ProjectData.Models.Design.Worldview;
 
 namespace TM.Services.Modules.ProjectData.Models.Generate.StrategicOutline
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class OutlineData : BusinessDataBase, ICoreRuleSummaryProvider, IDependencyTracked
     {
         [JsonPropertyName("DependencyModuleVersions")]
@@ -16,9 +17,6 @@ namespace TM.Services.Modules.ProjectData.Models.Generate.StrategicOutline
 
         [JsonPropertyName("TotalChapterCount")]
         public int TotalChapterCount { get; set; } = 0;
-
-        [JsonPropertyName("EstimatedWordCount")]
-        public string EstimatedWordCount { get; set; } = string.Empty;
 
         [JsonPropertyName("OneLineOutline")]
         public string OneLineOutline { get; set; } = string.Empty;

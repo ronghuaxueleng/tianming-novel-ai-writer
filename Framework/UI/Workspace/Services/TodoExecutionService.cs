@@ -1,9 +1,8 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Services.Framework.AI.SemanticKernel;
 
@@ -86,6 +85,8 @@ namespace TM.Framework.UI.Workspace.Services
 
         private async Task ExecuteAsync(Guid runId, ChatMode mode, IReadOnlyList<TodoExecutionTask> tasks, CancellationToken ct)
         {
+            using var _progressRunScope = GenerationProgressHub.BeginRun(runId);
+
             try
             {
                 Publish(new ExecutionEvent
@@ -182,7 +183,23 @@ namespace TM.Framework.UI.Workspace.Services
                         {
                             throw;
                         }
-                        catch (Exception ex) when (attempt < MaxRetries && !ex.Message.Contains("已达到最大重写次数"))
+                        catch (PolishFatalException pfx)
+                        {
+                            Publish(new ExecutionEvent
+                            {
+                                RunId = runId,
+                                Mode = mode,
+                                EventType = ExecutionEventType.ToolCallFailed,
+                                StepIndex = stepIndex,
+                                Title = task.Title,
+                                Detail = pfx.Message,
+                                PluginName = task.PluginName,
+                                FunctionName = task.FunctionName,
+                                Succeeded = false
+                            });
+                            throw;
+                        }
+                        catch (Exception ex) when (attempt < MaxRetries && ex is not ManualInterventionRequiredException)
                         {
                             TM.App.Log($"[TodoExecutionService] 步骤 {stepIndex} 第{attempt + 1}次尝试失败，将重试: {ex.Message}");
                         }
@@ -202,6 +219,7 @@ namespace TM.Framework.UI.Workspace.Services
                             });
                             failed++;
                             TM.App.Log($"[TodoExecutionService] 步骤 {stepIndex} 经{MaxRetries + 1}次尝试仍失败，中断后续执行: {ex.Message}");
+                            break;
                         }
                     }
 
@@ -219,6 +237,10 @@ namespace TM.Framework.UI.Workspace.Services
                     Title = $"完成：{completed} 成功，{failed} 失败",
                     Succeeded = failed == 0
                 });
+
+                GenerationProgressHub.ReportPhase(
+                    failed == 0 ? ProgressPhase.Done : ProgressPhase.Failed,
+                    $"完成：{completed} 成功，{failed} 失败");
             }
             catch (OperationCanceledException)
             {
@@ -230,6 +252,21 @@ namespace TM.Framework.UI.Workspace.Services
                     Title = "已取消",
                     Succeeded = false
                 });
+                GenerationProgressHub.ReportPhase(ProgressPhase.Cancelled, "已取消");
+            }
+            catch (PolishFatalException pfx)
+            {
+                TM.App.Log($"[TodoExecutionService] 润色终止落盘，清除所有剩余任务: {pfx.Message}");
+                Publish(new ExecutionEvent
+                {
+                    RunId = runId,
+                    Mode = mode,
+                    EventType = ExecutionEventType.RunFailed,
+                    Title = $"润色终止落盘: {pfx.Message}",
+                    Succeeded = false,
+                    IsPolishFatal = true
+                });
+                GenerationProgressHub.ReportPhase(ProgressPhase.Failed, $"润色终止落盘: {pfx.Message}");
             }
             catch (Exception ex)
             {
@@ -241,6 +278,7 @@ namespace TM.Framework.UI.Workspace.Services
                     Title = $"失败: {ex.Message}",
                     Succeeded = false
                 });
+                GenerationProgressHub.ReportPhase(ProgressPhase.Failed, $"失败: {ex.Message}");
             }
             finally
             {
@@ -257,6 +295,7 @@ namespace TM.Framework.UI.Workspace.Services
 
         private static void Publish(ExecutionEvent evt)
         {
+            evt.RunType = TM.Services.Framework.AI.SemanticKernel.RunType.Execution;
             ExecutionEventHub.Publish(evt);
         }
     }

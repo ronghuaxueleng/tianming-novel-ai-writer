@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Text;
 using System.Text.RegularExpressions;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
@@ -7,6 +7,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
 {
     public class PlanStepParser : IPlanParser
     {
+        private static readonly Regex StepLineRegex = new(@"^\s*\d+[\.、]", RegexOptions.Multiline | RegexOptions.Compiled);
+
         private static readonly Regex StepPattern = new(
             @"^[\*\s]*\*?\*?" +
             @"(?:" +
@@ -84,9 +86,9 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
             if (string.IsNullOrEmpty(content))
                 return 0;
 
-            if (!content.Contains("步骤") && !content.Contains("计划") && 
+            if (!content.Contains("步骤") && !content.Contains("计划") &&
                 !content.Contains("Step") && !content.Contains("**目标**") &&
-                !Regex.IsMatch(content, @"^\s*\d+[\.、]", RegexOptions.Multiline))
+                !StepLineRegex.IsMatch(content))
             {
                 return 0;
             }

@@ -1,8 +1,8 @@
 <Window x:Class="TM.Framework.User.Account.Login.SplashWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
-        Title="天命 - 启动中" 
+        UseLayoutRounding="True"
+        Title="天命 - 启动中"
         SizeToContent="Height"
         Width="520"
         WindowStyle="None"
@@ -14,14 +14,14 @@
         Topmost="True"
         Loaded="Window_Loaded">
 
-    <Border Background="{DynamicResource Surface}" 
-            CornerRadius="12" 
-            BorderBrush="{DynamicResource BorderBrush}" 
+    <Border Background="{DynamicResource DialogGlass}"
+            CornerRadius="12"
+            BorderBrush="{DynamicResource GlassBorderBrush}"
             BorderThickness="1"
             Margin="12"
             SnapsToDevicePixels="True">
         <Border.Effect>
-            <DropShadowEffect ShadowDepth="0" BlurRadius="12" Opacity="0.25" Color="Black" RenderingBias="Quality"/>
+            <DropShadowEffect ShadowDepth="0" BlurRadius="12" Opacity="0.25" Color="Black" RenderingBias="Performance"/>
         </Border.Effect>
 
         <Grid Margin="20">
@@ -32,14 +32,16 @@
             </Grid.RowDefinitions>
 
             <StackPanel Grid.Row="0" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,0,0,8">
-                <Border x:Name="AppIconBorder"
-                        Width="30" Height="30"
+                <Border Width="30" Height="30"
                         CornerRadius="7"
-                        ClipToBounds="True"
-                        Margin="0,0,12,0" />
-                <emoji:TextBlock x:Name="FallbackIconTextBlock" Text="🚀" FontSize="28" Margin="0,0,12,0" Visibility="Collapsed"/>
-                <TextBlock Text="天命正在启动..." 
-                           FontSize="20" 
+                        Margin="0,0,12,0">
+                    <Border x:Name="AppIconBorder"
+                            CornerRadius="7"
+                            ClipToBounds="True" />
+                </Border>
+                <Image x:Name="FallbackIconImage" Source="{DynamicResource Icon.Rocket}" Width="28" Height="28" Margin="0,0,12,0" Visibility="Collapsed"/>
+                <TextBlock Text="天命正在启动..."
+                           FontSize="20"
                            FontWeight="SemiBold"
                            Foreground="{DynamicResource TextPrimary}"
                            VerticalAlignment="Center"/>
@@ -51,7 +53,7 @@
                              Minimum="0"
                              Maximum="100"
                              Value="0"
-                             Background="{DynamicResource ContentBackground}"
+                             Background="{DynamicResource ContentBackgroundGlass}"
                              Foreground="{DynamicResource PrimaryColor}"
                              BorderThickness="0">
                     <ProgressBar.Style>
@@ -60,7 +62,7 @@
                                 <Setter.Value>
                                     <ControlTemplate TargetType="ProgressBar">
                                         <Grid>
-                                            <Border Background="{TemplateBinding Background}" 
+                                            <Border Background="{TemplateBinding Background}"
                                                     CornerRadius="5"/>
                                             <Border x:Name="PART_Track" CornerRadius="5">
                                                 <Border x:Name="PART_Indicator"

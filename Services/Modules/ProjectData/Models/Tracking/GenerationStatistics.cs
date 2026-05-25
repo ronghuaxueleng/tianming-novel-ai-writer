@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -18,12 +18,12 @@ namespace TM.Services.Modules.ProjectData.Models.Tracking
         [JsonPropertyName("RewriteDistribution")] public Dictionary<int, int> RewriteDistribution { get; set; } = new();
         [JsonPropertyName("ConsistencyIssues")] public ConsistencyIssueStatistics ConsistencyIssues { get; set; } = new();
 
-        public double FirstPassRate => TotalGenerations > 0 
-            ? (double)FirstPassCount / TotalGenerations * 100 
+        public double FirstPassRate => TotalGenerations > 0
+            ? (double)FirstPassCount / TotalGenerations * 100
             : 0;
 
-        public double FinalPassRate => TotalGenerations > 0 
-            ? (double)(FirstPassCount + RewritePassCount) / TotalGenerations * 100 
+        public double FinalPassRate => TotalGenerations > 0
+            ? (double)(FirstPassCount + RewritePassCount) / TotalGenerations * 100
             : 0;
 
         public double AverageRewriteCount

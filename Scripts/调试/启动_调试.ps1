@@ -1,7 +1,9 @@
-# 天命 - 调试模式启动脚本
+﻿# 天命 - 调试模式启动脚本
 # PowerShell版本，更稳定可靠
 
 # 设置控制台编码和颜色
+# 同时切换控制台代码页为 65001(UTF-8)，与下面的 OutputEncoding 对齐，否则中文乱码
+chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $Host.UI.RawUI.ForegroundColor = "Green"
 

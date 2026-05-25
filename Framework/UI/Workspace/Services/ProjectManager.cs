@@ -7,9 +7,8 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Threading;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
+using TM.Framework.UI.Helpers;
 using TM.Services.Modules.ProjectData.Implementations;
-using TM.Services.Framework.AI.SemanticKernel;
 
 namespace TM.Framework.UI.Workspace.Services
 {
@@ -61,8 +60,6 @@ namespace TM.Framework.UI.Workspace.Services
         public event Action<ProjectInfo>? ProjectSwitched;
         public event Action? ProjectListChanged;
 
-        private volatile bool _isConfigLoaded;
-
         public ProjectManager()
         {
             _projectsRoot = Path.Combine(StoragePathHelper.GetStorageRoot(), "Projects");
@@ -70,15 +67,20 @@ namespace TM.Framework.UI.Workspace.Services
 
             EnsureDirectoryExists(_projectsRoot);
             _config = new ProjectConfig();
-            LoadConfig();
-            _isConfigLoaded = true;
-            _ = LoadConfigAsync();
+        }
+
+        private int _initialized;
+
+        public async Task InitializeAsync()
+        {
+            if (Interlocked.Exchange(ref _initialized, 1) == 1) return;
+            await LoadConfigAsync();
         }
 
         #region 属性
 
-        public ProjectInfo? CurrentProject => _config?.CurrentProject != null 
-            ? _config.Projects.Find(p => p.Id == _config.CurrentProject) 
+        public ProjectInfo? CurrentProject => _config?.CurrentProject != null
+            ? _config.Projects.Find(p => p.Id == _config.CurrentProject)
             : null;
 
         public List<ProjectInfo> Projects => _config?.Projects ?? new List<ProjectInfo>();
@@ -147,7 +149,7 @@ namespace TM.Framework.UI.Workspace.Services
 
             if (Directory.Exists(project.Path))
             {
-                Directory.Delete(project.Path, true);
+                await System.Threading.Tasks.Task.Run(() => Directory.Delete(project.Path, true)).ConfigureAwait(true);
             }
 
             _config?.Projects.Remove(project);
@@ -159,7 +161,6 @@ namespace TM.Framework.UI.Workspace.Services
                 if (nextProject != null)
                 {
                     StoragePathHelper.CurrentProjectName = Path.GetFileName(nextProject.Path);
-                    ServiceLocator.Get<VectorSearchService>().ClearIndex();
                     ProjectSwitched?.Invoke(nextProject);
                 }
             }
@@ -194,7 +195,7 @@ namespace TM.Framework.UI.Workspace.Services
 
                 try
                 {
-                    Directory.Move(oldPath, newPath);
+                    await System.Threading.Tasks.Task.Run(() => Directory.Move(oldPath, newPath)).ConfigureAwait(true);
                 }
                 catch (Exception ex)
                 {
@@ -211,7 +212,6 @@ namespace TM.Framework.UI.Workspace.Services
             if (_config?.CurrentProject == projectId)
             {
                 StoragePathHelper.CurrentProjectName = Path.GetFileName(project.Path);
-                ServiceLocator.Get<VectorSearchService>().ClearIndex();
             }
 
             await SaveConfigAsync();
@@ -249,7 +249,9 @@ namespace TM.Framework.UI.Workspace.Services
 
         private async Task ExecuteSwitchAsync(string projectId)
         {
-            _switchCts?.Cancel();
+            var oldSwitchCts = _switchCts;
+            oldSwitchCts?.Cancel();
+            oldSwitchCts?.Dispose();
             var cts = new CancellationTokenSource();
             _switchCts = cts;
 
@@ -263,58 +265,69 @@ namespace TM.Framework.UI.Workspace.Services
                 var project = _config?.Projects.Find(p => p.Id == projectId);
                 if (project == null) return;
 
+                if (!await BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSessionAsync(null))
+                    return;
+
                 cts.Token.ThrowIfCancellationRequested();
 
                 if (_config != null)
                 {
                     _config.CurrentProject = projectId;
 
-                    await Task.Run(async () =>
-                    {
-                        await SaveConfigAsync();
-                    }, cts.Token);
+                    await SaveConfigAsync();
                 }
 
                 cts.Token.ThrowIfCancellationRequested();
 
                 UpdateProjectCache(projectId);
 
-                try
+                async Task SafeFlushGuideAsync()
                 {
-                    var guideManager = ServiceLocator.Get<GuideManager>();
-                    var flushTask = guideManager.FlushAllAsync();
-                    await Task.WhenAny(flushTask, Task.Delay(3000, cts.Token));
+                    try
+                    {
+                        var guideManager = ServiceLocator.Get<GuideManager>();
+                        await Task.WhenAny(guideManager.FlushAllAsync(), Task.Delay(3000, cts.Token));
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[ProjectManager] 切换前Guide刷盘失败（忽略）: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
+                async Task SafeFlushChapterAsync()
                 {
-                    TM.App.Log($"[ProjectManager] 切换前Guide刷盘失败（忽略）: {ex.Message}");
+                    try
+                    {
+                        var chapterPersistence = ServiceLocator.Get<CurrentChapterPersistenceService>();
+                        await Task.WhenAny(chapterPersistence.FlushPendingAsync(), Task.Delay(1000, cts.Token));
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[ProjectManager] 切换前章节状态刷盘失败（忽略）: {ex.Message}");
+                    }
                 }
-
-                try
+                async Task SafeFlushValidationSummaryAsync()
                 {
-                    var chapterPersistence = ServiceLocator.Get<CurrentChapterPersistenceService>();
-                    var flushTask = chapterPersistence.FlushPendingAsync();
-                    await Task.WhenAny(flushTask, Task.Delay(1000, cts.Token));
+                    try
+                    {
+                        var vss = ServiceLocator.TryGet<TM.Services.Modules.ProjectData.Interfaces.IValidationSummaryService>();
+                        if (vss != null)
+                            await Task.WhenAny(vss.FlushPendingAsync(cts.Token), Task.Delay(1000, cts.Token));
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[ProjectManager] 切换前校验汇总刷盘失败（忽略）: {ex.Message}");
+                    }
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[ProjectManager] 切换前章节状态刷盘失败（忽略）: {ex.Message}");
-                }
+                await Task.WhenAll(SafeFlushGuideAsync(), SafeFlushChapterAsync(), SafeFlushValidationSummaryAsync());
 
                 StoragePathHelper.CurrentProjectName = Path.GetFileName(project.Path);
-                ServiceLocator.Get<VectorSearchService>().ClearIndex();
-
-                _ = Task.Run(async () =>
-                {
-                    try { await ServiceLocator.Get<VectorSearchService>().InitializeAsync(); }
-                    catch (Exception ex) { TM.App.Log($"[ProjectManager] 切换后向量索引重建失败: {ex.Message}"); }
-                });
 
                 _ = Task.Run(async () =>
                 {
                     try { await ServiceLocator.Get<ConsistencyReconciler>().ReconcileAsync(); }
+                    catch (OperationCanceledException) { }
                     catch (Exception ex) { TM.App.Log($"[ProjectManager] 切换后对账失败: {ex.Message}"); }
-                });
+                }, cts.Token);
 
                 ProjectSwitched?.Invoke(project);
             }
@@ -375,64 +388,14 @@ namespace TM.Framework.UI.Workspace.Services
 
         #region 配置管理
 
-        private void LoadConfig()
+        private async Task LoadConfigAsync()
         {
             try
             {
                 if (File.Exists(_configPath))
                 {
-                    var json = File.ReadAllText(_configPath);
-                    _config = JsonSerializer.Deserialize<ProjectConfig>(json, JsonOptions);
-                }
-
-                _config ??= new ProjectConfig();
-
-                if (_config.Projects.Count == 0)
-                {
-                    var defaultProject = new ProjectInfo
-                    {
-                        Id = "default",
-                        Name = "默认项目",
-                        Description = "默认创作项目",
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        Path = Path.Combine(_projectsRoot, "默认项目")
-                    };
-
-                    EnsureDirectoryExists(defaultProject.Path);
-                    _config.Projects.Add(defaultProject);
-                    _config.CurrentProject = defaultProject.Id;
-
-                    _ = SaveConfigAsync();
-                }
-
-                var currentProject = CurrentProject;
-                if (currentProject != null && !string.IsNullOrWhiteSpace(currentProject.Path))
-                {
-                    StoragePathHelper.CurrentProjectName = Path.GetFileName(currentProject.Path);
-                    TM.App.Log($"[ProjectManager] 启动时同步当前项目: {currentProject.Name}");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ProjectManager] 加载配置失败: {ex.Message}");
-                _config = new ProjectConfig();
-            }
-        }
-
-        private async System.Threading.Tasks.Task LoadConfigAsync()
-        {
-            try
-            {
-                if (_isConfigLoaded)
-                {
-                    return;
-                }
-
-                if (File.Exists(_configPath))
-                {
-                    var json = await File.ReadAllTextAsync(_configPath);
-                    _config = JsonSerializer.Deserialize<ProjectConfig>(json, JsonOptions);
+                    await using var stream = File.OpenRead(_configPath);
+                    _config = await JsonSerializer.DeserializeAsync<ProjectConfig>(stream, JsonOptions);
                 }
 
                 _config ??= new ProjectConfig();
@@ -462,12 +425,10 @@ namespace TM.Framework.UI.Workspace.Services
                     StoragePathHelper.CurrentProjectName = Path.GetFileName(currentProject.Path);
                     TM.App.Log($"[ProjectManager] 启动时同步当前项目: {currentProject.Name}");
                 }
-
-                _isConfigLoaded = true;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProjectManager] 异步加载配置失败: {ex.Message}");
+                TM.App.Log($"[ProjectManager] 加载配置失败: {ex.Message}");
                 _config = new ProjectConfig();
             }
         }
@@ -483,9 +444,11 @@ namespace TM.Framework.UI.Workspace.Services
                     EnsureDirectoryExists(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_config, JsonOptions);
                 var tmp = _configPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                await File.WriteAllTextAsync(tmp, json);
+                await using (var stream = File.Create(tmp))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _config, JsonOptions);
+                }
                 File.Move(tmp, _configPath, overwrite: true);
             }
             catch (Exception ex)

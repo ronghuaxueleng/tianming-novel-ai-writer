@@ -1,19 +1,18 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
     public class KeywordChapterIndexService
     {
-        private Dictionary<string, List<string>>? _index;
+        private Dictionary<string, HashSet<string>>? _index;
+        private Dictionary<string, List<string>>? _indexOrder;
         private readonly SemaphoreSlim _lock = new(1, 1);
         private bool _dirty;
         private volatile bool _pendingInvalidation;
@@ -30,7 +29,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private const int MaxChaptersPerKeyword = 50;
+        private static int MaxChaptersPerKeyword => LayeredContextConfig.KeywordIndexMaxChaptersPerTerm;
 
         private static readonly JsonSerializerOptions _jsonOptions = new()
         {
@@ -46,10 +45,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var keywords = ExtractKeywords(changes);
             if (keywords.Count == 0) return;
 
-            await _lock.WaitAsync();
+            await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await EnsureLoadedAsync();
+                await EnsureLoadedAsync().ConfigureAwait(false);
 
                 foreach (var kw in keywords)
                 {
@@ -58,20 +57,25 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                     if (!_index!.TryGetValue(key, out var chapters))
                     {
-                        chapters = new List<string>();
+                        chapters = new HashSet<string>(StringComparer.Ordinal);
                         _index[key] = chapters;
+                        _indexOrder![key] = new List<string>();
                     }
 
-                    if (!chapters.Contains(chapterId))
+                    var order = _indexOrder![key];
+                    if (chapters.Add(chapterId))
                     {
-                        chapters.Add(chapterId);
-                        if (chapters.Count > MaxChaptersPerKeyword)
-                            chapters.RemoveRange(0, chapters.Count - MaxChaptersPerKeyword);
+                        order.Add(chapterId);
+                        while (order.Count > MaxChaptersPerKeyword)
+                        {
+                            chapters.Remove(order[0]);
+                            order.RemoveAt(0);
+                        }
                     }
                 }
 
                 _dirty = true;
-                await SaveAsync();
+                await SaveAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -86,10 +90,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var kwList = keywords?.ToList() ?? new List<string>();
             if (kwList.Count == 0) return new List<string>();
 
-            await _lock.WaitAsync();
+            await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await EnsureLoadedAsync();
+                await EnsureLoadedAsync().ConfigureAwait(false);
 
                 var hitCount = new Dictionary<string, int>(StringComparer.Ordinal);
                 foreach (var kw in kwList)
@@ -120,10 +124,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             if (string.IsNullOrEmpty(chapterId)) return;
 
-            await _lock.WaitAsync();
+            await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await EnsureLoadedAsync();
+                await EnsureLoadedAsync().ConfigureAwait(false);
 
                 var modified = false;
                 foreach (var chapters in _index!.Values)
@@ -135,7 +139,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 if (modified)
                 {
                     _dirty = true;
-                    await SaveAsync();
+                    await SaveAsync().ConfigureAwait(false);
                 }
             }
             finally
@@ -146,10 +150,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<HashSet<string>> GetIndexedChapterIdsAsync()
         {
-            await _lock.WaitAsync();
+            await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await EnsureLoadedAsync();
+                await EnsureLoadedAsync().ConfigureAwait(false);
                 var result = new HashSet<string>(StringComparer.Ordinal);
                 foreach (var chapters in _index!.Values)
                     result.UnionWith(chapters);
@@ -168,10 +172,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var kwList = keywords.Where(k => !string.IsNullOrWhiteSpace(k)).ToList();
             if (kwList.Count == 0) return;
 
-            await _lock.WaitAsync();
+            await _lock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await EnsureLoadedAsync();
+                await EnsureLoadedAsync().ConfigureAwait(false);
 
                 foreach (var kw in kwList)
                 {
@@ -180,20 +184,25 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                     if (!_index!.TryGetValue(key, out var chapters))
                     {
-                        chapters = new List<string>();
+                        chapters = new HashSet<string>(StringComparer.Ordinal);
                         _index[key] = chapters;
+                        _indexOrder![key] = new List<string>();
                     }
 
-                    if (!chapters.Contains(chapterId))
+                    var order = _indexOrder![key];
+                    if (chapters.Add(chapterId))
                     {
-                        chapters.Add(chapterId);
-                        if (chapters.Count > MaxChaptersPerKeyword)
-                            chapters.RemoveRange(0, chapters.Count - MaxChaptersPerKeyword);
+                        order.Add(chapterId);
+                        while (order.Count > MaxChaptersPerKeyword)
+                        {
+                            chapters.Remove(order[0]);
+                            order.RemoveAt(0);
+                        }
                     }
                 }
 
                 _dirty = true;
-                await SaveAsync();
+                await SaveAsync().ConfigureAwait(false);
             }
             finally
             {
@@ -220,17 +229,74 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     result.Add(c.CharacterId);
 
             foreach (var p in changes.NewPlotPoints ?? new())
+            {
                 foreach (var kw in p.Keywords ?? new())
                     if (!string.IsNullOrWhiteSpace(kw))
                         result.Add(kw);
+                foreach (var charId in p.InvolvedCharacters ?? new())
+                    if (!string.IsNullOrWhiteSpace(charId))
+                        result.Add(charId);
+            }
 
             foreach (var f in changes.ForeshadowingActions ?? new())
                 if (!string.IsNullOrWhiteSpace(f.ForeshadowId))
                     result.Add(f.ForeshadowId);
 
             foreach (var item in changes.ItemTransfers ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(item.ItemId))
+                    result.Add(item.ItemId);
                 if (!string.IsNullOrWhiteSpace(item.ItemName))
                     result.Add(item.ItemName);
+            }
+
+            foreach (var sr in changes.SecretRevealChanges ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(sr.SecretId))
+                    result.Add(sr.SecretId);
+                if (!string.IsNullOrWhiteSpace(sr.SecretName))
+                    result.Add(sr.SecretName);
+            }
+
+            foreach (var pc in changes.PledgeConstraintChanges ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(pc.PledgeId))
+                    result.Add(pc.PledgeId);
+                if (!string.IsNullOrWhiteSpace(pc.PledgeName))
+                    result.Add(pc.PledgeName);
+            }
+
+            foreach (var dc in changes.DeadlineConstraintChanges ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(dc.DeadlineId))
+                    result.Add(dc.DeadlineId);
+                if (!string.IsNullOrWhiteSpace(dc.DeadlineName))
+                    result.Add(dc.DeadlineName);
+            }
+
+            foreach (var loc in changes.LocationStateChanges ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(loc.LocationId))
+                    result.Add(loc.LocationId);
+                if (!string.IsNullOrWhiteSpace(loc.LocationName))
+                    result.Add(loc.LocationName);
+            }
+
+            foreach (var fac in changes.FactionStateChanges ?? new())
+                if (!string.IsNullOrWhiteSpace(fac.FactionId))
+                    result.Add(fac.FactionId);
+
+            foreach (var conf in changes.ConflictProgress ?? new())
+                if (!string.IsNullOrWhiteSpace(conf.ConflictId))
+                    result.Add(conf.ConflictId);
+
+            foreach (var mov in changes.CharacterMovements ?? new())
+            {
+                if (!string.IsNullOrWhiteSpace(mov.CharacterId))
+                    result.Add(mov.CharacterId);
+                if (!string.IsNullOrWhiteSpace(mov.ToLocationName))
+                    result.Add(mov.ToLocationName);
+            }
 
             return result.ToList();
         }
@@ -245,6 +311,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (_pendingInvalidation)
             {
                 _index = null;
+                _indexOrder = null;
                 _pendingInvalidation = false;
             }
             if (_index != null) return;
@@ -252,22 +319,35 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var path = GetIndexFilePath();
             if (!File.Exists(path))
             {
-                _index = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                _index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+                _indexOrder = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
                 return;
             }
 
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                var raw = JsonSerializer.Deserialize<Dictionary<string, List<string>>>(json, _jsonOptions);
-                _index = raw != null
-                    ? new Dictionary<string, List<string>>(raw, StringComparer.OrdinalIgnoreCase)
-                    : new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                await using var stream = File.OpenRead(path);
+                var raw = await JsonSerializer.DeserializeAsync<Dictionary<string, List<string>>>(stream, _jsonOptions).ConfigureAwait(false);
+                if (raw != null)
+                {
+                    _indexOrder = new Dictionary<string, List<string>>(
+                        raw.ToDictionary(kv => kv.Key, kv => new List<string>(kv.Value)),
+                        StringComparer.OrdinalIgnoreCase);
+                    _index = new Dictionary<string, HashSet<string>>(
+                        raw.ToDictionary(kv => kv.Key, kv => new HashSet<string>(kv.Value, StringComparer.Ordinal)),
+                        StringComparer.OrdinalIgnoreCase);
+                }
+                else
+                {
+                    _index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+                    _indexOrder = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[KeywordIndex] 加载失败，使用空索引: {ex.Message}");
-                _index = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+                _index = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
+                _indexOrder = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
             }
         }
 
@@ -280,12 +360,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Directory.CreateDirectory(dir);
 
             var path = GetIndexFilePath();
-            var tmpPath = path + ".tmp";
+            var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
             try
             {
-                var json = JsonSerializer.Serialize(_index, _jsonOptions);
-                await File.WriteAllTextAsync(tmpPath, json);
+                await using (var stream = File.Create(tmpPath))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _indexOrder ?? new(), _jsonOptions).ConfigureAwait(false);
+                }
                 File.Move(tmpPath, path, overwrite: true);
                 _dirty = false;
             }

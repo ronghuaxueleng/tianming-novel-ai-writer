@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -6,6 +6,7 @@ using System.Windows.Controls;
 namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class InlineEditPopup : UserControl
     {
         public event Action? PopupClosed;

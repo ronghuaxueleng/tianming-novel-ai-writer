@@ -2,14 +2,13 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
-using TM.Framework.Common.Helpers;
 using TM.Services.Modules.ProjectData.Models.Tracking;
-using static TM.Services.Modules.ProjectData.Models.Tracking.FactSnapshot;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
     public class ContentEntityExtractor
     {
+        private static readonly Regex QuotedDialogueRegex = new(@"[""\u201c]([^""\u201d]{1,10}?)[""\u201d](?:说|道|问|答|笑|喊|叫|骂)", RegexOptions.Compiled);
         private readonly HashSet<string> _knownEntityNames;
 
         public ContentEntityExtractor(FactSnapshot factSnapshot)
@@ -59,7 +58,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     entities.Add(name);
             }
 
-            var quotedNames = Regex.Matches(content, @"[""]([^""]{1,10}?)[""](?:说|道|问|答|笑|喊|叫|骂)");
+            var quotedNames = QuotedDialogueRegex.Matches(content);
             foreach (Match m in quotedNames)
             {
                 var potentialName = m.Groups[1].Value.Trim();
@@ -90,7 +89,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var commonWords = new HashSet<string>
             {
                 "什么", "怎么", "为什么", "这个", "那个", "他们", "我们", "你们",
-                "是的", "不是", "好的", "可以", "没有", "知道", "应该", "可能"
+                "是的", "不是", "好的", "可以", "没有", "知道", "应该", "可能",
+                "不要", "不行", "别怕", "等等", "快走", "住手", "小心", "闭嘴",
+                "是谁", "哪里", "如今", "现在", "以后", "罢了", "够了", "真的",
+                "假的", "原来", "如此", "当然", "不必", "不许", "不能", "为何"
             };
 
             return !commonWords.Contains(text);

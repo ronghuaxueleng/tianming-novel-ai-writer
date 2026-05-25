@@ -4,6 +4,7 @@
              Width="48" Height="48">
 
     <UserControl.Resources>
+
         <Storyboard x:Key="SpinnerAnimation" RepeatBehavior="Forever">
             <DoubleAnimation Storyboard.TargetName="SpinnerEllipse"
                            Storyboard.TargetProperty="(UIElement.RenderTransform).(RotateTransform.Angle)"
@@ -42,9 +43,10 @@
     </UserControl.Resources>
 
     <Grid x:Name="RootGrid">
-        <Ellipse x:Name="SpinnerEllipse" 
-                 Stroke="{DynamicResource PrimaryColor}" 
-                 StrokeThickness="4" 
+
+        <Ellipse x:Name="SpinnerEllipse"
+                 Stroke="{DynamicResource PrimaryColor}"
+                 StrokeThickness="4"
                  StrokeDashArray="6 4"
                  RenderTransformOrigin="0.5,0.5"
                  Visibility="Collapsed">
@@ -73,9 +75,9 @@
                  StrokeThickness="6"
                  Visibility="Collapsed"/>
 
-        <TextBlock x:Name="PlaceholderText" 
-                   Text="Loading..." 
-                   HorizontalAlignment="Center" 
+        <TextBlock x:Name="PlaceholderText"
+                   Text="Loading..."
+                   HorizontalAlignment="Center"
                    VerticalAlignment="Center"
                    Visibility="Collapsed"/>
     </Grid>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -52,7 +52,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public ChangeDetectionService()
         {
-            LoadManifestInfo();
+            LoadManifestInfoAsync().SafeFireAndForget(ex => TM.App.Log($"[ChangeDetection] 初始化失败: {ex.Message}"));
 
             try
             {
@@ -60,7 +60,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 {
                     lock (_cacheLock) { _statusCache.Clear(); }
                     _lastPackageTime = null;
-                    LoadManifestInfo();
+                    LoadManifestInfoAsync().SafeFireAndForget(ex => TM.App.Log($"[ChangeDetection] 项目切换重载失败: {ex.Message}"));
                 };
             }
             catch (Exception ex)
@@ -120,16 +120,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
             TM.App.Log("[ChangeDetectionService] 刷新所有模块变更状态");
 
             lock (_cacheLock) { _statusCache.Clear(); }
-            LoadManifestInfo();
+            await LoadManifestInfoAsync().ConfigureAwait(false);
 
             var modules = GetAllModules();
             var tasks = modules.Select(async module =>
             {
-                await _refreshThrottle.WaitAsync();
-                try { await Task.Run(() => RefreshModuleStatus(module)); }
+                await _refreshThrottle.WaitAsync().ConfigureAwait(false);
+                try { await RefreshModuleStatusAsync(module).ConfigureAwait(false); }
                 finally { _refreshThrottle.Release(); }
             }).ToArray();
-            await Task.WhenAll(tasks);
+            await Task.WhenAll(tasks).ConfigureAwait(false);
 
             int count;
             lock (_cacheLock) { count = _statusCache.Count; }
@@ -156,23 +156,31 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     };
                 }
 
-                _ = System.Threading.Tasks.Task.Run(() =>
+                _ = System.Threading.Tasks.Task.Run(async () =>
                 {
-                    var m = GetAllModules().FirstOrDefault(x => x.Path == modulePath);
-                    if (m != null) RefreshModuleStatus(m);
+                    try
+                    {
+                        var m = GetAllModules().FirstOrDefault(x => x.Path == modulePath);
+                        if (m != null) await RefreshModuleStatusAsync(m).ConfigureAwait(false);
+                    }
+                    catch (Exception ex) { TM.App.Log($"[ChangeDetection] 后台刷新模块状态失败 {modulePath}: {ex.Message}"); }
                 });
                 return new ChangeStatus { ModulePath = modulePath, Status = ChangeStatusType.Changed, IsEnabled = true };
             }
 
             var module = GetAllModules().FirstOrDefault(m => m.Path == modulePath);
             if (module != null)
-                RefreshModuleStatus(module);
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    try { await RefreshModuleStatusAsync(module).ConfigureAwait(false); }
+                    catch (Exception ex) { TM.App.Log($"[ChangeDetection] 后台刷新模块状态失败 {module.Path}: {ex.Message}"); }
+                });
 
             lock (_cacheLock)
             {
                 return _statusCache.TryGetValue(modulePath, out var status)
                     ? status
-                    : new ChangeStatus { ModulePath = modulePath, Status = ChangeStatusType.Never };
+                    : new ChangeStatus { ModulePath = modulePath, Status = ChangeStatusType.Changed, IsEnabled = true };
             }
         }
 
@@ -180,14 +188,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             var modules = GetAllModules();
 
-            var missing = new List<ModuleDefinition>();
-            foreach (var module in modules)
-            {
-                bool exists;
-                lock (_cacheLock) { exists = _statusCache.ContainsKey(module.Path); }
-                if (!exists)
-                    missing.Add(module);
-            }
+            HashSet<string> cachedKeys;
+            lock (_cacheLock)
+                cachedKeys = new HashSet<string>(_statusCache.Keys, StringComparer.Ordinal);
+
+            var missing = modules
+                .Where(m => !cachedKeys.Contains(m.Path))
+                .ToList();
 
             if (missing.Count > 0)
             {
@@ -211,16 +218,27 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         }
                     }
 
-                    _ = System.Threading.Tasks.Task.Run(() =>
+                    _ = System.Threading.Tasks.Task.Run(async () =>
                     {
-                        foreach (var mod in missing)
-                            RefreshModuleStatus(mod);
+                        try
+                        {
+                            foreach (var mod in missing)
+                                await RefreshModuleStatusAsync(mod).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) { TM.App.Log($"[ChangeDetection] 后台批量刷新模块状态失败: {ex.Message}"); }
                     });
                 }
                 else
                 {
-                    foreach (var mod in missing)
-                        RefreshModuleStatus(mod);
+                    _ = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        try
+                        {
+                            foreach (var mod in missing)
+                                await RefreshModuleStatusAsync(mod).ConfigureAwait(false);
+                        }
+                        catch (Exception ex) { TM.App.Log($"[ChangeDetection] 后台批量刷新模块状态失败: {ex.Message}"); }
+                    });
                 }
             }
 
@@ -230,21 +248,21 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public List<ChangeStatus> GetDesignStatuses()
         {
             return GetAllStatuses()
-                .Where(s => s.ModulePath.StartsWith("Design/"))
+                .Where(s => s.ModulePath.StartsWith("Design/", StringComparison.Ordinal))
                 .ToList();
         }
 
         public List<ChangeStatus> GetGenerateStatuses()
         {
             return GetAllStatuses()
-                .Where(s => s.ModulePath.StartsWith("Generate/"))
+                .Where(s => s.ModulePath.StartsWith("Generate/", StringComparison.Ordinal))
                 .ToList();
         }
 
         public List<ChangeStatus> GetValidateStatuses()
         {
             return GetAllStatuses()
-                .Where(s => s.ModulePath.StartsWith("Validate/"))
+                .Where(s => s.ModulePath.StartsWith("Validate/", StringComparison.Ordinal))
                 .ToList();
         }
 
@@ -290,7 +308,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 私有方法
 
-        private void RefreshModuleStatus(ModuleDefinition module)
+        private async Task RefreshModuleStatusAsync(ModuleDefinition module)
         {
             try
             {
@@ -321,23 +339,17 @@ namespace TM.Services.Modules.ProjectData.Implementations
                             .Max();
 
                         status.LastModified = latestModified;
-                        status.ItemCount = CountDataItems(jsonFiles);
+                        status.ItemCount = await CountDataItemsAsync(jsonFiles).ConfigureAwait(false);
                     }
 
                     status.LastPackaged = _lastPackageTime;
 
                     if (_lastPackageTime == null)
-                    {
                         status.Status = ChangeStatusType.Never;
-                    }
                     else if (status.LastModified > _lastPackageTime)
-                    {
                         status.Status = ChangeStatusType.Changed;
-                    }
                     else
-                    {
                         status.Status = ChangeStatusType.Latest;
-                    }
                 }
                 else
                 {
@@ -353,7 +365,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private int CountDataItems(string[] jsonFiles)
+        private async Task<int> CountDataItemsAsync(string[] jsonFiles)
         {
             int totalCount = 0;
 
@@ -366,24 +378,21 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 try
                 {
-                    var json = File.ReadAllText(file);
+                    var json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
-
                     if (doc.RootElement.ValueKind == JsonValueKind.Array)
-                    {
                         totalCount += doc.RootElement.GetArrayLength();
-                    }
                 }
                 catch (Exception ex)
                 {
-                    DebugLogOnce(nameof(CountDataItems), ex);
+                    DebugLogOnce(nameof(CountDataItemsAsync), ex);
                 }
             }
 
             return totalCount;
         }
 
-        private void LoadManifestInfo()
+        private async Task LoadManifestInfoAsync()
         {
             try
             {
@@ -393,7 +402,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 if (File.Exists(manifestPath))
                 {
-                    var json = File.ReadAllText(manifestPath);
+                    var json = await File.ReadAllTextAsync(manifestPath).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
 
                     if (doc.RootElement.TryGetProperty("publishTime", out var publishTimeElement) ||

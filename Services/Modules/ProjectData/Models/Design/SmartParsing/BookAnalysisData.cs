@@ -1,15 +1,16 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Interfaces;
 namespace TM.Services.Modules.ProjectData.Models.Design.SmartParsing
 {
-    public class BookAnalysisData : IIndexable, IDataItem, ISourceBookBound
+    public class BookAnalysisData : IIndexable, IDataItem, IDependencyTracked
     {
         [JsonPropertyName("Id")] public string Id { get; set; } = string.Empty;
-        [JsonPropertyName("SourceBookId")] public string? SourceBookId { get; set; } = string.Empty;
+        [JsonPropertyName("DependencyModuleVersions")] public Dictionary<string, int> DependencyModuleVersions { get; set; } = new();
         [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("Icon")] public string Icon { get; set; } = "📖";
+        [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.Book";
         [JsonPropertyName("Category")] public string Category { get; set; } = string.Empty;
         [JsonPropertyName("CategoryId")] public string CategoryId { get; set; } = string.Empty;
         [JsonPropertyName("IsEnabled")] public bool IsEnabled { get; set; } = true;

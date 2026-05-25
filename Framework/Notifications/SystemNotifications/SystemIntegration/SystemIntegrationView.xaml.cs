@@ -1,14 +1,14 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using TM.Framework.Common.Services;
 using TM.Framework.Notifications.SystemNotifications.SystemIntegration.Services;
 using TM.Services.Framework.SystemIntegration;
 
 namespace TM.Framework.Notifications.SystemNotifications.SystemIntegration
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class SystemIntegrationView : UserControl
     {
         private readonly SystemIntegrationViewModel _viewModel;
@@ -33,7 +33,7 @@ namespace TM.Framework.Notifications.SystemNotifications.SystemIntegration
             catch (Exception ex)
             {
                 App.Log($"[SystemIntegrationView] 重置失败: {ex.Message}");
-                StandardDialog.ShowError($"重置失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"重置失败：{ex.Message}", "重置失败", Window.GetWindow(this));
             }
         }
 
@@ -51,7 +51,7 @@ namespace TM.Framework.Notifications.SystemNotifications.SystemIntegration
             catch (Exception ex)
             {
                 App.Log($"[SystemIntegrationView] 保存失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败", Window.GetWindow(this));
             }
         }
 

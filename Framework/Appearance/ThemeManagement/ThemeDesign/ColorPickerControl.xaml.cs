@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -6,14 +6,18 @@ using System.Windows.Media;
 namespace TM.Framework.Appearance.ThemeManagement.ThemeDesign
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ColorPickerControl : UserControl
     {
+        private static readonly SolidColorBrush _defaultWhite = FreezeB(Colors.White);
+        private static SolidColorBrush FreezeB(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
         public static readonly DependencyProperty LabelProperty =
             DependencyProperty.Register(nameof(Label), typeof(string), typeof(ColorPickerControl), new PropertyMetadata("颜色"));
 
         public static readonly DependencyProperty SelectedBrushProperty =
             DependencyProperty.Register(nameof(SelectedBrush), typeof(SolidColorBrush), typeof(ColorPickerControl),
-                new FrameworkPropertyMetadata(new SolidColorBrush(Colors.White), FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
+                new FrameworkPropertyMetadata(_defaultWhite, FrameworkPropertyMetadataOptions.BindsTwoWayByDefault));
 
         public string Label
         {
@@ -38,7 +42,9 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeDesign
 
             if (newColor.HasValue)
             {
-                SelectedBrush = new SolidColorBrush(newColor.Value);
+                var b = new SolidColorBrush(newColor.Value);
+                b.Freeze();
+                SelectedBrush = b;
             }
         }
     }

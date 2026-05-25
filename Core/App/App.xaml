@@ -10,11 +10,14 @@
                 <ResourceDictionary Source="pack://application:,,,/Framework/UI/Windows/Theme.xaml"/>
             </ResourceDictionary.MergedDictionaries>
 
+            <Style x:Key="{x:Static SystemParameters.FocusVisualStyleKey}"/>
+
             <visibility:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
             <visibility:InverseBoolToVisibilityConverter x:Key="InvertedBoolToVisibilityConverter"/>
             <visibility:CountToVisibilityConverter x:Key="CountToVisibilityConverter"/>
             <visibility:InverseCountToVisibilityConverter x:Key="InverseCountToVisibilityConverter"/>
             <value:ResourceKeyToDynamicResourceConverter x:Key="ResourceKeyToDynamicResourceConverter"/>
+            <converters:IconKeyToImageSourceConverter x:Key="IconKeyToImageSourceConverter"/>
         </ResourceDictionary>
     </Application.Resources>
 </Application>

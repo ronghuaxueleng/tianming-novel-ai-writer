@@ -1,9 +1,6 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.ComponentModel;
 using System.Text.Json.Serialization;
-using System.Windows;
-using System.Windows.Media;
 
 namespace TM.Framework.Appearance.Font.Models
 {
@@ -31,6 +28,7 @@ namespace TM.Framework.Appearance.Font.Models
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class FontSettings : INotifyPropertyChanged
     {
         private string _fontFamily = "Microsoft YaHei UI";

@@ -23,22 +23,25 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
 
         private readonly object _lock = new object();
 
-        public List<HistoryRecordData> GetAllRecords()
+        private List<HistoryRecordData> GetSnapshot()
         {
-            lock (_lock) { return Data.Records.OrderByDescending(r => r.Timestamp).ToList(); }
+            lock (_lock) { return new List<HistoryRecordData>(Data.Records); }
         }
+
+        public List<HistoryRecordData> GetAllRecords()
+            => GetSnapshot().OrderByDescending(r => r.Timestamp).ToList();
 
         public void AddRecord(HistoryRecordData record)
         {
-            if (record == null) throw new ArgumentNullException(nameof(record));
+            ArgumentNullException.ThrowIfNull(record);
             lock (_lock)
             {
                 if (string.IsNullOrEmpty(record.Id)) record.Id = ShortIdGenerator.New("D");
                 var existing = Data.Records.FindIndex(r => r.Id == record.Id);
                 if (existing >= 0) Data.Records[existing] = record;
                 else Data.Records.Add(record);
-                SaveData();
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationHistorySettings] 保存失败: {ex.Message}"));
         }
 
         public void DeleteRecord(string recordId)
@@ -47,8 +50,10 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             lock (_lock)
             {
                 var record = Data.Records.FirstOrDefault(r => r.Id == recordId);
-                if (record != null) { Data.Records.Remove(record); SaveData(); }
+                if (record == null) return;
+                Data.Records.Remove(record);
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationHistorySettings] 保存失败: {ex.Message}"));
         }
 
         public void UpdateFavorite(string recordId, bool isFavorite)
@@ -57,41 +62,35 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             lock (_lock)
             {
                 var record = Data.Records.FirstOrDefault(r => r.Id == recordId);
-                if (record != null) { record.IsFavorite = isFavorite; SaveData(); }
+                if (record == null) return;
+                record.IsFavorite = isFavorite;
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationHistorySettings] 保存失败: {ex.Message}"));
         }
 
         public void ClearAll()
         {
-            lock (_lock) { Data.Records.Clear(); SaveData(); }
+            lock (_lock) { Data.Records.Clear(); }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationHistorySettings] 保存失败: {ex.Message}"));
         }
 
         public List<HistoryRecordData> GetFavoriteRecords()
-        {
-            lock (_lock) { return Data.Records.Where(r => r.IsFavorite).OrderByDescending(r => r.Timestamp).ToList(); }
-        }
+            => GetSnapshot().Where(r => r.IsFavorite).OrderByDescending(r => r.Timestamp).ToList();
 
         public List<HistoryRecordData> GetRecordsByType(string type)
-        {
-            lock (_lock) { return Data.Records.Where(r => r.Type == type).OrderByDescending(r => r.Timestamp).ToList(); }
-        }
+            => GetSnapshot().Where(r => r.Type == type).OrderByDescending(r => r.Timestamp).ToList();
 
         public List<HistoryRecordData> GetRecordsByDateRange(DateTime startDate, DateTime endDate)
-        {
-            lock (_lock) { return Data.Records.Where(r => r.Timestamp >= startDate && r.Timestamp <= endDate).OrderByDescending(r => r.Timestamp).ToList(); }
-        }
+            => GetSnapshot().Where(r => r.Timestamp >= startDate && r.Timestamp <= endDate).OrderByDescending(r => r.Timestamp).ToList();
 
         public List<HistoryRecordData> SearchRecords(string keyword)
         {
             if (string.IsNullOrWhiteSpace(keyword)) return GetAllRecords();
-            lock (_lock)
-            {
-                return Data.Records.Where(r =>
-                    r.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
-                    r.Keywords.Contains(keyword, StringComparison.OrdinalIgnoreCase))
-                    .OrderByDescending(r => r.Timestamp)
-                    .ToList();
-            }
+            return GetSnapshot()
+                .Where(r => r.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase) ||
+                            r.Keywords.Contains(keyword, StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(r => r.Timestamp)
+                .ToList();
         }
 
         public HistoryStatistics GetStatistics()

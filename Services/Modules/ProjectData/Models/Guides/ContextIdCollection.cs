@@ -1,8 +1,10 @@
 ﻿using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 
 namespace TM.Services.Modules.ProjectData.Models.Guides
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class ContextIdCollection
     {
         [System.Text.Json.Serialization.JsonPropertyName("VolumeOutline")] public string VolumeOutline { get; set; } = string.Empty;
@@ -31,7 +33,7 @@ namespace TM.Services.Modules.ProjectData.Models.Guides
 
         public static ContextIdValidationResult Success() => new() { IsValid = true };
 
-        public static ContextIdValidationResult Failed(Dictionary<string, List<string>> missingIds) 
+        public static ContextIdValidationResult Failed(Dictionary<string, List<string>> missingIds)
             => new() { IsValid = false, MissingIds = missingIds };
 
         public string GetErrorSummary()

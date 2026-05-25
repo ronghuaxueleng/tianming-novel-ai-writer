@@ -1,4 +1,4 @@
-namespace TM.Services.Modules.ProjectData.Models.Context
+﻿namespace TM.Services.Modules.ProjectData.Models.Context
 {
     public enum RelationStrength
     {

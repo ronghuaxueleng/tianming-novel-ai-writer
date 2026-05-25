@@ -5,7 +5,6 @@ using System.Reflection;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows;
-using System.Windows.Data;
 using System.Windows.Media;
 using System.Windows.Threading;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
@@ -14,12 +13,14 @@ using TM.Services.Framework.AI.SemanticKernel;
 namespace TM.Framework.UI.Workspace.RightPanel.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class TodoPanelViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class TodoPanelViewModel : INotifyPropertyChanged, IDisposable
     {
         private Guid _currentRunId;
         private string _progressText = "等待执行";
         private string _statusMessage = "空闲中";
-        private string _currentStatusTitle = "💤 空闲中";
+        private string _currentStatusTitle = "空闲中";
+        private ImageSource? _titleIcon;
         private TodoStepViewModel? _selectedStep;
         private bool _canBackToPlan;
         private ChatMode _currentMode;
@@ -38,6 +39,12 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             _runningTimer.Tick += (_, _) => RefreshRunningElapsed();
         }
 
+        public void Dispose()
+        {
+            _runningTimer.Stop();
+            GC.SuppressFinalize(this);
+        }
+
         public bool CanBackToPlan
         {
             get => _canBackToPlan;
@@ -48,6 +55,12 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
         {
             get => _currentStatusTitle;
             set { if (_currentStatusTitle != value) { _currentStatusTitle = value; OnPropertyChanged(); } }
+        }
+
+        public ImageSource? TitleIcon
+        {
+            get => _titleIcon;
+            set { if (_titleIcon != value) { _titleIcon = value; OnPropertyChanged(); } }
         }
 
         public string ProgressText
@@ -112,7 +125,12 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
 
         public void OnExecutionEvent(ExecutionEvent evt)
         {
-            if (evt.Mode != ChatMode.Plan && evt.Mode != ChatMode.Agent)
+            if (evt.RunType == TM.Services.Framework.AI.SemanticKernel.RunType.Chat)
+            {
+                return;
+            }
+
+            if (evt.Mode != ChatMode.Plan && evt.Mode != ChatMode.Agent && evt.Mode != ChatMode.Edit)
             {
                 return;
             }
@@ -123,7 +141,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                 _currentMode = evt.Mode;
                 Steps.Clear();
                 StatusMessage = "执行中...";
-                CurrentStatusTitle = "⏳ 执行中";
+                SetTitleStatus("执行中", "Icon.Refresh");
                 ProgressText = "0 步";
                 CanBackToPlan = evt.Mode == ChatMode.Plan;
 
@@ -145,12 +163,12 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                     break;
                 case ExecutionEventType.RunCompleted:
                     StatusMessage = "执行完成";
-                    CurrentStatusTitle = "✅ 执行完成";
+                    SetTitleStatus("执行完成", "Icon.CheckCircle");
                     foreach (var step in Steps.Where(s => s.IsRunning))
                     {
                         step.IsRunning = false;
                         step.Succeeded = true;
-                        step.StatusIcon = "✅";
+                        step.StatusIcon = IconHelper.TryGet("Icon.CheckCircle");
                         step.StatusText = "完成";
                         step.StepBackground = Brushes.Transparent;
                     }
@@ -159,8 +177,17 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                     _runningTimer.Stop();
                     break;
                 case ExecutionEventType.RunFailed:
-                    StatusMessage = "执行失败";
-                    CurrentStatusTitle = "❌ 执行失败";
+                    StatusMessage = evt.IsPolishFatal
+                        ? "润色失败，已终止所有任务"
+                        : "执行失败";
+                    SetTitleStatus("执行失败", "Icon.Error");
+
+                    if (evt.IsPolishFatal)
+                    {
+                        Steps.Clear();
+                        SelectedStep = null;
+                        CanBackToPlan = false;
+                    }
 
                     _runningStartedAt = null;
                     _runningTimer.Stop();
@@ -184,6 +211,29 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                 step = Steps.FirstOrDefault(s => s.StepIndex == evt.StepIndex);
             }
 
+            if (step == null
+                && evt.EventType == ExecutionEventType.ToolCallStarted
+                && Steps.Count > 0
+                && !string.IsNullOrEmpty(evt.FunctionName))
+            {
+                var last = Steps[Steps.Count - 1];
+                if (string.Equals(last.PluginName, evt.PluginName, StringComparison.Ordinal)
+                    && string.Equals(last.FunctionName, evt.FunctionName, StringComparison.Ordinal))
+                {
+                    last.RepeatCount += 1;
+                    last.RunId = evt.RunId;
+                    last.EventId = evt.Id;
+                    last.EventType = evt.EventType;
+                    last.Timestamp = evt.Timestamp;
+                    if (!string.IsNullOrWhiteSpace(evt.Detail))
+                    {
+                        last.Detail = evt.Detail;
+                    }
+                    last.ToolName = BuildDisplayName(last, evt.Title);
+                    step = last;
+                }
+            }
+
             if (step == null)
             {
                 var stepNum = evt.StepIndex ?? (Steps.Count + 1);
@@ -200,7 +250,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                     Timestamp = evt.Timestamp,
                     ToolName = displayName,
                     Description = evt.Title,
-                    StatusIcon = "⏳",
+                    StatusIcon = IconHelper.TryGet("Icon.Clock"),
                     StatusText = "等待执行",
                     IsRunning = false,
                     Succeeded = null,
@@ -227,7 +277,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                     {
                         step.IsRunning = false;
                         step.Succeeded = null;
-                        step.StatusIcon = "⏸";
+                        step.StatusIcon = IconHelper.TryGet("Icon.Clock");
                         step.StatusText = "等待";
                         step.StepBackground = Brushes.Transparent;
                     }
@@ -237,16 +287,16 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                         {
                             prevStep.IsRunning = false;
                             prevStep.Succeeded = true;
-                            prevStep.StatusIcon = "✅";
+                            prevStep.StatusIcon = IconHelper.TryGet("Icon.CheckCircle");
                             prevStep.StatusText = "完成";
                             prevStep.StepBackground = Brushes.Transparent;
                         }
                         step.IsRunning = true;
                         step.Succeeded = null;
-                        step.StatusIcon = "⏳";
+                        step.StatusIcon = IconHelper.TryGet("Icon.Clock");
                         step.StatusText = BuildRunningStatusText(null);
                         step.StepBackground = Brushes.Transparent;
-                        CurrentStatusTitle = "⏳ 执行中";
+                        SetTitleStatus("执行中", "Icon.Refresh");
 
                         _runningStartedAt = DateTime.Now;
                         if (!_runningTimer.IsEnabled)
@@ -260,7 +310,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                 case ExecutionEventType.PlanStepCompleted:
                     step.IsRunning = false;
                     step.Succeeded = true;
-                    step.StatusIcon = "✅";
+                    step.StatusIcon = IconHelper.TryGet("Icon.CheckCircle");
                     step.StatusText = "完成";
                     step.StepBackground = Brushes.Transparent;
                     UpdateTitleFromSteps();
@@ -274,10 +324,10 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                 case ExecutionEventType.ToolCallFailed:
                     step.IsRunning = false;
                     step.Succeeded = false;
-                    step.StatusIcon = "❌";
+                    step.StatusIcon = IconHelper.TryGet("Icon.Forbidden");
                     step.StatusText = "失败";
                     step.StepBackground = Brushes.Transparent;
-                    CurrentStatusTitle = "❌ 执行失败";
+                    SetTitleStatus("执行失败", "Icon.Error");
 
                     if (!Steps.Any(s => s.IsRunning))
                     {
@@ -313,23 +363,29 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
         {
             if (Steps.Any(s => s.Succeeded == false))
             {
-                CurrentStatusTitle = "❌ 执行失败";
+                SetTitleStatus("执行失败", "Icon.Error");
                 return;
             }
 
             if (Steps.Any(s => s.IsRunning))
             {
-                CurrentStatusTitle = "⏳ 执行中";
+                SetTitleStatus("执行中", "Icon.Refresh");
                 return;
             }
 
             if (Steps.Count > 0 && Steps.All(s => s.Succeeded == true))
             {
-                CurrentStatusTitle = "✅ 执行完成";
+                SetTitleStatus("执行完成", "Icon.CheckCircle");
                 return;
             }
 
-            CurrentStatusTitle = "💤 空闲中";
+            SetTitleStatus("空闲中", "Icon.Clock");
+        }
+
+        private void SetTitleStatus(string title, string iconKey)
+        {
+            CurrentStatusTitle = title;
+            TitleIcon = IconHelper.TryGet(iconKey);
         }
 
         private void RecalculateProgress()
@@ -359,6 +415,18 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             return evt.Title;
         }
 
+        private static string BuildDisplayName(TodoStepViewModel step, string? fallbackTitle)
+        {
+            var title = !string.IsNullOrWhiteSpace(step.Description)
+                ? step.Description
+                : (!string.IsNullOrWhiteSpace(fallbackTitle) ? fallbackTitle! : step.FunctionName ?? string.Empty);
+
+            var stepNum = step.StepIndex;
+            var prefix = stepNum.HasValue ? $"{stepNum.Value}. " : string.Empty;
+            var suffix = step.RepeatCount > 1 ? $" ×{step.RepeatCount}" : string.Empty;
+            return $"{prefix}{title}{suffix}";
+        }
+
         private static string BuildRunningStatusText(string? detail)
         {
             if (string.IsNullOrWhiteSpace(detail))
@@ -375,27 +443,16 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             return "执行中";
         }
 
-        private static Brush GetBrush(string resourceKey, Brush fallback)
-        {
-            if (Application.Current != null)
-            {
-                var resource = Application.Current.TryFindResource(resourceKey) as Brush;
-                if (resource != null)
-                {
-                    return resource;
-                }
-            }
-            return fallback;
-        }
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class TodoStepViewModel : INotifyPropertyChanged
     {
         private string _toolName = string.Empty;
         private string _description = string.Empty;
         private string _statusText = string.Empty;
-        private string _statusIcon = string.Empty;
+        private ImageSource? _statusIcon;
         private bool _isRunning;
         private Brush _stepBackground = Brushes.Transparent;
         private bool? _succeeded;
@@ -419,6 +476,13 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             set { if (_toolName != value) { _toolName = value; OnPropertyChanged(); } }
         }
 
+        private int _repeatCount = 1;
+        public int RepeatCount
+        {
+            get => _repeatCount;
+            set { if (_repeatCount != value) { _repeatCount = value; OnPropertyChanged(); } }
+        }
+
         public string Description
         {
             get => _description;
@@ -439,7 +503,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             set { if (_statusText != value) { _statusText = value; OnPropertyChanged(); } }
         }
 
-        public string StatusIcon
+        public ImageSource? StatusIcon
         {
             get => _statusIcon;
             set { if (_statusIcon != value) { _statusIcon = value; OnPropertyChanged(); } }

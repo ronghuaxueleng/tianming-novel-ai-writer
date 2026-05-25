@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -6,8 +6,6 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
@@ -15,6 +13,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         private readonly ConcurrentDictionary<int, Dictionary<string, string>> _volumeCache = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private int _cacheEpoch;
 
         public ChapterSummaryStore()
         {
@@ -22,7 +21,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 StoragePathHelper.CurrentProjectChanged += (_, _) =>
                 {
-                    _volumeCache.Clear();
+                    InvalidateCache();
                     TM.App.Log("[ChapterSummaryStore] 项目切换，已清除摘要分片缓存");
                 };
             }
@@ -40,15 +39,24 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 公开方法
 
+        internal const int SummaryGuardMaxChars = 1500;
+
         public async Task SetSummaryAsync(string chapterId, string summary)
         {
+            if (summary != null && summary.Length > SummaryGuardMaxChars)
+            {
+                TM.App.Log($"[SummaryStore] 兜底截断: {chapterId} {summary.Length} → {SummaryGuardMaxChars} chars");
+                summary = summary.Substring(0, SummaryGuardMaxChars) + "...";
+            }
+
             var vol = GetVolumeNumber(chapterId);
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var existing = await LoadVolumeInternalAsync(vol);
-                var updated = new Dictionary<string, string>(existing) { [chapterId] = summary };
-                await SaveVolumeAsync(vol, updated);
+                Interlocked.Increment(ref _cacheEpoch);
+                var existing = await LoadVolumeInternalAsync(vol).ConfigureAwait(false);
+                var updated = new Dictionary<string, string>(existing) { [chapterId] = summary ?? string.Empty };
+                await SaveVolumeAsync(vol, updated).ConfigureAwait(false);
             }
             finally
             {
@@ -59,15 +67,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveSummaryAsync(string chapterId)
         {
             var vol = GetVolumeNumber(chapterId);
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var existing = await LoadVolumeInternalAsync(vol);
+                Interlocked.Increment(ref _cacheEpoch);
+                var existing = await LoadVolumeInternalAsync(vol).ConfigureAwait(false);
                 if (existing.ContainsKey(chapterId))
                 {
                     var updated = new Dictionary<string, string>(existing);
                     updated.Remove(chapterId);
-                    await SaveVolumeAsync(vol, updated);
+                    await SaveVolumeAsync(vol, updated).ConfigureAwait(false);
                     TM.App.Log($"[SummaryStore] 已移除摘要: {chapterId}");
                 }
             }
@@ -80,7 +89,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<string> GetSummaryAsync(string chapterId)
         {
             var vol = GetVolumeNumber(chapterId);
-            var summaries = await LoadVolumeAsync(vol);
+            var summaries = await LoadVolumeAsync(vol).ConfigureAwait(false);
             return summaries.GetValueOrDefault(chapterId, string.Empty);
         }
 
@@ -92,12 +101,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             var currentVol = parsed.Value.volumeNumber;
 
-            var allSummaries = new Dictionary<string, string>(await LoadVolumeAsync(currentVol));
+            var allSummaries = new Dictionary<string, string>(await LoadVolumeAsync(currentVol).ConfigureAwait(false));
 
             var _preloadStart = System.Math.Max(1, currentVol - 5);
             var _preloadTasks = Enumerable.Range(_preloadStart, currentVol - _preloadStart)
                 .Select(v => LoadVolumeAsync(v)).ToList();
-            if (_preloadTasks.Count > 0) await Task.WhenAll(_preloadTasks);
+            if (_preloadTasks.Count > 0) await Task.WhenAll(_preloadTasks).ConfigureAwait(false);
 
             var volToLoad = currentVol - 1;
             while (volToLoad >= 1)
@@ -106,7 +115,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     .Count(kv => ChapterParserHelper.CompareChapterId(kv.Key, currentChapterId) < 0);
                 if (previousCount >= count) break;
 
-                var prevVolSummaries = await LoadVolumeAsync(volToLoad);
+                var prevVolSummaries = await LoadVolumeAsync(volToLoad).ConfigureAwait(false);
                 foreach (var kv in prevVolSummaries)
                     allSummaries.TryAdd(kv.Key, kv.Value);
 
@@ -118,7 +127,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<Dictionary<string, string>> GetVolumeSummariesAsync(int volumeNumber)
         {
-            return new Dictionary<string, string>(await LoadVolumeAsync(volumeNumber));
+            return new Dictionary<string, string>(await LoadVolumeAsync(volumeNumber).ConfigureAwait(false));
         }
 
         public async Task<Dictionary<string, string>> GetAllSummariesAsync()
@@ -127,18 +136,21 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (!Directory.Exists(dir))
                 return new Dictionary<string, string>();
 
-            var result = new Dictionary<string, string>();
             var files = Directory.GetFiles(dir, "vol*.json");
-            foreach (var file in files)
+            var volumeNumbers = files
+                .Select(f => Path.GetFileNameWithoutExtension(f))
+                .Where(n => n.StartsWith("vol", StringComparison.Ordinal) && int.TryParse(n.Substring(3), out _))
+                .Select(n => int.Parse(n.Substring(3)))
+                .ToList();
+
+            var allVolumes = await Task.WhenAll(volumeNumbers.Select(v => LoadVolumeAsync(v))).ConfigureAwait(false);
+
+            var result = new Dictionary<string, string>();
+            foreach (var summaries in allVolumes)
             {
-                var fileName = Path.GetFileNameWithoutExtension(file);
-                if (fileName.StartsWith("vol") && int.TryParse(fileName.Substring(3), out var vol))
+                foreach (var kv in summaries)
                 {
-                    var summaries = await LoadVolumeAsync(vol);
-                    foreach (var kv in summaries)
-                    {
-                        result.TryAdd(kv.Key, kv.Value);
-                    }
+                    result.TryAdd(kv.Key, kv.Value);
                 }
             }
 
@@ -147,6 +159,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public void InvalidateCache()
         {
+            Interlocked.Increment(ref _cacheEpoch);
             _volumeCache.Clear();
         }
 
@@ -154,9 +167,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             if (summaries == null || summaries.Count == 0) return;
 
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                Interlocked.Increment(ref _cacheEpoch);
                 var byVolume = new Dictionary<int, Dictionary<string, string>>();
                 foreach (var kv in summaries)
                 {
@@ -174,7 +188,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 foreach (var (vol, volSummaries) in byVolume)
                 {
-                    await SaveVolumeInternalAsync(vol, volSummaries);
+                    await SaveVolumeInternalAsync(vol, volSummaries).ConfigureAwait(false);
                     _volumeCache[vol] = volSummaries;
                 }
             }
@@ -208,20 +222,21 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (_volumeCache.TryGetValue(volumeNumber, out var cached))
                 return cached;
 
-            return await LoadVolumeInternalAsync(volumeNumber);
+            return await LoadVolumeInternalAsync(volumeNumber).ConfigureAwait(false);
         }
 
         private async Task<Dictionary<string, string>> LoadVolumeInternalAsync(int volumeNumber)
         {
             var path = GetVolumeFilePath(volumeNumber);
+            var epoch = Volatile.Read(ref _cacheEpoch);
             Dictionary<string, string> summaries;
 
             if (File.Exists(path))
             {
                 try
                 {
-                    var json = await File.ReadAllTextAsync(path);
-                    summaries = JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions)
+                    await using var stream = File.OpenRead(path);
+                    summaries = await JsonSerializer.DeserializeAsync<Dictionary<string, string>>(stream, JsonOptions).ConfigureAwait(false)
                                 ?? new Dictionary<string, string>();
                 }
                 catch (Exception ex)
@@ -235,13 +250,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 summaries = new Dictionary<string, string>();
             }
 
-            _volumeCache[volumeNumber] = summaries;
+            if (epoch == Volatile.Read(ref _cacheEpoch))
+                _volumeCache[volumeNumber] = summaries;
             return summaries;
         }
 
         private async Task SaveVolumeAsync(int volumeNumber, Dictionary<string, string> summaries)
         {
-            await SaveVolumeInternalAsync(volumeNumber, summaries);
+            await SaveVolumeInternalAsync(volumeNumber, summaries).ConfigureAwait(false);
             _volumeCache[volumeNumber] = summaries;
         }
 
@@ -252,12 +268,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Directory.CreateDirectory(dir);
 
             var path = GetVolumeFilePath(volumeNumber);
-            var tmpPath = path + ".tmp";
+            var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
             try
             {
-                var json = JsonSerializer.Serialize(summaries, JsonOptions);
-                await File.WriteAllTextAsync(tmpPath, json);
+                await using (var stream = File.Create(tmpPath))
+                {
+                    await JsonSerializer.SerializeAsync(stream, summaries, JsonOptions).ConfigureAwait(false);
+                }
                 File.Move(tmpPath, path, overwrite: true);
             }
             catch (Exception ex)

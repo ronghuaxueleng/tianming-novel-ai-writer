@@ -2,11 +2,10 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -15,6 +14,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         private readonly ConcurrentDictionary<int, VolumeFactArchive> _cache = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private int _cacheEpoch;
 
         public VolumeFactArchiveStore()
         {
@@ -22,7 +22,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 StoragePathHelper.CurrentProjectChanged += (_, _) =>
                 {
-                    _cache.Clear();
+                    InvalidateCache();
                     TM.App.Log("[FactArchiveStore] 项目切换，已清除卷存档缓存");
                 };
             }
@@ -41,7 +41,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 公开方法
 
-        public void InvalidateCache() => _cache.Clear();
+        public void InvalidateCache()
+        {
+            Interlocked.Increment(ref _cacheEpoch);
+            _cache.Clear();
+        }
 
         public async Task ArchiveVolumeAsync(int volumeNumber, FactSnapshot snapshot, string lastChapterId)
         {
@@ -58,14 +62,18 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 LocationStates = snapshot.LocationStates ?? new(),
                 FactionStates = snapshot.FactionStates ?? new(),
                 ItemStates = snapshot.ItemStates ?? new(),
+                SecretStates = snapshot.SecretStates ?? new(),
                 Timeline = snapshot.Timeline ?? new(),
-                CharacterLocations = snapshot.CharacterLocations ?? new()
+                CharacterLocations = snapshot.CharacterLocations ?? new(),
+                PledgeStates = snapshot.PledgeStates ?? new(),
+                DeadlineStates = snapshot.DeadlineStates ?? new()
             };
 
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await SaveArchiveAsync(volumeNumber, archive);
+                Interlocked.Increment(ref _cacheEpoch);
+                await SaveArchiveAsync(volumeNumber, archive).ConfigureAwait(false);
                 _cache[volumeNumber] = archive;
             }
             finally
@@ -73,21 +81,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 _writeLock.Release();
             }
 
-            TM.App.Log($"[FactArchiveStore] 第{volumeNumber}卷存档完成: {lastChapterId}，角色{archive.CharacterStates.Count}条");
+            TM.App.Log($"[FactArchiveStore] 第{volumeNumber}卷存档完成: {lastChapterId}，角色{archive.CharacterStates.Count}+冲突{archive.ConflictProgress.Count}+伏笔{archive.ForeshadowingStatus.Count}+地点{archive.LocationStates.Count}+势力{archive.FactionStates.Count}+物品{archive.ItemStates.Count}+秘密{archive.SecretStates.Count}+时间线{archive.Timeline.Count}+承诺{archive.PledgeStates.Count}+倒计时{archive.DeadlineStates.Count}条");
         }
 
         public async Task DeleteArchiveIfLastChapterAsync(int volumeNumber, string chapterId)
         {
             if (volumeNumber <= 0 || string.IsNullOrWhiteSpace(chapterId)) return;
 
-            var archive = await LoadArchiveAsync(volumeNumber);
+            var archive = await LoadArchiveAsync(volumeNumber).ConfigureAwait(false);
             if (archive == null) return;
             if (!string.Equals(archive.LastChapterId, chapterId, StringComparison.OrdinalIgnoreCase)) return;
 
             var path = GetArchiveFilePath(volumeNumber);
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                Interlocked.Increment(ref _cacheEpoch);
                 _cache.TryRemove(volumeNumber, out _);
                 if (File.Exists(path))
                 {
@@ -101,22 +110,42 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
+        public async Task DeleteArchiveAsync(int volumeNumber)
+        {
+            if (volumeNumber <= 0) return;
+
+            var path = GetArchiveFilePath(volumeNumber);
+            await _writeLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                Interlocked.Increment(ref _cacheEpoch);
+                _cache.TryRemove(volumeNumber, out _);
+                if (File.Exists(path))
+                {
+                    File.Delete(path);
+                    TM.App.Log($"[FactArchiveStore] 第{volumeNumber}卷存档已删除（章节删除级联）");
+                }
+            }
+            finally
+            {
+                _writeLock.Release();
+            }
+        }
+
         public async Task<List<VolumeFactArchive>> GetPreviousArchivesAsync(int currentVolumeNumber)
         {
             var result = new List<VolumeFactArchive>();
             if (currentVolumeNumber <= 1) return result;
 
+            var cfg = LayeredContextConfig.TakeSnapshot();
             var dir = GetArchivesDir();
             if (!Directory.Exists(dir)) return result;
 
-            var maxVols = LayeredContextConfig.ArchiveMaxPreviousVolumes;
+            var maxVols = cfg.ArchiveMaxPreviousVolumes;
             var startVol = System.Math.Max(1, currentVolumeNumber - maxVols);
-            for (int vol = startVol; vol < currentVolumeNumber; vol++)
-            {
-                var archive = await LoadArchiveAsync(vol);
-                if (archive != null)
-                    result.Add(archive);
-            }
+            var volRange = Enumerable.Range(startVol, currentVolumeNumber - startVol);
+            var archives = await Task.WhenAll(volRange.Select(vol => LoadArchiveAsync(vol))).ConfigureAwait(false);
+            result.AddRange(archives.OfType<VolumeFactArchive>());
 
             return result;
         }
@@ -141,13 +170,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 return cached;
 
             var path = GetArchiveFilePath(volumeNumber);
+            var epoch = Volatile.Read(ref _cacheEpoch);
             if (!File.Exists(path)) return null;
 
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                var archive = JsonSerializer.Deserialize<VolumeFactArchive>(json, _jsonOptions);
-                if (archive != null)
+                await using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+                var archive = await JsonSerializer.DeserializeAsync<VolumeFactArchive>(stream, _jsonOptions).ConfigureAwait(false);
+                if (archive != null && epoch == Volatile.Read(ref _cacheEpoch))
                     _cache[volumeNumber] = archive;
                 return archive;
             }
@@ -165,12 +195,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Directory.CreateDirectory(dir);
 
             var path = GetArchiveFilePath(volumeNumber);
-            var tmpPath = path + ".tmp";
+            var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
             try
             {
-                var json = JsonSerializer.Serialize(archive, _jsonOptions);
-                await File.WriteAllTextAsync(tmpPath, json);
+                await using (var stream = File.Create(tmpPath))
+                {
+                    await JsonSerializer.SerializeAsync(stream, archive, _jsonOptions).ConfigureAwait(false);
+                }
                 File.Move(tmpPath, path, overwrite: true);
             }
             catch (Exception ex)

@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Context;
 using TM.Services.Modules.ProjectData.Models.Index;
@@ -16,10 +14,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         private readonly IndexService _indexService;
         private readonly RelationStrengthService _relationStrengthService;
-        private readonly ProgressiveSummaryService _progressiveSummaryService;
-        private readonly GuideContextService _guideContextService;
+        private readonly IGuideContextService _guideContextService;
         private readonly GlobalSummaryService _globalSummaryService;
-        private readonly IWorkScopeService _workScopeService;
 
         private readonly object _cacheLock = new();
         private readonly Dictionary<string, (DateTime Time, DesignFocusContext Context)> _designContextCache = new();
@@ -35,19 +31,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public FocusContextService(
             IndexService indexService,
             RelationStrengthService relationStrengthService,
-            ProgressiveSummaryService progressiveSummaryService,
-            GuideContextService guideContextService,
-            GlobalSummaryService globalSummaryService,
-            IWorkScopeService workScopeService)
+            IGuideContextService guideContextService,
+            GlobalSummaryService globalSummaryService)
         {
             _indexService = indexService;
             _relationStrengthService = relationStrengthService;
-            _progressiveSummaryService = progressiveSummaryService;
             _guideContextService = guideContextService;
             _globalSummaryService = globalSummaryService;
-            _workScopeService = workScopeService;
-
-            _workScopeService.ScopeChanged += (_, __) => InvalidateCache();
 
             try
             {
@@ -63,13 +53,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<DesignFocusContext> GetDesignContextAsync(string focusId, string targetLayer)
         {
-            var currentSourceBookId = await _workScopeService.GetCurrentScopeAsync();
-            return await GetDesignContextAsync(focusId, targetLayer, currentSourceBookId);
-        }
-
-        public async Task<DesignFocusContext> GetDesignContextAsync(string focusId, string targetLayer, string? sourceBookId)
-        {
-            var cacheKey = BuildCacheKey("Design", focusId, targetLayer, sourceBookId);
+            var cacheKey = BuildCacheKey("Design", focusId, targetLayer);
             lock (_cacheLock)
             {
                 if (_designContextCache.TryGetValue(cacheKey, out var cached)
@@ -79,18 +63,26 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
+            var globalSummaryTask = GetGlobalSummaryAsync();
+            var trackingTask = GetTrackingStatusAsync();
+            var upstreamTask = _indexService.BuildUpstreamIndexAsync(targetLayer);
+            var focusTask = BuildFocusContextAsync(focusId, targetLayer);
+            await Task.WhenAll(globalSummaryTask, trackingTask, upstreamTask, focusTask).ConfigureAwait(false);
+
+            var upstream = await upstreamTask.ConfigureAwait(false);
+            var focus = await focusTask.ConfigureAwait(false);
+            focus.UpstreamIndex = upstream;
+
             var context = new DesignFocusContext
             {
-                GlobalSummary = !string.IsNullOrEmpty(sourceBookId)
-                    ? await _globalSummaryService.GetGlobalSummaryAsync(sourceBookId)
-                    : await GetGlobalSummaryAsync(),
-                TrackingStatus = await GetTrackingStatusAsync(),
-                UpstreamIndex = await _indexService.BuildUpstreamIndexAsync(targetLayer, sourceBookId)
+                GlobalSummary = await globalSummaryTask.ConfigureAwait(false),
+                TrackingStatus = await trackingTask.ConfigureAwait(false),
+                UpstreamIndex = upstream,
+                Focus = focus
             };
 
-            context.Focus = await BuildFocusContextAsync(focusId, targetLayer, sourceBookId);
-
-            TM.App.Log($"[FocusContextService] 设计上下文已构建: targetLayer={targetLayer}, sourceBookId={sourceBookId ?? "null"}, 上下文长度≈{EstimateContextLength(context)}字符");
+            if (InfoLogDedup.ShouldLog($"FocusContextService:Built:{targetLayer}"))
+                TM.App.Log($"[FocusContextService] 设计上下文已构建: targetLayer={targetLayer}, 上下文长度≈{EstimateContextLength(context)}字符");
 
             lock (_cacheLock)
             {
@@ -102,13 +94,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<GenerateFocusContext> GetGenerateContextAsync(string focusId, string targetLayer)
         {
-            var currentSourceBookId = await _workScopeService.GetCurrentScopeAsync();
-            return await GetGenerateContextAsync(focusId, targetLayer, currentSourceBookId);
-        }
-
-        public async Task<GenerateFocusContext> GetGenerateContextAsync(string focusId, string targetLayer, string? sourceBookId)
-        {
-            var cacheKey = BuildCacheKey("Generate", focusId, targetLayer, sourceBookId);
+            var cacheKey = BuildCacheKey("Generate", focusId, targetLayer);
             lock (_cacheLock)
             {
                 if (_generateContextCache.TryGetValue(cacheKey, out var cached)
@@ -118,20 +104,27 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
+            var globalSummaryTask = GetGlobalSummaryAsync();
+            var trackingTask = GetTrackingStatusAsync();
+            var upstreamTask = _indexService.BuildUpstreamIndexAsync(targetLayer);
+            var focusTask = BuildFocusContextAsync(focusId, targetLayer);
+            var taskContextTask = LoadTaskContextAsync(focusId, targetLayer);
+            await Task.WhenAll(globalSummaryTask, trackingTask, upstreamTask, focusTask, taskContextTask).ConfigureAwait(false);
+
+            var upstream = await upstreamTask.ConfigureAwait(false);
+            var focus = await focusTask.ConfigureAwait(false);
+            focus.UpstreamIndex = upstream;
+
             var context = new GenerateFocusContext
             {
-                GlobalSummary = !string.IsNullOrEmpty(sourceBookId)
-                    ? await _globalSummaryService.GetGlobalSummaryAsync(sourceBookId)
-                    : await GetGlobalSummaryAsync(),
-                TrackingStatus = await GetTrackingStatusAsync(),
-                UpstreamIndex = await _indexService.BuildUpstreamIndexAsync(targetLayer, sourceBookId)
+                GlobalSummary = await globalSummaryTask.ConfigureAwait(false),
+                TrackingStatus = await trackingTask.ConfigureAwait(false),
+                UpstreamIndex = upstream,
+                Focus = focus,
+                TaskContext = await taskContextTask.ConfigureAwait(false)
             };
 
-            context.Focus = await BuildFocusContextAsync(focusId, targetLayer, sourceBookId);
-
-            context.TaskContext = await LoadTaskContextAsync(focusId, targetLayer);
-
-            TM.App.Log($"[FocusContextService] 创作上下文已构建: targetLayer={targetLayer}, sourceBookId={sourceBookId ?? "null"}, 上下文长度≈{EstimateContextLength(context)}字符");
+            TM.App.Log($"[FocusContextService] 创作上下文已构建: targetLayer={targetLayer}, 上下文长度≈{EstimateContextLength(context)}字符");
 
             lock (_cacheLock)
             {
@@ -143,33 +136,15 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<GlobalSummary> GetGlobalSummaryAsync()
         {
-            return await _globalSummaryService.GetGlobalSummaryAsync();
+            return await _globalSummaryService.GetGlobalSummaryAsync().ConfigureAwait(false);
         }
 
         public async Task<TrackingStatus> GetTrackingStatusAsync()
         {
-            var statusPath = Path.Combine(
-                StoragePathHelper.GetProjectConfigPath(),
-                "tracking_status.json");
-
-            if (File.Exists(statusPath))
-            {
-                try
-                {
-                    var json = await File.ReadAllTextAsync(statusPath);
-                    return JsonSerializer.Deserialize<TrackingStatus>(json, JsonOptions)
-                           ?? new TrackingStatus();
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[FocusContextService] 加载TrackingStatus失败: {ex.Message}");
-                }
-            }
-
-            return await BuildTrackingStatusRealtimeAsync();
+            return await BuildTrackingStatusRealtimeAsync().ConfigureAwait(false);
         }
 
-        private async Task<FocusContext> BuildFocusContextAsync(string focusId, string targetLayer, string? sourceBookId)
+        private async Task<FocusContext> BuildFocusContextAsync(string focusId, string targetLayer)
         {
             var focus = new FocusContext
             {
@@ -182,39 +157,47 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             if (!string.IsNullOrEmpty(focusId))
             {
-                var focusItem = await _indexService.GetIndexItemAsync(focusId, targetLayer, sourceBookId);
+                var focusItemTask = _indexService.GetIndexItemAsync(focusId, targetLayer);
+                var relatedTask = _guideContextService.GetRelatedEntitiesAsync(focusId, targetLayer);
+                await Task.WhenAll(focusItemTask, relatedTask).ConfigureAwait(false);
+
+                var focusItem = await focusItemTask.ConfigureAwait(false);
                 if (focusItem != null)
                 {
                     focus.FocusEntity = focusItem;
                 }
 
-                var (direct, indirect) = await _guideContextService.GetRelatedEntitiesAsync(focusId, targetLayer, sourceBookId);
+                var (direct, indirect) = await relatedTask.ConfigureAwait(false);
                 focus.DirectRelations = direct;
                 focus.IndirectRelations = indirect;
 
                 if (focus.DirectRelations.Count == 0 && focus.IndirectRelations.Count == 0)
                 {
-                    await LoadRelationsViaStrengthServiceAsync(focus, focusId, sourceBookId);
+                    await LoadRelationsViaStrengthServiceAsync(focus, focusId).ConfigureAwait(false);
                 }
             }
-
-            focus.UpstreamIndex = await _indexService.BuildUpstreamIndexAsync(targetLayer, sourceBookId);
 
             return focus;
         }
 
-        private static string BuildCacheKey(string kind, string focusId, string targetLayer, string? sourceBookId)
-            => $"{kind}|{targetLayer}|{sourceBookId ?? "null"}|{focusId}";
+        private static string BuildCacheKey(string kind, string focusId, string targetLayer)
+            => $"{kind}|{targetLayer}|{focusId}";
 
-        private async Task LoadRelationsViaStrengthServiceAsync(FocusContext focus, string focusId, string? sourceBookId)
+        private async Task LoadRelationsViaStrengthServiceAsync(FocusContext focus, string focusId)
         {
-            var allCharacterIds = await GetAllCharacterIdsAsync();
-            foreach (var charId in allCharacterIds.Where(id => id != focusId))
+            var allCharacterIds = await GetAllCharacterIdsAsync().ConfigureAwait(false);
+            var candidates = allCharacterIds.Where(id => id != focusId).ToList();
+
+            var strengthTasks = candidates.Select(charId =>
+                _relationStrengthService.GetStrengthAsync(focusId, charId).ContinueWith(t =>
+                    (charId, strength: t.Result), TaskContinuationOptions.ExecuteSynchronously));
+            var results = await Task.WhenAll(strengthTasks).ConfigureAwait(false);
+
+            foreach (var (charId, strength) in results)
             {
-                var strength = await _relationStrengthService.GetStrengthAsync(focusId, charId);
                 if (strength == RelationStrength.Strong && focus.DirectRelations.Count < 5)
                 {
-                    var item = await _indexService.GetIndexItemAsync(charId, "Characters", sourceBookId);
+                    var item = await _indexService.GetIndexItemAsync(charId, "Characters").ConfigureAwait(false);
                     if (item != null)
                     {
                         item.RelationStrength = "Strong";
@@ -223,7 +206,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
                 else if (strength == RelationStrength.Medium && focus.IndirectRelations.Count < 10)
                 {
-                    var item = await _indexService.GetIndexItemAsync(charId, "Characters", sourceBookId);
+                    var item = await _indexService.GetIndexItemAsync(charId, "Characters").ConfigureAwait(false);
                     if (item != null)
                     {
                         item.RelationStrength = "Medium";
@@ -237,7 +220,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             try
             {
-                var allChars = await _guideContextService.GetAllCharactersAsync();
+                var allChars = await _guideContextService.GetAllCharactersAsync().ConfigureAwait(false);
                 return allChars
                     .Select(c => c.Id)
                     .Where(id => !string.IsNullOrEmpty(id))
@@ -250,17 +233,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        #region 辅助方法
-
-        private static string GetJsonString(Dictionary<string, JsonElement> dict, string key)
-        {
-            if (dict.TryGetValue(key, out var element) && element.ValueKind == JsonValueKind.String)
-                return element.GetString() ?? string.Empty;
-            return string.Empty;
-        }
-
-        #endregion
-
         private async Task<TrackingStatus> BuildTrackingStatusRealtimeAsync()
         {
             var status = new TrackingStatus();
@@ -269,16 +241,26 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 var guideManager = ServiceLocator.Get<GuideManager>();
 
-                var characterGuide = await guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.CharacterStateGuide>(
+                var characterGuideTask = guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.CharacterStateGuide>(
                     "character_state_guide.json");
-                var conflictGuide = await guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.ConflictProgressGuide>(
+                var conflictGuideTask = guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.ConflictProgressGuide>(
                     "conflict_progress_guide.json");
-                var foreshadowingGuide = await guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.ForeshadowingStatusGuide>(
+                var foreshadowingGuideTask = guideManager.GetGuideAsync<TM.Services.Modules.ProjectData.Models.Guides.ForeshadowingStatusGuide>(
                     "foreshadowing_status_guide.json");
                 var plotPointService = ServiceLocator.Get<PlotPointsIndexService>();
+                var plotVolTasks = plotPointService.GetExistingVolumeNumbers()
+                    .Select(vol => plotPointService.GetVolumeEntriesAsync(vol)).ToArray();
+
+                await Task.WhenAll(
+                    characterGuideTask, conflictGuideTask, foreshadowingGuideTask,
+                    Task.WhenAll(plotVolTasks)).ConfigureAwait(false);
+
+                var characterGuide = characterGuideTask.Result;
+                var conflictGuide = conflictGuideTask.Result;
+                var foreshadowingGuide = foreshadowingGuideTask.Result;
                 var recentPlotEntries = new System.Collections.Generic.List<TM.Services.Modules.ProjectData.Models.Tracking.PlotPointEntry>();
-                foreach (var vol in plotPointService.GetExistingVolumeNumbers())
-                    recentPlotEntries.AddRange(await plotPointService.GetVolumeEntriesAsync(vol));
+                foreach (var volTask in plotVolTasks)
+                    recentPlotEntries.AddRange(volTask.Result);
                 var plotPoints = new Models.Guides.PlotPointsIndex { PlotPoints = recentPlotEntries };
 
                 status.CharacterStates = characterGuide.Characters
@@ -340,7 +322,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 status.PlotPoints = plotPoints;
 
-                TM.App.Log("[FocusContextService] TrackingStatus实时构建完成");
+                if (InfoLogDedup.ShouldLog("FocusContextService:TrackingStatus"))
+                    TM.App.Log("[FocusContextService] TrackingStatus实时构建完成");
             }
             catch (Exception ex)
             {
@@ -354,8 +337,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             return targetLayer switch
             {
-                "Blueprint" => await _guideContextService.BuildBlueprintContextAsync(focusId),
-                "Content" => await _guideContextService.BuildContentContextAsync(focusId),
+                "Blueprint" => await _guideContextService.BuildBlueprintContextAsync(focusId).ConfigureAwait(false),
+                "Content" => await _guideContextService.BuildContentContextAsync(focusId, default).ConfigureAwait(false),
                 _ => null
             };
         }

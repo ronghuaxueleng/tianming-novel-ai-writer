@@ -1,15 +1,15 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Services.Modules.ProjectData.Implementations;
 
 namespace TM.Framework.UI.Workspace.Common.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class GenerationParamsViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -195,6 +195,80 @@ namespace TM.Framework.UI.Workspace.Common.Controls
 
         #endregion
 
+        #region 语义召回（极小向量方案）
+
+        private int _semanticForeshadowingTopK;
+        public int SemanticForeshadowingTopK
+        {
+            get => _semanticForeshadowingTopK;
+            set { _semanticForeshadowingTopK = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticCharacterTopK;
+        public int SemanticCharacterTopK
+        {
+            get => _semanticCharacterTopK;
+            set { _semanticCharacterTopK = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticGeneralTopK;
+        public int SemanticGeneralTopK
+        {
+            get => _semanticGeneralTopK;
+            set { _semanticGeneralTopK = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticQuotaForeshadowing;
+        public int SemanticQuotaForeshadowing
+        {
+            get => _semanticQuotaForeshadowing;
+            set { _semanticQuotaForeshadowing = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticQuotaCharacter;
+        public int SemanticQuotaCharacter
+        {
+            get => _semanticQuotaCharacter;
+            set { _semanticQuotaCharacter = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticQuotaGeneral;
+        public int SemanticQuotaGeneral
+        {
+            get => _semanticQuotaGeneral;
+            set { _semanticQuotaGeneral = value; OnPropertyChanged(); }
+        }
+
+        private int _semanticRrfK;
+        public int SemanticRrfK
+        {
+            get => _semanticRrfK;
+            set { _semanticRrfK = value; OnPropertyChanged(); }
+        }
+
+        private int _firstDescriptionWindowSize;
+        public int FirstDescriptionWindowSize
+        {
+            get => _firstDescriptionWindowSize;
+            set { _firstDescriptionWindowSize = value; OnPropertyChanged(); }
+        }
+
+        private double _firstDescriptionThreshold;
+        public double FirstDescriptionThreshold
+        {
+            get => _firstDescriptionThreshold;
+            set { _firstDescriptionThreshold = value; OnPropertyChanged(); }
+        }
+
+        private int _embeddingIdleReleaseMinutes;
+        public int EmbeddingIdleReleaseMinutes
+        {
+            get => _embeddingIdleReleaseMinutes;
+            set { _embeddingIdleReleaseMinutes = value; OnPropertyChanged(); }
+        }
+
+        #endregion
+
         #region 状态
 
         public string StatusMessage
@@ -240,31 +314,57 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             ArchiveInjectMaxCharacterLocations = LayeredContextConfig.ArchiveInjectMaxCharacterLocations;
             ArchiveInjectMaxFactionStates = LayeredContextConfig.ArchiveInjectMaxFactionStates;
             ArchiveInjectMaxLocationStates = LayeredContextConfig.ArchiveInjectMaxLocationStates;
+
+            SemanticForeshadowingTopK = LayeredContextConfig.SemanticForeshadowingTopK;
+            SemanticCharacterTopK = LayeredContextConfig.SemanticCharacterTopK;
+            SemanticGeneralTopK = LayeredContextConfig.SemanticGeneralTopK;
+            SemanticQuotaForeshadowing = LayeredContextConfig.SemanticQuotaForeshadowing;
+            SemanticQuotaCharacter = LayeredContextConfig.SemanticQuotaCharacter;
+            SemanticQuotaGeneral = LayeredContextConfig.SemanticQuotaGeneral;
+            SemanticRrfK = LayeredContextConfig.SemanticRrfK;
+            FirstDescriptionWindowSize = LayeredContextConfig.FirstDescriptionWindowSize;
+            FirstDescriptionThreshold = LayeredContextConfig.FirstDescriptionThreshold;
+            EmbeddingIdleReleaseMinutes = LayeredContextConfig.EmbeddingIdleReleaseMinutes;
         }
 
         private void ApplyToConfig()
         {
-            LayeredContextConfig.ActiveEntityWindowChapters = ActiveEntityWindowChapters;
-            LayeredContextConfig.ActiveEntityWindowMaxCount = ActiveEntityWindowMaxCount;
-            LayeredContextConfig.SummaryRecentWindowCount = SummaryRecentWindowCount;
-            LayeredContextConfig.MilestoneAnchorInterval = MilestoneAnchorInterval;
-            LayeredContextConfig.VolumeMilestoneMaxChars = VolumeMilestoneMaxChars;
-            LayeredContextConfig.VolumeMilestoneTailRecentCount = VolumeMilestoneTailRecentCount;
-            LayeredContextConfig.MilestoneMaxPreviousVolumes = MilestoneMaxPreviousVolumes;
-            LayeredContextConfig.ArchiveMaxPreviousVolumes = ArchiveMaxPreviousVolumes;
-            LayeredContextConfig.PreviousSummaryCount = PreviousSummaryCount;
-            LayeredContextConfig.SnapshotMaxFactionInject = SnapshotMaxFactionInject;
-            LayeredContextConfig.SnapshotMaxItemInject = SnapshotMaxItemInject;
-            LayeredContextConfig.SnapshotMaxTimelineInject = SnapshotMaxTimelineInject;
-            LayeredContextConfig.ArchiveInjectMaxCharacterStates = ArchiveInjectMaxCharacterStates;
-            LayeredContextConfig.ArchiveInjectMaxConflictProgress = ArchiveInjectMaxConflictProgress;
-            LayeredContextConfig.ArchiveInjectMaxFieldChars = ArchiveInjectMaxFieldChars;
-            LayeredContextConfig.ArchiveInjectMaxItemStates = ArchiveInjectMaxItemStates;
-            LayeredContextConfig.ArchiveInjectMaxForeshadowingStatus = ArchiveInjectMaxForeshadowingStatus;
-            LayeredContextConfig.ArchiveInjectMaxTimelineEntries = ArchiveInjectMaxTimelineEntries;
-            LayeredContextConfig.ArchiveInjectMaxCharacterLocations = ArchiveInjectMaxCharacterLocations;
-            LayeredContextConfig.ArchiveInjectMaxFactionStates = ArchiveInjectMaxFactionStates;
-            LayeredContextConfig.ArchiveInjectMaxLocationStates = ArchiveInjectMaxLocationStates;
+            lock (LayeredContextConfig.ConfigLock)
+            {
+                LayeredContextConfig.ActiveEntityWindowChapters = ActiveEntityWindowChapters;
+                LayeredContextConfig.ActiveEntityWindowMaxCount = ActiveEntityWindowMaxCount;
+                LayeredContextConfig.SummaryRecentWindowCount = SummaryRecentWindowCount;
+                LayeredContextConfig.MilestoneAnchorInterval = MilestoneAnchorInterval;
+                LayeredContextConfig.VolumeMilestoneMaxChars = VolumeMilestoneMaxChars;
+                LayeredContextConfig.VolumeMilestoneTailRecentCount = VolumeMilestoneTailRecentCount;
+                LayeredContextConfig.MilestoneMaxPreviousVolumes = MilestoneMaxPreviousVolumes;
+                LayeredContextConfig.ArchiveMaxPreviousVolumes = ArchiveMaxPreviousVolumes;
+                LayeredContextConfig.PreviousSummaryCount = PreviousSummaryCount;
+                LayeredContextConfig.SnapshotMaxFactionInject = SnapshotMaxFactionInject;
+                LayeredContextConfig.SnapshotMaxItemInject = SnapshotMaxItemInject;
+                LayeredContextConfig.SnapshotMaxTimelineInject = SnapshotMaxTimelineInject;
+                LayeredContextConfig.ArchiveInjectMaxCharacterStates = ArchiveInjectMaxCharacterStates;
+                LayeredContextConfig.ArchiveInjectMaxConflictProgress = ArchiveInjectMaxConflictProgress;
+                LayeredContextConfig.ArchiveInjectMaxFieldChars = ArchiveInjectMaxFieldChars;
+                LayeredContextConfig.ArchiveInjectMaxItemStates = ArchiveInjectMaxItemStates;
+                LayeredContextConfig.ArchiveInjectMaxForeshadowingStatus = ArchiveInjectMaxForeshadowingStatus;
+                LayeredContextConfig.ArchiveInjectMaxTimelineEntries = ArchiveInjectMaxTimelineEntries;
+                LayeredContextConfig.ArchiveInjectMaxCharacterLocations = ArchiveInjectMaxCharacterLocations;
+                LayeredContextConfig.ArchiveInjectMaxFactionStates = ArchiveInjectMaxFactionStates;
+                LayeredContextConfig.ArchiveInjectMaxLocationStates = ArchiveInjectMaxLocationStates;
+
+                LayeredContextConfig.SemanticRecallEnabled = true;
+                LayeredContextConfig.SemanticForeshadowingTopK = SemanticForeshadowingTopK;
+                LayeredContextConfig.SemanticCharacterTopK = SemanticCharacterTopK;
+                LayeredContextConfig.SemanticGeneralTopK = SemanticGeneralTopK;
+                LayeredContextConfig.SemanticQuotaForeshadowing = SemanticQuotaForeshadowing;
+                LayeredContextConfig.SemanticQuotaCharacter = SemanticQuotaCharacter;
+                LayeredContextConfig.SemanticQuotaGeneral = SemanticQuotaGeneral;
+                LayeredContextConfig.SemanticRrfK = SemanticRrfK;
+                LayeredContextConfig.FirstDescriptionWindowSize = FirstDescriptionWindowSize;
+                LayeredContextConfig.FirstDescriptionThreshold = FirstDescriptionThreshold;
+                LayeredContextConfig.EmbeddingIdleReleaseMinutes = EmbeddingIdleReleaseMinutes;
+            }
         }
 
         private async Task SaveAsync()
@@ -307,7 +407,22 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             ArchiveInjectMaxCharacterLocations = 50;
             ArchiveInjectMaxFactionStates = 20;
             ArchiveInjectMaxLocationStates = 20;
+            ApplyDefaultSemanticRecall();
             StatusMessage = "已恢复默认值（点击保存生效）";
+        }
+
+        private void ApplyDefaultSemanticRecall()
+        {
+            SemanticForeshadowingTopK = 5;
+            SemanticCharacterTopK = 3;
+            SemanticGeneralTopK = 5;
+            SemanticQuotaForeshadowing = 2;
+            SemanticQuotaCharacter = 1;
+            SemanticQuotaGeneral = 2;
+            SemanticRrfK = 60;
+            FirstDescriptionWindowSize = 1;
+            FirstDescriptionThreshold = 0.5;
+            EmbeddingIdleReleaseMinutes = 10;
         }
 
         private void ApplyPreset128K()
@@ -333,6 +448,7 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             ArchiveInjectMaxCharacterLocations = 30;
             ArchiveInjectMaxFactionStates = 15;
             ArchiveInjectMaxLocationStates = 15;
+            ApplyDefaultSemanticRecall();
             StatusMessage = "已应用 128K 预设（GPT-4 / Claude 3.5 等）";
         }
 
@@ -359,6 +475,7 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             ArchiveInjectMaxCharacterLocations = 50;
             ArchiveInjectMaxFactionStates = 20;
             ArchiveInjectMaxLocationStates = 20;
+            ApplyDefaultSemanticRecall();
             StatusMessage = "已应用 256K 预设（Claude Sonnet / Gemini Pro 等）";
         }
 
@@ -385,6 +502,7 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             ArchiveInjectMaxCharacterLocations = 80;
             ArchiveInjectMaxFactionStates = 30;
             ArchiveInjectMaxLocationStates = 30;
+            ApplyDefaultSemanticRecall();
             StatusMessage = "已应用 1M+ 预设（Gemini 1.5/2.0 / GPT-5 等）";
         }
 

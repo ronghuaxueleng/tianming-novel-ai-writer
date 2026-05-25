@@ -4,7 +4,6 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Services
 {
@@ -13,6 +12,7 @@ namespace TM.Framework.User.Services
         private readonly string _tokenFilePath;
         private AuthTokenData? _cachedTokenData;
         private readonly object _lock = new object();
+        private readonly System.Threading.SemaphoreSlim _saveLock = new(1, 1);
         private readonly ServerAuthService _serverAuthService;
 
         private readonly byte[] _entropy;
@@ -22,7 +22,7 @@ namespace TM.Framework.User.Services
             _tokenFilePath = StoragePathHelper.GetFilePath("Framework", "User/Services", "auth_token.dat");
             _serverAuthService = ServiceLocator.Get<ServerAuthService>();
             _entropy = GenerateEntropy();
-            LoadTokenData();
+            _ = LoadTokenDataAsync();
         }
 
         private static byte[] GenerateEntropy()
@@ -37,7 +37,7 @@ namespace TM.Framework.User.Services
             {
                 lock (_lock)
                 {
-                    return _cachedTokenData != null && 
+                    return _cachedTokenData != null &&
                            !string.IsNullOrEmpty(_cachedTokenData.AccessToken) &&
                            _cachedTokenData.ExpiresAt > DateTime.UtcNow;
                 }
@@ -50,7 +50,7 @@ namespace TM.Framework.User.Services
             {
                 lock (_lock)
                 {
-                    return _cachedTokenData == null || 
+                    return _cachedTokenData == null ||
                            _cachedTokenData.ExpiresAt <= DateTime.UtcNow;
                 }
             }
@@ -62,7 +62,7 @@ namespace TM.Framework.User.Services
             {
                 lock (_lock)
                 {
-                    return _cachedTokenData != null && 
+                    return _cachedTokenData != null &&
                            !string.IsNullOrEmpty(_cachedTokenData.RefreshToken);
                 }
             }
@@ -127,20 +127,20 @@ namespace TM.Framework.User.Services
         {
             get
             {
+                bool needsSave = false;
+                string clientId;
                 lock (_lock)
                 {
                     if (_cachedTokenData == null || string.IsNullOrEmpty(_cachedTokenData.ClientId))
                     {
-                        var clientId = ShortIdGenerator.NewGuid().ToString();
-                        if (_cachedTokenData == null)
-                        {
-                            _cachedTokenData = new AuthTokenData();
-                        }
-                        _cachedTokenData.ClientId = clientId;
-                        SaveTokenData();
+                        _cachedTokenData ??= new AuthTokenData();
+                        _cachedTokenData.ClientId = ShortIdGenerator.NewGuid().ToString();
+                        needsSave = true;
                     }
-                    return _cachedTokenData.ClientId;
+                    clientId = _cachedTokenData.ClientId;
                 }
+                if (needsSave) _ = SaveTokenDataAsync();
+                return clientId;
             }
         }
 
@@ -156,11 +156,10 @@ namespace TM.Framework.User.Services
                 _cachedTokenData.UserId = loginResult.User.UserId;
                 _cachedTokenData.Username = loginResult.User.Username;
                 _cachedTokenData.LastLoginTime = DateTime.Now;
-
-                SaveTokenData();
-                TM.App.Log("[ATM] saved");
-                _serverAuthService.SyncToken(loginResult.AccessToken, loginResult.ExpiresAt);
             }
+            _ = SaveTokenDataAsync();
+            TM.App.Log("[ATM] saved");
+            _serverAuthService.SyncToken(loginResult.AccessToken, loginResult.ExpiresAt);
         }
 
         public void SaveTokens(RegisterResult registerResult)
@@ -175,32 +174,30 @@ namespace TM.Framework.User.Services
                 _cachedTokenData.UserId = registerResult.UserId;
                 _cachedTokenData.Username = registerResult.Username;
                 _cachedTokenData.LastLoginTime = DateTime.Now;
-
-                SaveTokenData();
-                TM.App.Log("[ATM] saved");
-                _serverAuthService.SyncToken(registerResult.AccessToken, registerResult.ExpiresAt);
             }
+            _ = SaveTokenDataAsync();
+            TM.App.Log("[ATM] saved");
+            _serverAuthService.SyncToken(registerResult.AccessToken, registerResult.ExpiresAt);
         }
 
         public void UpdateTokens(RefreshTokenResult refreshResult)
         {
+            bool hasData;
             lock (_lock)
             {
-                if (_cachedTokenData == null)
+                hasData = _cachedTokenData != null;
+                if (hasData)
                 {
-                    TM.App.Log("[ATM] upd err");
-                    return;
+                    _cachedTokenData!.AccessToken = refreshResult.AccessToken;
+                    _cachedTokenData.RefreshToken = refreshResult.RefreshToken;
+                    _cachedTokenData.SessionKey = refreshResult.SessionKey;
+                    _cachedTokenData.ExpiresAt = refreshResult.ExpiresAt;
                 }
-
-                _cachedTokenData.AccessToken = refreshResult.AccessToken;
-                _cachedTokenData.RefreshToken = refreshResult.RefreshToken;
-                _cachedTokenData.SessionKey = refreshResult.SessionKey;
-                _cachedTokenData.ExpiresAt = refreshResult.ExpiresAt;
-
-                SaveTokenData();
-                TM.App.Log("[ATM] refreshed");
-                _serverAuthService.SyncToken(refreshResult.AccessToken, refreshResult.ExpiresAt);
             }
+            if (!hasData) { TM.App.Log("[ATM] upd err"); return; }
+            _ = SaveTokenDataAsync();
+            TM.App.Log("[ATM] refreshed");
+            _serverAuthService.SyncToken(refreshResult.AccessToken, refreshResult.ExpiresAt);
         }
 
         public void ClearTokens()
@@ -212,10 +209,10 @@ namespace TM.Framework.User.Services
                 {
                     ClientId = clientId ?? ShortIdGenerator.NewGuid().ToString()
                 };
-                SaveTokenData();
-                TM.App.Log("[ATM] cleared");
-                _serverAuthService.ClearToken();
             }
+            _ = SaveTokenDataAsync();
+            TM.App.Log("[ATM] cleared");
+            _serverAuthService.ClearToken();
         }
 
         public SignatureHeaders GenerateSignatureHeaders(string method, string path, string? body = null)
@@ -249,97 +246,89 @@ namespace TM.Framework.User.Services
             return Convert.ToBase64String(hash);
         }
 
-        private void LoadTokenData()
+        private async System.Threading.Tasks.Task LoadTokenDataAsync()
         {
-            try
+            await System.Threading.Tasks.Task.Run(async () =>
             {
-                if (File.Exists(_tokenFilePath))
+                try
                 {
-                    var fileContent = File.ReadAllText(_tokenFilePath);
+                    if (File.Exists(_tokenFilePath))
+                    {
+                        var fileContent = await File.ReadAllTextAsync(_tokenFilePath).ConfigureAwait(false);
 
-                    try
-                    {
-                        var encrypted = Convert.FromBase64String(fileContent);
-                        var decrypted = ProtectedData.Unprotect(encrypted, _entropy, DataProtectionScope.CurrentUser);
-                        var json = Encoding.UTF8.GetString(decrypted);
-                        _cachedTokenData = JsonSerializer.Deserialize<AuthTokenData>(json);
-                        TM.App.Log("[ATM] loaded");
-                        return;
-                    }
-                    catch (FormatException)
-                    {
-                    }
-                    catch (CryptographicException)
-                    {
-                        TM.App.Log("[ATM] load err");
+                        try
+                        {
+                            var encrypted = Convert.FromBase64String(fileContent);
+                            var decrypted = ProtectedData.Unprotect(encrypted, _entropy, DataProtectionScope.CurrentUser);
+                            var json = Encoding.UTF8.GetString(decrypted);
+                            lock (_lock) { _cachedTokenData = JsonSerializer.Deserialize<AuthTokenData>(json); }
+                            TM.App.Log("[ATM] loaded");
+                            return;
+                        }
+                        catch (FormatException)
+                        {
+                        }
+                        catch (CryptographicException)
+                        {
+                            TM.App.Log("[ATM] load err");
+                        }
+
+                        if (fileContent.TrimStart().StartsWith('{'))
+                        {
+                            lock (_lock) { _cachedTokenData = JsonSerializer.Deserialize<AuthTokenData>(fileContent); }
+                            TM.App.Log("[ATM] migrated");
+                            await SaveTokenDataAsync().ConfigureAwait(false);
+                            return;
+                        }
                     }
 
-                    if (fileContent.TrimStart().StartsWith("{"))
+                    lock (_lock)
                     {
-                        _cachedTokenData = JsonSerializer.Deserialize<AuthTokenData>(fileContent);
-                        TM.App.Log("[ATM] migrated");
-                        SaveTokenData();
-                        return;
+                        _cachedTokenData = new AuthTokenData { ClientId = ShortIdGenerator.NewGuid().ToString() };
+                    }
+                    await SaveTokenDataAsync().ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[ATM] load err: {ex.Message}");
+                    lock (_lock)
+                    {
+                        _cachedTokenData = new AuthTokenData { ClientId = ShortIdGenerator.NewGuid().ToString() };
                     }
                 }
-
-                _cachedTokenData = new AuthTokenData
-                {
-                    ClientId = ShortIdGenerator.NewGuid().ToString()
-                };
-                SaveTokenData();
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ATM] load err: {ex.Message}");
-                _cachedTokenData = new AuthTokenData
-                {
-                    ClientId = ShortIdGenerator.NewGuid().ToString()
-                };
-            }
+            }).ConfigureAwait(false);
         }
 
-        private void SaveTokenData()
+        private byte[] SerializeTokenDataSnapshot()
         {
-            try
+            byte[] json;
+            lock (_lock)
             {
-                var directory = Path.GetDirectoryName(_tokenFilePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.SerializeToUtf8Bytes(_cachedTokenData);
-                var encrypted = ProtectedData.Protect(json, _entropy, DataProtectionScope.CurrentUser);
-                var tmp = _tokenFilePath + ".tmp";
-                File.WriteAllText(tmp, Convert.ToBase64String(encrypted));
-                File.Move(tmp, _tokenFilePath, overwrite: true);
+                json = JsonSerializer.SerializeToUtf8Bytes(_cachedTokenData);
             }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ATM] save err: {ex.Message}");
-            }
+            return ProtectedData.Protect(json, _entropy, DataProtectionScope.CurrentUser);
         }
 
         private async System.Threading.Tasks.Task SaveTokenDataAsync()
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
+                var encrypted = await System.Threading.Tasks.Task.Run(SerializeTokenDataSnapshot).ConfigureAwait(false);
                 var directory = Path.GetDirectoryName(_tokenFilePath);
                 if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
                     Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.SerializeToUtf8Bytes(_cachedTokenData);
-                var encrypted = ProtectedData.Protect(json, _entropy, DataProtectionScope.CurrentUser);
-                var tmp = _tokenFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmp, Convert.ToBase64String(encrypted));
+                var tmp = _tokenFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmp, Convert.ToBase64String(encrypted)).ConfigureAwait(false);
                 File.Move(tmp, _tokenFilePath, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ATM] save err: {ex.Message}");
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
     }

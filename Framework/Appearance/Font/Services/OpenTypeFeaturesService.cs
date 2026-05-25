@@ -15,6 +15,8 @@ namespace TM.Framework.Appearance.Font.Services
 
     public class OpenTypeFeaturesService
     {
+        private static readonly string[] DefaultFeatureTags = ["liga", "calt"];
+
         private readonly Dictionary<string, List<string>> _knownFontFeatures;
 
         private readonly Dictionary<string, (string Name, string Description, string Preview)> _featureDefinitions;
@@ -46,7 +48,7 @@ namespace TM.Framework.Appearance.Font.Services
 
             if (supportedTags.Count == 0)
             {
-                supportedTags.AddRange(new[] { "liga", "calt" });
+                supportedTags.AddRange(DefaultFeatureTags);
             }
 
             foreach (var tag in supportedTags.Distinct())
@@ -78,52 +80,52 @@ namespace TM.Framework.Appearance.Font.Services
         {
             return new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase)
             {
-                ["Fira Code"] = new List<string> 
-                { 
-                    "liga", "calt", "ss01", "ss02", "ss03", "ss04", "ss05", 
-                    "ss06", "ss07", "ss08", "ss09", "ss10", "zero", "onum" 
+                ["Fira Code"] = new List<string>
+                {
+                    "liga", "calt", "ss01", "ss02", "ss03", "ss04", "ss05",
+                    "ss06", "ss07", "ss08", "ss09", "ss10", "zero", "onum"
                 },
 
-                ["JetBrains Mono"] = new List<string> 
-                { 
-                    "liga", "calt", "ss01", "ss02", "ss03", "ss04", "ss05", 
-                    "zero", "cv01", "cv02", "cv03", "cv04", "cv05" 
+                ["JetBrains Mono"] = new List<string>
+                {
+                    "liga", "calt", "ss01", "ss02", "ss03", "ss04", "ss05",
+                    "zero", "cv01", "cv02", "cv03", "cv04", "cv05"
                 },
 
-                ["Cascadia Code"] = new List<string> 
-                { 
-                    "liga", "calt", "ss01", "ss02", "ss03", "ss19", "ss20", 
-                    "zero", "cv01", "cv02", "cv03", "cv04" 
+                ["Cascadia Code"] = new List<string>
+                {
+                    "liga", "calt", "ss01", "ss02", "ss03", "ss19", "ss20",
+                    "zero", "cv01", "cv02", "cv03", "cv04"
                 },
 
-                ["Cascadia Mono"] = new List<string> 
-                { 
-                    "calt", "ss01", "ss02", "ss03", "ss19", "ss20", "zero" 
+                ["Cascadia Mono"] = new List<string>
+                {
+                    "calt", "ss01", "ss02", "ss03", "ss19", "ss20", "zero"
                 },
 
-                ["Source Code Pro"] = new List<string> 
-                { 
-                    "liga", "calt", "zero", "onum", "ss01", "ss02" 
+                ["Source Code Pro"] = new List<string>
+                {
+                    "liga", "calt", "zero", "onum", "ss01", "ss02"
                 },
 
-                ["Consolas"] = new List<string> 
-                { 
-                    "calt" 
+                ["Consolas"] = new List<string>
+                {
+                    "calt"
                 },
 
-                ["Courier New"] = new List<string> 
-                { 
-                    "liga", "calt" 
+                ["Courier New"] = new List<string>
+                {
+                    "liga", "calt"
                 },
 
-                ["Inconsolata"] = new List<string> 
-                { 
-                    "liga", "calt" 
+                ["Inconsolata"] = new List<string>
+                {
+                    "liga", "calt"
                 },
 
-                ["Monaco"] = new List<string> 
-                { 
-                    "liga", "calt" 
+                ["Monaco"] = new List<string>
+                {
+                    "liga", "calt"
                 }
             };
         }

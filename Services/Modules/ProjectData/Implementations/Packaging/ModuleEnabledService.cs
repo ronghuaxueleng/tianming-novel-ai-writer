@@ -1,11 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Helpers;
 using TM.Services.Modules.ProjectData.Interfaces;
 
@@ -56,7 +55,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 foreach (var func in functions)
                 {
-                    var updatedCount = await SetFunctionDataEnabledAsync(func.StoragePath, enabled);
+                    var updatedCount = await SetFunctionDataEnabledAsync(func.StoragePath, enabled).ConfigureAwait(false);
                     totalUpdated += updatedCount;
                 }
 
@@ -88,8 +87,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             foreach (var jsonFile in jsonFiles)
             {
-                var count = await UpdateJsonFileEnabledAsync(jsonFile, enabled);
+                var count = await UpdateJsonFileEnabledAsync(jsonFile, enabled).ConfigureAwait(false);
                 updatedCount += count;
+            }
+
+            if (updatedCount > 0)
+            {
+                StoragePathHelper.NotifyModuleDataIsEnabledChanged(dirPath, enabled);
             }
 
             return updatedCount;
@@ -101,7 +105,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 if (!File.Exists(filePath)) return 0;
 
-                var json = await File.ReadAllTextAsync(filePath);
+                var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                 var jsonArray = JsonNode.Parse(json) as JsonArray;
 
                 if (jsonArray == null || jsonArray.Count == 0) return 0;
@@ -117,8 +121,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
 
                 var updatedJson = jsonArray.ToJsonString(JsonOptions);
-                var tmpMes = filePath + ".tmp";
-                await File.WriteAllTextAsync(tmpMes, updatedJson);
+                var tmpMes = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmpMes, updatedJson).ConfigureAwait(false);
                 File.Move(tmpMes, filePath, overwrite: true);
 
                 return updatedCount;
@@ -132,7 +136,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<bool> GetModuleEnabledAsync(string moduleType, string subModule)
         {
-            var (enabledCount, _) = await GetModuleEnabledStatsAsync(moduleType, subModule);
+            var (enabledCount, _) = await GetModuleEnabledStatsAsync(moduleType, subModule).ConfigureAwait(false);
             return enabledCount > 0;
         }
 
@@ -147,7 +151,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 foreach (var func in functions)
                 {
-                    var (enabled, total) = await GetFunctionEnabledStatsAsync(func.StoragePath);
+                    var (enabled, total) = await GetFunctionEnabledStatsAsync(func.StoragePath).ConfigureAwait(false);
                     totalEnabled += enabled;
                     totalCount += total;
                 }
@@ -177,7 +181,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             foreach (var jsonFile in jsonFiles)
             {
-                var (enabled, total) = await CountEnabledInFileAsync(jsonFile);
+                var (enabled, total) = await CountEnabledInFileAsync(jsonFile).ConfigureAwait(false);
                 enabledCount += enabled;
                 totalCount += total;
             }
@@ -191,7 +195,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 if (!File.Exists(filePath)) return (0, 0);
 
-                var json = await File.ReadAllTextAsync(filePath);
+                var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                 var jsonArray = JsonNode.Parse(json) as JsonArray;
 
                 if (jsonArray == null) return (0, 0);
@@ -227,7 +231,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 foreach (var subModule in subModules)
                 {
-                    var count = await SetModuleEnabledAsync(moduleType, subModule, enabled);
+                    var count = await SetModuleEnabledAsync(moduleType, subModule, enabled).ConfigureAwait(false);
                     totalUpdated += count;
                 }
             }

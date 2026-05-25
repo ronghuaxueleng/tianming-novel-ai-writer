@@ -1,4 +1,5 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Threading;
 using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Validate.ValidationSummary;
 
@@ -31,6 +32,8 @@ namespace TM.Services.Modules.ProjectData.Interfaces
         #region 卷校验专用
 
         void SaveVolumeValidation(int volumeNumber, ValidationSummaryData data);
+
+        Task FlushPendingAsync(CancellationToken ct = default);
 
         int ParseVolumeNumber(string categoryName);
 

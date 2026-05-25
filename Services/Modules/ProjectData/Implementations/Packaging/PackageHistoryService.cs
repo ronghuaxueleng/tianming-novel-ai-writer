@@ -1,13 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.Services;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Publishing;
@@ -36,7 +32,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<bool> SaveCurrentToHistoryAsync()
         {
-            return await Task.Run(() =>
+            return await Task.Run(async () =>
             {
                 try
                 {
@@ -57,7 +53,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     {
                         var manifestPath = Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "manifest.json");
                         if (File.Exists(manifestPath))
-                            File.Copy(manifestPath, Path.Combine(tmpDir, "manifest.json"), true);
+                        {
+                            await using var s = File.OpenRead(manifestPath);
+                            await using var d = File.Create(Path.Combine(tmpDir, "manifest.json"));
+                            await s.CopyToAsync(d).ConfigureAwait(false);
+                        }
                     }
                     catch (Exception ex)
                     {
@@ -68,7 +68,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     foreach (var file in sourceFiles)
                     {
                         var fileName = Path.GetFileName(file);
-                        File.Copy(file, Path.Combine(tmpDir, fileName), true);
+                        await using var s = File.OpenRead(file);
+                        await using var d = File.Create(Path.Combine(tmpDir, fileName));
+                        await s.CopyToAsync(d).ConfigureAwait(false);
                     }
 
                     var subDirs = new[] { "Design", "Generate", "guides" };
@@ -76,7 +78,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     {
                         var sourceDir = Path.Combine(PublishedPath, subDir);
                         if (Directory.Exists(sourceDir))
-                            CopyDirectory(sourceDir, Path.Combine(tmpDir, subDir));
+                            await CopyDirectoryAsync(sourceDir, Path.Combine(tmpDir, subDir)).ConfigureAwait(false);
                     }
 
                     if (Directory.Exists(versionDir))
@@ -94,18 +96,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     TM.App.Log($"[PackageHistoryService] 保存历史失败: {ex.Message}");
                     return false;
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
-        public List<PackageHistoryEntry> GetAllHistory()
+        public async Task<List<PackageHistoryEntry>> GetAllHistoryAsync()
         {
             var entries = new List<PackageHistoryEntry>();
-
             try
             {
-                var currentManifest = _publishService.GetManifest();
+                var currentManifest = await _publishService.GetManifestAsync().ConfigureAwait(false);
                 if (currentManifest != null)
-                {
                     entries.Add(new PackageHistoryEntry
                     {
                         Version = currentManifest.Version,
@@ -115,23 +115,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         IsCurrent = true,
                         HistoryPath = PublishedPath
                     });
-                }
 
                 if (Directory.Exists(HistoryPath))
                 {
-                    var versionDirs = Directory.GetDirectories(HistoryPath, "v*")
-                        .OrderByDescending(d => d);
+                    var versionDirs = Directory.GetDirectories(HistoryPath, "v*");
+                    var currentVersion = currentManifest?.Version;
 
-                    foreach (var versionDir in versionDirs)
+                    var tasks = versionDirs.Select(async versionDir =>
                     {
                         var manifestFile = Path.Combine(versionDir, "manifest.json");
-                        if (File.Exists(manifestFile))
+                        if (!File.Exists(manifestFile)) return null;
+                        try
                         {
-                            var json = File.ReadAllText(manifestFile);
+                            var json = await File.ReadAllTextAsync(manifestFile).ConfigureAwait(false);
                             var manifest = JsonSerializer.Deserialize<ManifestInfo>(json);
-                            if (manifest != null && manifest.Version != currentManifest?.Version)
-                            {
-                                entries.Add(new PackageHistoryEntry
+                            if (manifest != null && manifest.Version != currentVersion)
+                                return new PackageHistoryEntry
                                 {
                                     Version = manifest.Version,
                                     PublishTime = manifest.PublishTime,
@@ -139,17 +138,20 @@ namespace TM.Services.Modules.ProjectData.Implementations
                                     EnabledModules = manifest.EnabledModules,
                                     IsCurrent = false,
                                     HistoryPath = versionDir
-                                });
-                            }
+                                };
                         }
-                    }
+                        catch (Exception ex) { TM.App.Log($"[PackageHistoryService] 读取历史版本失败: {ex.Message}"); }
+                        return null;
+                    });
+
+                    var results = await Task.WhenAll(tasks).ConfigureAwait(false);
+                    entries.AddRange(results.Where(e => e != null).OrderByDescending(e => e!.PublishTime)!);
                 }
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PackageHistoryService] 获取历史失败: {ex.Message}");
+                TM.App.Log($"[PackageHistoryService] 异步获取历史失败: {ex.Message}");
             }
-
             return entries;
         }
 
@@ -183,36 +185,45 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
 
-                await SaveCurrentToHistoryAsync();
+                await SaveCurrentToHistoryAsync().ConfigureAwait(false);
 
-                var _restoreProtected = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "work_scope.json", "current_chapter.json" };
-                var sourceFiles = Directory.GetFiles(versionDir, "*.json", SearchOption.TopDirectoryOnly);
-                foreach (var file in sourceFiles)
+                var _publishedPath = PublishedPath;
+                var _projectPath = StoragePathHelper.GetCurrentProjectPath();
+                await System.Threading.Tasks.Task.Run(async () =>
                 {
-                    var fileName = Path.GetFileName(file);
-                    if (_restoreProtected.Contains(fileName)) continue;
-                    var destFile = Path.Combine(PublishedPath, fileName);
-                    File.Copy(file, destFile, true);
-                }
-                var historyManifest = Path.Combine(versionDir, "manifest.json");
-                if (File.Exists(historyManifest))
-                {
-                    var destManifest = Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "manifest.json");
-                    File.Copy(historyManifest, destManifest, true);
-                }
+                    var restoreProtected = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "current_chapter.json" };
+                    var sourceFiles = Directory.GetFiles(versionDir, "*.json", SearchOption.TopDirectoryOnly);
+                    foreach (var file in sourceFiles)
+                    {
+                        var fileName = Path.GetFileName(file);
+                        if (restoreProtected.Contains(fileName)) continue;
+                        var destFile = Path.Combine(_publishedPath, fileName);
+                        await using var s = File.OpenRead(file);
+                        await using var d = File.Create(destFile);
+                        await s.CopyToAsync(d).ConfigureAwait(false);
+                    }
+                    var historyManifest = Path.Combine(versionDir, "manifest.json");
+                    if (File.Exists(historyManifest))
+                    {
+                        var destManifest = Path.Combine(_projectPath, "manifest.json");
+                        await using var s = File.OpenRead(historyManifest);
+                        await using var d = File.Create(destManifest);
+                        await s.CopyToAsync(d).ConfigureAwait(false);
+                    }
 
-                var subDirs = new[] { "Design", "Generate", "guides" };
-                foreach (var subDir in subDirs)
-                {
-                    var sourceDir = Path.Combine(versionDir, subDir);
-                    if (!Directory.Exists(sourceDir)) continue;
+                    var subDirs = new[] { "Design", "Generate", "guides" };
+                    foreach (var subDir in subDirs)
+                    {
+                        var sourceDir = Path.Combine(versionDir, subDir);
+                        if (!Directory.Exists(sourceDir)) continue;
 
-                    var destDir = Path.Combine(PublishedPath, subDir);
-                    if (Directory.Exists(destDir))
-                        Directory.Delete(destDir, true);
+                        var destDir = Path.Combine(_publishedPath, subDir);
+                        if (Directory.Exists(destDir))
+                            Directory.Delete(destDir, true);
 
-                    CopyDirectory(sourceDir, destDir);
-                }
+                        await CopyDirectoryAsync(sourceDir, destDir).ConfigureAwait(false);
+                    }
+                }).ConfigureAwait(true);
                 try { _publishService.ClearCache(); EntityNameResolver.Invalidate(); }
                 catch (Exception ex) { TM.App.Log($"[PackageHistoryService] ClearCache失败: {ex.Message}"); }
 
@@ -243,14 +254,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 try
                 {
                     GuideContextService.RaiseCacheInvalidated();
-                    await ServiceLocator.Get<GuideContextService>().InitializeCacheAsync();
+                    await ServiceLocator.Get<GuideContextService>().InitializeCacheAsync().ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     TM.App.Log($"[PackageHistoryService] 恢复后预热缓存失败: {ex.Message}");
                 }
 
-                try { await ServiceLocator.Get<IChangeDetectionService>().RefreshAllAsync(); }
+                try { await ServiceLocator.Get<IChangeDetectionService>().RefreshAllAsync().ConfigureAwait(false); }
                 catch (Exception ex) { TM.App.Log($"[PackageHistoryService] 恢复后刷新变更检测失败: {ex.Message}"); }
 
                 TM.App.Log($"[PackageHistoryService] 已恢复到版本 {version}");
@@ -259,7 +270,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     $"已恢复到 v{version} 配置，但已写章节正文（MD文件）不会回滚。若发现追踪数据异常，请重启应用让系统自动修复。");
                 _ = Task.Run(async () =>
                 {
-                    try { await ServiceLocator.Get<ConsistencyReconciler>().ReconcileAsync(); }
+                    try { await ServiceLocator.Get<ConsistencyReconciler>().ReconcileAsync().ConfigureAwait(false); }
                     catch (Exception ex) { TM.App.Log($"[PackageHistoryService] 版本恢复后对账失败: {ex.Message}"); }
                 });
 
@@ -299,7 +310,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        public PackageVersionDiff GetVersionDiff(int historyVersion)
+        public async System.Threading.Tasks.Task<PackageVersionDiff> GetVersionDiffAsync(int historyVersion)
         {
             var diff = new PackageVersionDiff { HistoryVersion = historyVersion };
 
@@ -315,7 +326,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 if (!File.Exists(historyManifestPath))
                     return diff;
 
-                var json = File.ReadAllText(historyManifestPath);
+                var json = await File.ReadAllTextAsync(historyManifestPath).ConfigureAwait(false);
                 var historyManifest = JsonSerializer.Deserialize<ManifestInfo>(json);
                 if (historyManifest == null)
                     return diff;
@@ -331,7 +342,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     foreach (var (subModule, currentEnabled) in currentModules)
                     {
                         var historyEnabled = historyModules.GetValueOrDefault(subModule, true);
-
                         if (currentEnabled != historyEnabled)
                         {
                             diff.DiffItems.Add(new ModuleDiffItem
@@ -348,7 +358,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PackageHistoryService] 获取版本差异失败: {ex.Message}");
+                TM.App.Log($"[PackageHistoryService] 异步获取版本差异失败: {ex.Message}");
             }
 
             return diff;
@@ -382,7 +392,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     if (Directory.Exists(PublishedPath))
                     {
                         var files = Directory.GetFiles(PublishedPath, "*.json", SearchOption.TopDirectoryOnly);
-                        var protectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "work_scope.json", "project_spec.json" };
+                        var protectedFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "project_spec.json" };
                         foreach (var file in files)
                         {
                             var fileName = Path.GetFileName(file);
@@ -413,19 +423,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         TM.App.Log("[PackageHistoryService] 已清除已生成章节");
                     }
 
-                    var vectorIndexPath = Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "VectorIndex");
-                    if (Directory.Exists(vectorIndexPath))
-                    {
-                        Directory.Delete(vectorIndexPath, true);
-                        TM.App.Log("[PackageHistoryService] 已清除向量索引");
-                    }
-
-                    var vectorFlagPath = Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "vector_degraded.flag");
-                    if (File.Exists(vectorFlagPath))
-                    {
-                        File.Delete(vectorFlagPath);
-                        TM.App.Log("[PackageHistoryService] 已删除向量降级标志");
-                    }
                 }).ConfigureAwait(false);
 
                 try { _publishService.ClearCache(); } catch { }
@@ -435,9 +432,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 try { ServiceLocator.Get<VolumeFactArchiveStore>().InvalidateCache(); } catch { }
                 try { ServiceLocator.Get<KeywordChapterIndexService>().InvalidateCache(); } catch { }
                 try { ServiceLocator.Get<PlotPointsIndexService>().InvalidateCache(); } catch { }
+                try { ServiceLocator.Get<Indexing.ChapterEmbeddingIndex>().InvalidateCache(); } catch { }
+                try { ServiceLocator.Get<Indexing.ChunkEmbeddingIndex>().InvalidateCache(); } catch { }
+                try { ServiceLocator.Get<Indexing.EntityFirstChapterIndex>().InvalidateCache(); } catch { }
                 try { ServiceLocator.Get<GeneratedContentService>().InvalidateStaticCaches(); } catch { }
                 try { ServiceLocator.Get<SessionContextCache>().Clear(); } catch { }
-                try { ServiceLocator.Get<TM.Services.Framework.AI.SemanticKernel.VectorSearchService>().ClearIndex(); } catch { }
                 try { GuideContextService.RaiseCacheInvalidated(); } catch { }
                 try { EntityNameResolver.Invalidate(); } catch { }
                 try { CurrentChapterTracker.Clear(); } catch { }
@@ -454,7 +453,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private void CopyDirectory(string sourceDir, string destDir)
+        private async Task CopyDirectoryAsync(string sourceDir, string destDir)
         {
             if (!Directory.Exists(destDir))
             {
@@ -464,13 +463,15 @@ namespace TM.Services.Modules.ProjectData.Implementations
             foreach (var file in Directory.GetFiles(sourceDir))
             {
                 var destFile = Path.Combine(destDir, Path.GetFileName(file));
-                File.Copy(file, destFile, true);
+                await using var s = File.OpenRead(file);
+                await using var d = File.Create(destFile);
+                await s.CopyToAsync(d).ConfigureAwait(false);
             }
 
             foreach (var dir in Directory.GetDirectories(sourceDir))
             {
                 var destSubDir = Path.Combine(destDir, Path.GetFileName(dir));
-                CopyDirectory(dir, destSubDir);
+                await CopyDirectoryAsync(dir, destSubDir).ConfigureAwait(false);
             }
         }
     }

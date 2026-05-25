@@ -1,4 +1,4 @@
-using System.Threading.Tasks;
+﻿using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Publishing;
 
 namespace TM.Services.Modules.ProjectData.Interfaces
@@ -12,6 +12,8 @@ namespace TM.Services.Modules.ProjectData.Interfaces
         PublishStatus GetPublishStatus();
 
         ManifestInfo? GetManifest();
+
+        Task<ManifestInfo?> GetManifestAsync();
 
         bool NeedsRepublish();
 

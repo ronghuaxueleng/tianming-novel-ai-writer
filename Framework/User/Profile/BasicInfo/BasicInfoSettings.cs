@@ -1,13 +1,14 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.IO;
-using System.Text.Encodings.Web;
 using System.Text.Json;
+using System.Threading.Tasks;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.User.Profile.BasicInfo
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class BasicInfoSettings : BaseSettings<BasicInfoSettings, UserProfileData>
     {
         public BasicInfoSettings(IStoragePathHelper storagePathHelper, IObjectFactory objectFactory)
@@ -41,7 +42,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             return _storagePathHelper.GetFilePath("Framework", "User/Profile/BasicInfo/Profiles", $"{safe}.json");
         }
 
-        public void EnsureProfileExists(string username)
+        public async Task EnsureProfileExistsAsync(string username)
         {
             try
             {
@@ -68,8 +69,8 @@ namespace TM.Framework.User.Profile.BasicInfo
                 };
 
                 var json = JsonSerializer.Serialize(profile, JsonHelper.CnDefault);
-                var tmpBis = path + ".tmp";
-                File.WriteAllText(tmpBis, json);
+                var tmpBis = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmpBis, json).ConfigureAwait(false);
                 File.Move(tmpBis, path, overwrite: true);
 
                 TM.App.Log($"[BasicInfoSettings] 已创建用户资料文件: {username}");
@@ -98,7 +99,7 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                     if (File.Exists(FilePath))
                     {
-                        LoadData();
+                        _ = LoadDataAsync();
                     }
                     else
                     {
@@ -122,7 +123,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                             };
                         }
 
-                        SaveData();
+                        _ = SaveDataAsync();
                     }
                 }
 
@@ -130,7 +131,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                     string.Equals(Data.DisplayName, username, StringComparison.OrdinalIgnoreCase))
                 {
                     Data.DisplayName = "用户";
-                    SaveData();
+                    _ = SaveDataAsync();
                 }
 
                 if (!string.Equals(Data.Username, username, StringComparison.Ordinal))
@@ -139,12 +140,80 @@ namespace TM.Framework.User.Profile.BasicInfo
                     if (string.IsNullOrWhiteSpace(Data.DisplayName) ||
                         string.Equals(Data.DisplayName, username, StringComparison.OrdinalIgnoreCase))
                         Data.DisplayName = "用户";
-                    SaveData();
+                    _ = SaveDataAsync();
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfoSettings] 切换用户资料失败: {ex.Message}");
+            }
+        }
+
+        public async System.Threading.Tasks.Task SwitchUserAsync(string username)
+        {
+            try
+            {
+                if (string.IsNullOrWhiteSpace(username))
+                    return;
+
+                username = username.Trim();
+                var targetPath = GetUserProfileFilePath(username);
+                if (!string.Equals(FilePath, targetPath, StringComparison.OrdinalIgnoreCase))
+                {
+                    var defaultPath = GetDefaultProfileFilePath();
+                    var previousData = Data;
+                    var fromDefaultPath = string.Equals(FilePath, defaultPath, StringComparison.OrdinalIgnoreCase);
+                    FilePath = targetPath;
+
+                    if (File.Exists(FilePath))
+                    {
+                        await LoadDataAsync().ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        if (fromDefaultPath && previousData != null &&
+                            string.Equals(previousData.Username, username, StringComparison.OrdinalIgnoreCase))
+                        {
+                            previousData.Username = username;
+                            if (string.IsNullOrWhiteSpace(previousData.DisplayName) ||
+                                string.Equals(previousData.DisplayName, username, StringComparison.OrdinalIgnoreCase))
+                                previousData.DisplayName = "用户";
+                            Data = previousData;
+                        }
+                        else
+                        {
+                            Data = new UserProfileData
+                            {
+                                Username = username,
+                                DisplayName = "用户",
+                                CreatedTime = DateTime.Now,
+                                LastUpdatedTime = DateTime.Now
+                            };
+                        }
+
+                        await SaveDataAsync().ConfigureAwait(false);
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(Data.DisplayName) ||
+                    string.Equals(Data.DisplayName, username, StringComparison.OrdinalIgnoreCase))
+                {
+                    Data.DisplayName = "用户";
+                    await SaveDataAsync().ConfigureAwait(false);
+                }
+
+                if (!string.Equals(Data.Username, username, StringComparison.Ordinal))
+                {
+                    Data.Username = username;
+                    if (string.IsNullOrWhiteSpace(Data.DisplayName) ||
+                        string.Equals(Data.DisplayName, username, StringComparison.OrdinalIgnoreCase))
+                        Data.DisplayName = "用户";
+                    await SaveDataAsync().ConfigureAwait(false);
+                }
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[BasicInfoSettings] 异步切换用户资料失败: {ex.Message}");
             }
         }
 
@@ -342,6 +411,12 @@ namespace TM.Framework.User.Profile.BasicInfo
             base.SaveData();
         }
 
+        public override async System.Threading.Tasks.Task SaveDataAsync()
+        {
+            Data.LastUpdatedTime = DateTime.Now;
+            await base.SaveDataAsync();
+        }
+
         public UserProfileData GetProfileData() => Data;
 
         public void SetProfileData(UserProfileData profile)
@@ -350,7 +425,6 @@ namespace TM.Framework.User.Profile.BasicInfo
             SaveData();
         }
 
-        public void LoadSettings() => LoadData();
         public void SaveSettings() => SaveData();
 
         #endregion

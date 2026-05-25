@@ -1,10 +1,10 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.ComponentModel;
 
 namespace TM.Framework.Notifications.Sound.SoundScheme
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundSchemeInfo : INotifyPropertyChanged
     {
         private bool _isActive;

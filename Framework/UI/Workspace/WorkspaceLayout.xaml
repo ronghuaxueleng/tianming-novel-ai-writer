@@ -5,28 +5,22 @@
              xmlns:left="clr-namespace:TM.Framework.UI.Workspace.LeftPanel"
              xmlns:center="clr-namespace:TM.Framework.UI.Workspace.CenterPanel"
              xmlns:right="clr-namespace:TM.Framework.UI.Workspace.RightPanel">
-    <UserControl.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="../Windows/Theme.xaml"/>
-                <ResourceDictionary Source="Common/Resources/ChatStyles.xaml"/>
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
-    </UserControl.Resources>
 
-    <Grid x:Name="MainGrid" Background="{DynamicResource UnifiedBackground}">
+    <Grid x:Name="MainGrid" Background="{DynamicResource GradientBackground}">
         <Grid.ColumnDefinitions>
+
             <ColumnDefinition x:Name="LeftWorkColumn" Width="300" MinWidth="300" MaxWidth="450"/>
             <ColumnDefinition x:Name="LeftSplitterColumn" Width="5"/>
             <ColumnDefinition x:Name="CenterWorkColumn" Width="2*" MinWidth="0"/>
             <ColumnDefinition x:Name="RightSplitterColumn" Width="5"/>
+
             <ColumnDefinition x:Name="RightWorkColumn" Width="300" MinWidth="300" MaxWidth="450"/>
         </Grid.ColumnDefinitions>
 
         <left:DocumentPanel x:Name="LeftPanel" Grid.Column="0"/>
 
         <GridSplitter Grid.Column="1"
-                      Background="{DynamicResource UnifiedBackground}"
+                      Background="Transparent"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
                       KeyboardNavigation.IsTabStop="False"/>
@@ -34,7 +28,7 @@
         <center:EditorPanel x:Name="CenterPanel" Grid.Column="2"/>
 
         <GridSplitter Grid.Column="3"
-                      Background="{DynamicResource UnifiedBackground}"
+                      Background="Transparent"
                       HorizontalAlignment="Stretch"
                       VerticalAlignment="Stretch"
                       KeyboardNavigation.IsTabStop="False"/>

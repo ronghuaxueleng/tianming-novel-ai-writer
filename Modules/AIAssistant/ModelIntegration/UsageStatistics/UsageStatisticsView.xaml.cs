@@ -1,13 +1,13 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Globalization;
-using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
 
 namespace TM.Modules.AIAssistant.ModelIntegration.UsageStatistics;
 
 [Obfuscation(Exclude = true, ApplyToMembers = true)]
+[Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
 public partial class UsageStatisticsView : UserControl
 {
     public UsageStatisticsView(UsageStatisticsViewModel viewModel)

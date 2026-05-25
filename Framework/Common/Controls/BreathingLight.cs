@@ -10,21 +10,14 @@ namespace TM.Framework.Common.Controls
         #region 全局同步时钟（屏幕刷新率同步）
 
         private static bool _isRenderingHooked = false;
-        private static DateTime _startTime;
         private static event Action<double>? GlobalTick;
         private static int _activeCount = 0;
-
-        static BreathingLight()
-        {
-            _startTime = DateTime.Now;
-        }
 
         private static void EnsureRenderingHooked()
         {
             if (!_isRenderingHooked)
             {
                 _isRenderingHooked = true;
-                _startTime = DateTime.Now;
                 CompositionTarget.Rendering += OnRendering;
             }
         }
@@ -40,7 +33,7 @@ namespace TM.Framework.Common.Controls
 
         private static void OnRendering(object? sender, EventArgs e)
         {
-            var elapsed = (DateTime.Now - _startTime).TotalSeconds;
+            var elapsed = ((System.Windows.Media.RenderingEventArgs)e).RenderingTime.TotalSeconds;
             GlobalTick?.Invoke(elapsed);
         }
 
@@ -129,6 +122,8 @@ namespace TM.Framework.Common.Controls
         #endregion
 
         private ScaleTransform? _scaleTransform;
+        private double _lastOpacity = -1.0;
+        private double _lastScale = -1.0;
 
         public BreathingLight()
         {
@@ -192,24 +187,34 @@ namespace TM.Framework.Common.Controls
 
         private void OnGlobalTick(double elapsedSeconds)
         {
-            if (!IsActive) return;
+            if (!IsActive || !IsVisible) return;
 
             var phase = elapsedSeconds * (2 * Math.PI / _duration);
             var sineValue = (Math.Sin(phase) + 1) / 2;
 
             var opacity = MinOpacity + sineValue * (MaxOpacity - MinOpacity);
-            Opacity = opacity;
+            if (Math.Abs(opacity - _lastOpacity) >= 0.005)
+            {
+                _lastOpacity = opacity;
+                Opacity = opacity;
+            }
 
             if (EnableScale && _scaleTransform != null)
             {
                 var scale = MinScale + sineValue * (MaxScale - MinScale);
-                _scaleTransform.ScaleX = scale;
-                _scaleTransform.ScaleY = scale;
+                if (Math.Abs(scale - _lastScale) >= 0.001)
+                {
+                    _lastScale = scale;
+                    _scaleTransform.ScaleX = scale;
+                    _scaleTransform.ScaleY = scale;
+                }
             }
         }
 
         private void ResetToDefault()
         {
+            _lastOpacity = -1.0;
+            _lastScale = -1.0;
             Opacity = MaxOpacity;
             if (_scaleTransform != null)
             {

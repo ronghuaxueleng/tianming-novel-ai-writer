@@ -102,6 +102,36 @@ namespace TM.Framework.Common.Helpers.UI
             obj.SetValue(OriginalViewFilterProperty, value);
         }
 
+        private static readonly DependencyProperty ViewRefreshPendingProperty =
+            DependencyProperty.RegisterAttached(
+                "ViewRefreshPending",
+                typeof(bool),
+                typeof(ComboBoxHelper),
+                new PropertyMetadata(false));
+
+        private static bool GetViewRefreshPending(DependencyObject obj)
+        {
+            return (bool)obj.GetValue(ViewRefreshPendingProperty);
+        }
+
+        private static void SetViewRefreshPending(DependencyObject obj, bool value)
+        {
+            obj.SetValue(ViewRefreshPendingProperty, value);
+        }
+
+        private static void ScheduleViewRefresh(ComboBox comboBox, ICollectionView view)
+        {
+            if (GetViewRefreshPending(comboBox))
+                return;
+
+            SetViewRefreshPending(comboBox, true);
+            comboBox.Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+            {
+                SetViewRefreshPending(comboBox, false);
+                view.Refresh();
+            }));
+        }
+
         private static void OnFilterEmptyStringItemsChanged(DependencyObject d, DependencyPropertyChangedEventArgs e)
         {
             if (d is not ComboBox comboBox)
@@ -183,7 +213,7 @@ namespace TM.Framework.Common.Helpers.UI
                 editable.NewItemPlaceholderPosition = NewItemPlaceholderPosition.None;
             }
 
-            view.Refresh();
+            ScheduleViewRefresh(comboBox, view);
         }
 
         private static void ApplyEmptyStringFilter(ComboBox comboBox)
@@ -232,12 +262,12 @@ namespace TM.Framework.Common.Helpers.UI
 
             if (comboBox.ItemsSource is INotifyCollectionChanged incc)
             {
-                NotifyCollectionChangedEventHandler handler = (_, _) => view.Refresh();
+                NotifyCollectionChangedEventHandler handler = (_, _) => ScheduleViewRefresh(comboBox, view);
                 incc.CollectionChanged += handler;
                 SetItemsSourceCollectionWatcher(comboBox, new DelegateDisposable(() => incc.CollectionChanged -= handler));
             }
 
-            view.Refresh();
+            ScheduleViewRefresh(comboBox, view);
         }
 
         private sealed class DelegateDisposable : IDisposable
@@ -338,16 +368,16 @@ namespace TM.Framework.Common.Helpers.UI
         public static readonly DependencyProperty DisplayIconProperty =
             DependencyProperty.RegisterAttached(
                 "DisplayIcon",
-                typeof(string),
+                typeof(System.Windows.Media.ImageSource),
                 typeof(ComboBoxHelper),
-                new FrameworkPropertyMetadata(string.Empty));
+                new FrameworkPropertyMetadata(null));
 
-        public static string GetDisplayIcon(DependencyObject obj)
+        public static System.Windows.Media.ImageSource? GetDisplayIcon(DependencyObject obj)
         {
-            return (string)obj.GetValue(DisplayIconProperty);
+            return (System.Windows.Media.ImageSource?)obj.GetValue(DisplayIconProperty);
         }
 
-        public static void SetDisplayIcon(DependencyObject obj, string value)
+        public static void SetDisplayIcon(DependencyObject obj, System.Windows.Media.ImageSource? value)
         {
             obj.SetValue(DisplayIconProperty, value);
         }
@@ -420,6 +450,26 @@ namespace TM.Framework.Common.Helpers.UI
         public static void SetNodeDoubleClickCommand(DependencyObject obj, System.Windows.Input.ICommand value)
         {
             obj.SetValue(NodeDoubleClickCommandProperty, value);
+        }
+
+        #endregion
+
+        #region SelectOnDoubleClickOnly - 单击展开/双击选中模式（仅新建下拉树使用）
+        public static readonly DependencyProperty SelectOnDoubleClickOnlyProperty =
+            DependencyProperty.RegisterAttached(
+                "SelectOnDoubleClickOnly",
+                typeof(bool),
+                typeof(ComboBoxHelper),
+                new PropertyMetadata(false));
+
+        public static bool GetSelectOnDoubleClickOnly(DependencyObject obj)
+        {
+            return (bool)obj.GetValue(SelectOnDoubleClickOnlyProperty);
+        }
+
+        public static void SetSelectOnDoubleClickOnly(DependencyObject obj, bool value)
+        {
+            obj.SetValue(SelectOnDoubleClickOnlyProperty, value);
         }
 
         #endregion

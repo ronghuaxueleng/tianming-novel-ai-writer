@@ -14,5 +14,6 @@ namespace TM.Framework.User.Account.LoginHistory
 
         public LoginHistoryData LoadRecords() => Data;
         public void SaveRecords(LoginHistoryData data) { Data = data; SaveData(); }
+        public async System.Threading.Tasks.Task SaveRecordsAsync(LoginHistoryData data) { Data = data; await SaveDataAsync(); }
     }
 }

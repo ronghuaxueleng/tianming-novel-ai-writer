@@ -1,13 +1,13 @@
-using System;
+﻿using System;
+using System.Collections.Generic;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media.Effects;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class NotificationStyleView : UserControl
     {
         private readonly NotificationStyleViewModel _viewModel;
@@ -38,9 +38,19 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
             }
         }
 
+        private static readonly HashSet<string> _previewProperties = new(StringComparer.Ordinal)
+        {
+            "CornerRadius", "ShadowIntensity", "BorderThickness",
+            "BackgroundOpacity", "NotificationWidth", "NotificationHeight"
+        };
+
         private void AttachPreviewUpdates()
         {
-            _viewModel.PropertyChanged += (s, e) => UpdatePreview();
+            _viewModel.PropertyChanged += (s, e) =>
+            {
+                if (e.PropertyName != null && _previewProperties.Contains(e.PropertyName))
+                    UpdatePreview();
+            };
         }
 
         private void UpdatePreview()
@@ -81,15 +91,15 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
                 System.Threading.Tasks.Task.Run(async () =>
                 {
                     await System.Threading.Tasks.Task.Delay(500);
-                    Application.Current?.Dispatcher.BeginInvoke(() => 
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
                         ToastNotification.ShowSuccess("操作成功", "配置已应用"));
 
                     await System.Threading.Tasks.Task.Delay(500);
-                    Application.Current?.Dispatcher.BeginInvoke(() => 
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
                         ToastNotification.ShowWarning("注意事项", "请注意查看配置参数"));
 
                     await System.Threading.Tasks.Task.Delay(500);
-                    Application.Current?.Dispatcher.BeginInvoke(() => 
+                    Application.Current?.Dispatcher.BeginInvoke(() =>
                         ToastNotification.ShowError("发生错误", "这是错误提示示例"));
                 });
 
@@ -112,22 +122,22 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
             catch (Exception ex)
             {
                 App.Log($"[NotificationStyleView] 重置失败: {ex.Message}");
-                StandardDialog.ShowError($"重置失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"重置失败：{ex.Message}", "重置失败", Window.GetWindow(this));
             }
         }
 
-        private void OnSaveClick(object sender, RoutedEventArgs e)
+        private async void OnSaveClick(object sender, RoutedEventArgs e)
         {
             try
             {
-                _viewModel.SaveSettings();
+                await _viewModel.SaveSettingsAsync();
                 GlobalToast.Success("保存成功", "通知样式设置已成功保存");
                 App.Log("[NotificationStyleView] 设置已保存");
             }
             catch (Exception ex)
             {
                 App.Log($"[NotificationStyleView] 保存失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败", Window.GetWindow(this));
             }
         }
     }

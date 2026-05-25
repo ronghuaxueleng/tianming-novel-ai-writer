@@ -14,6 +14,9 @@ namespace TM.Services.Framework.AI.QueryRouting
 
     public class QueryRouter
     {
+        private static readonly Regex ChapterIdRegex = new(@"vol\d+_ch\d+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex GuidRegex = new(@"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+
         private readonly HashSet<string> _nameIndex = new(StringComparer.OrdinalIgnoreCase);
 
         public QueryRouter() { }
@@ -33,10 +36,10 @@ namespace TM.Services.Framework.AI.QueryRouting
             if (string.IsNullOrEmpty(query))
                 return QueryRoute.Precise;
 
-            if (Regex.IsMatch(query, @"vol\d+_ch\d+", RegexOptions.IgnoreCase))
+            if (ChapterIdRegex.IsMatch(query))
                 return QueryRoute.Precise;
 
-            if (Regex.IsMatch(query, @"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOptions.IgnoreCase))
+            if (GuidRegex.IsMatch(query))
                 return QueryRoute.Precise;
 
             if (query.Contains("哪章") || query.Contains("之前") ||
@@ -77,13 +80,13 @@ namespace TM.Services.Framework.AI.QueryRouting
 
         private static List<string> ExtractChapterIds(string query)
         {
-            var matches = Regex.Matches(query, @"vol\d+_ch\d+", RegexOptions.IgnoreCase);
+            var matches = ChapterIdRegex.Matches(query);
             return matches.Select(m => m.Value.ToLowerInvariant()).Distinct().ToList();
         }
 
         private static List<string> ExtractEntityIds(string query)
         {
-            var matches = Regex.Matches(query, @"[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}", RegexOptions.IgnoreCase);
+            var matches = GuidRegex.Matches(query);
             return matches.Select(m => m.Value.ToLowerInvariant()).Distinct().ToList();
         }
     }

@@ -2,32 +2,30 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Models.Design.Factions;
+using TM.Services.Modules.ProjectData.Models.Design.Characters;
 using TM.Modules.Design.Elements.FactionRules.Services;
+using TM.Services.Modules.ProjectData.Metadata;
 using TM.Modules.Design.Elements.CharacterRules.Services;
 using TM.Services.Modules.ProjectData.Implementations;
-using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Framework.AI.Interfaces.Prompts;
-using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
 
 namespace TM.Modules.Design.Elements.FactionRules
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class FactionRulesViewModel : DataManagementViewModelBase<FactionRulesData, FactionRulesCategory, FactionRulesService>
     {
         private readonly IPromptRepository _promptRepository;
         private readonly ContextService _contextService;
         private readonly CharacterRulesService _characterRulesService;
-        private readonly IWorkScopeService _workScopeService;
         private string _formName = string.Empty;
-        private string _formIcon = "🏛️";
+        private string _formIcon = "Icon.Institution";
         private string _formStatus = "已启用";
         private string _formCategory = string.Empty;
 
@@ -74,6 +72,7 @@ namespace TM.Modules.Design.Elements.FactionRules
         public string FormNeutralCompetitors { get => _formNeutralCompetitors; set { _formNeutralCompetitors = value; OnPropertyChanged(); } }
 
         public List<string> StatusOptions { get; } = new() { "已禁用", "已启用" };
+        public List<string> FactionTypeOptions { get; } = new() { "", "宗门/教派", "王国/帝国", "家族/世家", "商盟/行会", "军事组织", "秘密组织", "部落/氏族" };
 
         private List<string> _availableCharacterNames = new();
         private List<string> _availableFactionNames = new();
@@ -82,6 +81,8 @@ namespace TM.Modules.Design.Elements.FactionRules
         private Dictionary<string, string> _characterNameToId = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, string> _factionIdToName = new();
         private Dictionary<string, string> _factionNameToId = new(StringComparer.OrdinalIgnoreCase);
+        private readonly TM.Framework.Common.Services.LazyListCache<CharacterRulesData> _allCharsCache = new();
+        private readonly TM.Framework.Common.Services.LazyListCache<FactionRulesData> _allFactionsCache = new();
 
         public List<string> AvailableCharacters
         {
@@ -95,19 +96,22 @@ namespace TM.Modules.Design.Elements.FactionRules
             set { _availableFactionNames = value; OnPropertyChanged(); }
         }
 
-        public FactionRulesViewModel(IPromptRepository promptRepository, ContextService contextService, CharacterRulesService characterRulesService, IWorkScopeService workScopeService)
+        public FactionRulesViewModel(IPromptRepository promptRepository, ContextService contextService, CharacterRulesService characterRulesService)
         {
             _promptRepository = promptRepository;
             _contextService = contextService;
             _characterRulesService = characterRulesService;
-            _workScopeService = workScopeService;
+        }
+
+        protected override void OnAfterInitializeRefresh()
+        {
             RefreshRelationshipOptions();
         }
 
+        private void InvalidateRelationshipCache() { _allCharsCache.Invalidate(); _allFactionsCache.Invalidate(); }
+
         private void RefreshRelationshipOptions()
         {
-            var currentScope = _workScopeService.CurrentSourceBookId;
-
             _characterIdToName = new();
             _characterNameToId = new(StringComparer.OrdinalIgnoreCase);
             _factionIdToName = new();
@@ -115,10 +119,9 @@ namespace TM.Modules.Design.Elements.FactionRules
 
             try
             {
-                var characterList = _characterRulesService.GetAllCharacterRules()
-                    .Where(c => c.IsEnabled && (string.IsNullOrEmpty(currentScope) || c.SourceBookId == currentScope))
-                    .ToList();
-
+                var characterList = _allCharsCache.Get(() => _characterRulesService.GetAllCharacterRules()
+                    .Where(c => c.IsEnabled)
+                    .ToList());
                 var names = new List<string>();
                 foreach (var c in characterList)
                 {
@@ -136,9 +139,14 @@ namespace TM.Modules.Design.Elements.FactionRules
 
             try
             {
-                var factionList = Service.GetAllFactionRules()
-                    .Where(f => f.IsEnabled && f.Id != _currentEditingData?.Id && (string.IsNullOrEmpty(currentScope) || f.SourceBookId == currentScope))
-                    .ToList();
+                var allFactions = _allFactionsCache.Get(() => Service.GetAllFactionRules()
+                    .Where(f => f.IsEnabled)
+                    .ToList());
+
+                var currentId = _currentEditingData?.Id;
+                var factionList = string.IsNullOrWhiteSpace(currentId)
+                    ? allFactions
+                    : allFactions.Where(f => f.Id != currentId).ToList();
 
                 var names = new List<string>();
                 foreach (var f in factionList)
@@ -196,18 +204,16 @@ namespace TM.Modules.Design.Elements.FactionRules
             return string.Join("、", items);
         }
 
-        protected override string DefaultDataIcon => "🏛️";
+        protected override string DefaultDataIcon => "Icon.Institution";
 
         protected override FactionRulesData? CreateNewData(string? categoryName = null)
         {
-            var currentScope = _workScopeService.CurrentSourceBookId;
             return new FactionRulesData
             {
                 Id = ShortIdGenerator.New("D"),
                 Name = "新势力规则",
                 Category = categoryName ?? string.Empty,
                 IsEnabled = true,
-                SourceBookId = currentScope,
                 CreatedAt = DateTime.Now,
                 UpdatedAt = DateTime.Now
             };
@@ -215,15 +221,21 @@ namespace TM.Modules.Design.Elements.FactionRules
 
         protected override async System.Threading.Tasks.Task ResolveEntityReferencesBeforeSaveAsync()
         {
-            var scope = _workScopeService.CurrentSourceBookId;
-            FormLeader              = await ResolveOrCreateCharacterNameAsync(FormLeader, scope);
-            FormCoreMembers         = await ResolveOrCreateCharacterNamesAsync(FormCoreMembers, scope);
-            FormAllies              = await ResolveOrCreateFactionNamesAsync(FormAllies, scope);
-            FormEnemies             = await ResolveOrCreateFactionNamesAsync(FormEnemies, scope);
-            FormNeutralCompetitors  = await ResolveOrCreateFactionNamesAsync(FormNeutralCompetitors, scope);
+            FormLeader = await ResolveOrCreateCharacterNameAsync(FormLeader);
+            FormCoreMembers = await ResolveOrCreateCharacterNamesAsync(FormCoreMembers);
+
+            var dbCandidates = new HashSet<string>(
+                Service.GetAllFactionRules()
+                    .Where(f => f.IsEnabled)
+                    .Select(r => r.Name),
+                StringComparer.OrdinalIgnoreCase);
+
+            FormAllies = ResolveFactionNamesInScope(FormAllies, FormName, dbCandidates);
+            FormEnemies = ResolveFactionNamesInScope(FormEnemies, FormName, dbCandidates);
+            FormNeutralCompetitors = ResolveFactionNamesInScope(FormNeutralCompetitors, FormName, dbCandidates);
         }
 
-        private System.Threading.Tasks.Task<string> ResolveOrCreateCharacterNameAsync(string rawName, string? scopeId)
+        private System.Threading.Tasks.Task<string> ResolveOrCreateCharacterNameAsync(string rawName)
         {
             if (string.IsNullOrWhiteSpace(rawName)) return System.Threading.Tasks.Task.FromResult(rawName);
             var name = rawName.Trim();
@@ -238,38 +250,43 @@ namespace TM.Modules.Design.Elements.FactionRules
             return System.Threading.Tasks.Task.FromResult(string.Empty);
         }
 
-        private async System.Threading.Tasks.Task<string> ResolveOrCreateCharacterNamesAsync(string rawNames, string? scopeId)
+        private async System.Threading.Tasks.Task<string> ResolveOrCreateCharacterNamesAsync(string rawNames)
         {
             if (string.IsNullOrWhiteSpace(rawNames)) return rawNames;
             var parts = rawNames.Split(new[] { ',', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s));
             var resolved = new List<string>();
-            foreach (var n in parts) resolved.Add(await ResolveOrCreateCharacterNameAsync(n, scopeId));
+            foreach (var n in parts) resolved.Add(await ResolveOrCreateCharacterNameAsync(n));
             return string.Join("、", resolved.Where(s => !string.IsNullOrWhiteSpace(s)));
         }
 
-        private System.Threading.Tasks.Task<string> ResolveOrCreateFactionNameAsync(string rawName, string? scopeId)
+        private string ResolveFactionNamesInScope(
+            string? rawNames,
+            string? selfName,
+            HashSet<string> candidatesByName)
         {
-            if (string.IsNullOrWhiteSpace(rawName)) return System.Threading.Tasks.Task.FromResult(rawName);
-            var name = rawName.Trim();
-            if (EntityNameNormalizeHelper.IsIgnoredValue(name)) return System.Threading.Tasks.Task.FromResult(string.Empty);
-
-            if (ShortIdGenerator.IsLikelyId(name) && _factionIdToName.ContainsKey(name))
-                return System.Threading.Tasks.Task.FromResult(name);
-            var all = Service.GetAllFactionRules().Where(f => f.IsEnabled && f.Id != _currentEditingData?.Id).ToList();
-            if (all.Any(f => string.Equals(f.Name, name, StringComparison.OrdinalIgnoreCase)))
-                return System.Threading.Tasks.Task.FromResult(name);
-            TM.App.Log($"[FactionRulesViewModel] 实体引用：'{name}' 在上游不存在，已忽略");
-            return System.Threading.Tasks.Task.FromResult(string.Empty);
-        }
-
-        private async System.Threading.Tasks.Task<string> ResolveOrCreateFactionNamesAsync(string rawNames, string? scopeId)
-        {
-            if (string.IsNullOrWhiteSpace(rawNames)) return rawNames;
+            if (string.IsNullOrWhiteSpace(rawNames)) return string.Empty;
             var parts = rawNames.Split(new[] { ',', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
                 .Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s));
             var resolved = new List<string>();
-            foreach (var n in parts) resolved.Add(await ResolveOrCreateFactionNameAsync(n, scopeId));
+            foreach (var n in parts)
+            {
+                if (EntityNameNormalizeHelper.IsIgnoredValue(n)) continue;
+                if (!string.IsNullOrWhiteSpace(selfName) && string.Equals(n, selfName, StringComparison.OrdinalIgnoreCase))
+                    continue;
+
+                if (ShortIdGenerator.IsLikelyId(n) && _factionIdToName.ContainsKey(n))
+                {
+                    resolved.Add(n);
+                    continue;
+                }
+                if (candidatesByName.Contains(n))
+                {
+                    resolved.Add(n);
+                    continue;
+                }
+                TM.App.Log($"[FactionRulesViewModel] 实体引用：势力 '{n}' 不在候选集合中，已忽略");
+            }
             return string.Join("、", resolved.Where(s => !string.IsNullOrWhiteSpace(s)));
         }
 
@@ -281,11 +298,13 @@ namespace TM.Modules.Design.Elements.FactionRules
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await EnsureServiceInitializedAsync(Service);
-            await EnsureServiceInitializedAsync(_characterRulesService);
+            await Task.WhenAll(
+                EnsureServiceInitializedAsync(Service),
+                EnsureServiceInitializedAsync(_characterRulesService));
 
             try
             {
+                InvalidateRelationshipCache();
                 var dispatcher = System.Windows.Application.Current?.Dispatcher;
                 if (dispatcher != null)
                 {
@@ -301,6 +320,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             }
             catch
             {
+                InvalidateRelationshipCache();
                 RefreshRelationshipOptions();
             }
         }
@@ -313,6 +333,8 @@ namespace TM.Modules.Design.Elements.FactionRules
         }
 
         protected override int ClearAllDataItems() => Service.ClearAllFactionRules();
+
+        protected override string GetModuleNameForVersionTracking() => "FactionRules";
 
         protected override void SaveCurrentEditingData()
         {
@@ -331,19 +353,15 @@ namespace TM.Modules.Design.Elements.FactionRules
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = "🏛️",
+                Icon = IconHelper.Get("Icon.Institution"),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(FactionRulesData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(FactionRulesData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword)) return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.FactionType.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Goal.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.FactionType, data.Goal };
         }
 
         private ICommand? _selectNodeCommand;
@@ -364,21 +382,29 @@ namespace TM.Modules.Design.Elements.FactionRules
                     _currentEditingCategory = category;
                     _currentEditingData = null;
                     RefreshRelationshipOptions();
-                    LoadCategoryToForm(category);
-                    EnterEditMode();
+                    if (category.IsBuiltIn)
+                    {
+                        ResetForm();
+                        EnterEditMode();
+                    }
+                    else
+                    {
+                        LoadCategoryToForm(category);
+                        EnterEditMode();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[FactionRulesViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
         private void LoadDataToForm(FactionRulesData data)
         {
             FormName = data.Name;
-            FormIcon = "🏛️";
+            FormIcon = "Icon.Institution";
             FormStatus = data.IsEnabled ? "已启用" : "已禁用";
             FormCategory = data.Category;
 
@@ -442,7 +468,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             catch (Exception ex)
             {
                 TM.App.Log($"[FactionRulesViewModel] 新建失败: {ex.Message}");
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
             }
         });
 
@@ -463,7 +489,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             catch (Exception ex)
             {
                 TM.App.Log($"[FactionRulesViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         });
 
@@ -495,7 +521,7 @@ namespace TM.Modules.Design.Elements.FactionRules
                 if (unmatchedNeutral.Count > 0)
                     parts.Add($"中立竞争: {string.Join("、", unmatchedNeutral)}");
 
-                GlobalToast.Warning("断链预警", $"以下名称未在当前Scope候选列表中找到，可能导致上下文变弱：{string.Join("；", parts)}");
+                GlobalToast.Warning("断链预警", $"以下名称未在当前候选列表中找到，可能导致上下文变弱：{string.Join("；", parts)}");
             }
 
             if (!IsCreateMode && _currentEditingCategory == null && _currentEditingData == null)
@@ -557,6 +583,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             UpdateDataFromForm(newData);
             await Service.AddFactionRuleAsync(newData);
             _currentEditingData = newData;
+            InvalidateRelationshipCache();
             GlobalToast.Success("保存成功", $"势力规则『{newData.Name}』已创建");
         }
 
@@ -582,6 +609,7 @@ namespace TM.Modules.Design.Elements.FactionRules
 
             UpdateDataFromForm(_currentEditingData);
             await Service.UpdateFactionRuleAsync(_currentEditingData);
+            InvalidateRelationshipCache();
             GlobalToast.Success("保存成功", $"势力规则『{_currentEditingData.Name}』已更新");
         }
 
@@ -590,7 +618,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             var newIsEnabled = (FormStatus == "已启用");
             if (newIsEnabled && !data.IsEnabled)
             {
-                if (!CheckScopeBeforeEnable(data.SourceBookId, data.Name))
+                if (!CheckBeforeEnable(null, data.Name))
                 {
                     FormStatus = "已禁用";
                     return;
@@ -631,10 +659,15 @@ namespace TM.Modules.Design.Elements.FactionRules
 
                     int totalDataDeleted = 0;
 
+                    var categoryIdLookup = Service.GetAllCategories()
+                        .ToDictionary(c => c.Name, c => c.Id, StringComparer.Ordinal);
                     foreach (var categoryName in allCategoriesToDelete)
                     {
+                        categoryIdLookup.TryGetValue(categoryName, out var cId);
                         var dataInCategory = Service.GetAllFactionRules()
-                            .Where(d => d.Category == categoryName)
+                            .Where(d =>
+                                (!string.IsNullOrWhiteSpace(cId) && d.CategoryId == cId) ||
+                                (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName))
                             .ToList();
 
                         foreach (var item in dataInCategory)
@@ -661,6 +694,7 @@ namespace TM.Modules.Design.Elements.FactionRules
                     if (!result) return;
 
                     Service.DeleteFactionRule(_currentEditingData.Id);
+                    InvalidateRelationshipCache();
                     GlobalToast.Success("删除成功", $"势力规则『{_currentEditingData.Name}』已删除");
 
                     _currentEditingData = null;
@@ -675,7 +709,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             catch (Exception ex)
             {
                 TM.App.Log($"[FactionRulesViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -686,6 +720,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             return new TM.Framework.Common.ViewModels.AIGenerationConfig
             {
                 Category = "小说设计师",
+                ActiveModuleHint = "势力规则",
                 ServiceType = TM.Framework.Common.ViewModels.AIServiceType.ChatEngine,
                 ResponseFormat = TM.Framework.Common.ViewModels.ResponseFormat.Json,
                 MessagePrefix = "势力设计",
@@ -697,7 +732,7 @@ namespace TM.Modules.Design.Elements.FactionRules
                 },
                 OutputFields = new()
                 {
-                    ["势力类型"] = v => FormFactionType = v,
+                    ["势力类型"] = v => FormFactionType = EntityNameNormalizeHelper.FilterToCandidate(v, FactionTypeOptions),
                     ["理念目标"] = v => FormGoal = v,
                     ["实力地盘"] = v => FormStrengthTerritory = v,
                     ["领袖"] = v => FormLeader = FilterToCandidateOrRaw(v, AvailableCharacters),
@@ -720,21 +755,13 @@ namespace TM.Modules.Design.Elements.FactionRules
                     ["中立竞争"] = () => FormNeutralCompetitors,
                 },
                 ContextProvider = async () => await GetFactionContextAsync(),
-                BatchFieldKeyMap = new()
-                {
-                    ["势力类型"] = "FactionType",
-                    ["理念目标"] = "Goal",
-                    ["实力地盘"] = "StrengthTerritory",
-                    ["领袖"] = "Leader",
-                    ["核心成员"] = "CoreMembers",
-                    ["成员特征"] = "MemberTraits",
-                    ["盟友势力"] = "Allies",
-                    ["敌对势力"] = "Enemies",
-                    ["中立竞争"] = "NeutralCompetitors"
-                },
+                BatchFieldKeyMap = CreateBatchFieldKeyMap(),
                 BatchIndexFields = new() { "Name", "FactionType", "Goal", "Leader" }
             };
         }
+
+        public static Dictionary<string, string> CreateBatchFieldKeyMap()
+            => EntityFieldMeta.GetFieldKeyMap("factions");
 
         private async System.Threading.Tasks.Task<string> GetFactionContextAsync()
         {
@@ -748,7 +775,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             }
 
             var availableChars = AvailableCharacters.Where(c => !string.IsNullOrEmpty(c)).ToList();
-            if (availableChars.Any())
+            if (availableChars.Count > 0)
             {
                 sb.Append(EntityReferencePromptHelper.BuildCandidateSection(
                     title: "可选角色",
@@ -757,7 +784,7 @@ namespace TM.Modules.Design.Elements.FactionRules
             }
 
             var availableFactions = AvailableFactions.Where(f => !string.IsNullOrEmpty(f)).ToList();
-            if (availableFactions.Any())
+            if (availableFactions.Count > 0)
             {
                 sb.Append(EntityReferencePromptHelper.BuildCandidateSection(
                     title: "可选势力",
@@ -768,6 +795,9 @@ namespace TM.Modules.Design.Elements.FactionRules
             sb.AppendLine("<field_constraints mandatory=\"true\">");
             sb.AppendLine("1. 「领袖」「核心成员」只填写角色姓名，禁止附带描述、职位或其他说明性文字。");
             sb.AppendLine("2. 「理念目标」「实力地盘」「成员特征」等长文本字段如有多条，请在字符串内用换行分条。");
+            sb.AppendLine($"3. 「势力类型」必须从以下选项中选择（双斜线表示跨题材等价类型，根据上下文世界观选择最匹配的一项）：{string.Join("、", FactionTypeOptions.Where(o => !string.IsNullOrWhiteSpace(o)))}");
+            sb.AppendLine("4. 批量生成时，同一种势力类型不得超过总数的 1/3，确保类型分布多元化。");
+            sb.AppendLine("5. 「Name」后缀应与「势力类型」保持风格一致（参考：宗门/教派→宗/派/教/门；王国/帝国→国/朝/邦；家族/世家→家/氏/阀；商盟/行会→盟/商行/局；军事组织→军/营/旅/卫；秘密组织→阁/楼/堂；部落/氏族→部/族/寨），批量生成时同一后缀字不得在 Name 中出现超过总数的 1/3。");
             sb.AppendLine("</field_constraints>");
             sb.AppendLine();
 
@@ -781,11 +811,34 @@ namespace TM.Modules.Design.Elements.FactionRules
             return sb.ToString();
         }
 
+        protected override ModuleNormalizationConfig? GetNormalizationConfig()
+        {
+            return new ModuleNormalizationConfig
+            {
+                ModuleName = nameof(FactionRulesViewModel),
+                Rules = new List<FieldNormalizationRule>
+                {
+                    new()
+                    {
+                        FieldName = "FactionType",
+                        Type = NormalizationType.StaticOptions,
+                        StaticOptions = FactionTypeOptions.Where(o => !string.IsNullOrWhiteSpace(o)).ToList(),
+                        DefaultValue = FactionTypeOptions.FirstOrDefault(o => string.Equals(o, "宗门/教派", StringComparison.Ordinal))
+                                       ?? FactionTypeOptions.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o))
+                                       ?? string.Empty,
+                        AllowEmpty = true
+                    }
+                }
+            };
+        }
+
         protected override bool CanExecuteAIGenerate() => base.CanExecuteAIGenerate();
 
         protected override IEnumerable<string> GetExistingNamesForDedup()
             => Service.GetAllFactionRules().Select(r => r.Name);
-        protected override int GetDefaultBatchSize() => 15;
+        protected override int GetBaseBatchSize() => 10;
+        protected override int GetBatchSize64K() => 12;
+        protected override int GetBatchSize128K() => 15;
 
         protected override async System.Threading.Tasks.Task<List<Dictionary<string, object>>> SaveBatchEntitiesAsync(
             List<Dictionary<string, object>> entities,
@@ -802,97 +855,95 @@ namespace TM.Modules.Design.Elements.FactionRules
                 .Select(e => new TM.Framework.Common.Services.BatchEntityReader(e).GetString("Name"))
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToList();
-            var allFactionCandidates = AvailableFactions
+            var allFactionCandidates = dbNames
                 .Concat(batchFactionNames)
                 .Where(f => !string.IsNullOrWhiteSpace(f))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            string ResolveFactionNamesInBatch(string rawNames, string selfName)
+            if (batchFactionNames.Count >= 3)
             {
-                if (string.IsNullOrWhiteSpace(rawNames)) return rawNames;
-                var parts = rawNames.Split(new[] { ',', '，', '、' }, StringSplitOptions.RemoveEmptyEntries)
-                    .Select(s => s.Trim()).Where(s => !string.IsNullOrWhiteSpace(s));
-                var resolved = new List<string>();
-                foreach (var n in parts)
+                var suffixGroups = batchFactionNames
+                    .Where(n => n.Length >= 1)
+                    .GroupBy(n => n[n.Length - 1])
+                    .OrderByDescending(g => g.Count());
+                var dominant = suffixGroups.FirstOrDefault();
+                if (dominant != null && dominant.Count() * 3 > batchFactionNames.Count)
                 {
-                    if (EntityNameNormalizeHelper.IsIgnoredValue(n)) continue;
-                    if (!string.IsNullOrWhiteSpace(selfName) && string.Equals(n, selfName, StringComparison.OrdinalIgnoreCase))
-                        continue;
-
-                    if (allFactionCandidates.Contains(n))
-                    {
-                        resolved.Add(n);
-                        continue;
-                    }
-
-                    TM.App.Log($"[FactionRulesViewModel] 实体引用（批量）：势力 '{n}' 在上游/本批次不存在，已忽略");
-                }
-                return string.Join("、", resolved.Where(s => !string.IsNullOrWhiteSpace(s)));
-            }
-
-            foreach (var entity in entities)
-            {
-                try
-                {
-                    var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
-                    var name = reader.GetString("Name");
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = $"势力_{DateTime.Now:HHmmss}_{result.Count + 1}";
-
-                    var baseName = name;
-
-                    if (dbNames.Contains(baseName))
-                    {
-                        TM.App.Log($"[FactionRulesViewModel] 跳过已存在势力: {baseName}");
-                        continue;
-                    }
-
-                    int suffix = 1;
-                    while (batchNames.Contains(name))
-                    {
-                        name = $"{baseName}_{suffix++}";
-                    }
-                    batchNames.Add(name);
-                    dbNames.Add(name);
-
-                    var scope = _workScopeService.CurrentSourceBookId;
-                    var leader = await ResolveOrCreateCharacterNameAsync(reader.GetString("Leader"), scope);
-                    var allies = ResolveFactionNamesInBatch(reader.GetString("Allies"), name);
-                    var enemies = ResolveFactionNamesInBatch(reader.GetString("Enemies"), name);
-                    var neutral = ResolveFactionNamesInBatch(reader.GetString("NeutralCompetitors"), name);
-                    var data = new FactionRulesData
-                    {
-                        Id = ShortIdGenerator.New("D"),
-                        Name = name,
-                        Category = categoryName,
-                        IsEnabled = true,
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        FactionType = reader.GetString("FactionType"),
-                        Goal = reader.GetString("Goal"),
-                        StrengthTerritory = reader.GetString("StrengthTerritory"),
-                        Leader = leader,
-                        CoreMembers = await ResolveOrCreateCharacterNamesAsync(reader.GetString("CoreMembers"), scope),
-                        MemberTraits = reader.GetString("MemberTraits"),
-                        Allies = allies,
-                        Enemies = enemies,
-                        NeutralCompetitors = neutral
-                    };
-
-                    entity["Name"] = name;
-                    entity["Leader"] = leader;
-                    await Service.AddFactionRuleAsync(data);
-                    result.Add(entity);
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[FactionRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
+                    TM.App.Log($"[FactionRulesViewModel] 命名同质化警告：后缀「{dominant.Key}」出现 {dominant.Count()}/{batchFactionNames.Count} 次（超过1/3），命名多样性不足");
                 }
             }
 
-            TM.App.Log($"[FactionRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
-            return result;
+            Service.BeginBatchSave();
+            try
+            {
+                foreach (var entity in entities)
+                {
+                    try
+                    {
+                        var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
+                        var name = reader.GetString("Name");
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = $"势力_{DateTime.Now:HHmmss}_{result.Count + 1}";
+
+                        var baseName = name;
+
+                        if (dbNames.Contains(baseName))
+                        {
+                            TM.App.Log($"[FactionRulesViewModel] 跳过已存在势力: {baseName}");
+                            continue;
+                        }
+
+                        int suffix = 1;
+                        while (batchNames.Contains(name))
+                        {
+                            name = $"{baseName}_{suffix++}";
+                        }
+                        batchNames.Add(name);
+                        dbNames.Add(name);
+
+                        var leader = await ResolveOrCreateCharacterNameAsync(reader.GetString("Leader"));
+                        var allies = ResolveFactionNamesInScope(reader.GetString("Allies"), name, allFactionCandidates);
+                        var enemies = ResolveFactionNamesInScope(reader.GetString("Enemies"), name, allFactionCandidates);
+                        var neutral = ResolveFactionNamesInScope(reader.GetString("NeutralCompetitors"), name, allFactionCandidates);
+                        var data = new FactionRulesData
+                        {
+                            Id = ShortIdGenerator.New("D"),
+                            Name = name,
+                            Category = categoryName,
+                            IsEnabled = true,
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now,
+                            FactionType = NormalizeFieldValue("FactionType", reader.GetString("FactionType")),
+                            Goal = reader.GetString("Goal"),
+                            StrengthTerritory = reader.GetString("StrengthTerritory"),
+                            Leader = leader,
+                            CoreMembers = await ResolveOrCreateCharacterNamesAsync(reader.GetString("CoreMembers")),
+                            MemberTraits = reader.GetString("MemberTraits"),
+                            Allies = allies,
+                            Enemies = enemies,
+                            NeutralCompetitors = neutral,
+                            DependencyModuleVersions = versionSnapshot ?? new()
+                        };
+
+                        entity["Name"] = name;
+                        entity["Leader"] = leader;
+                        await Service.AddFactionRuleAsync(data);
+                        result.Add(entity);
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[FactionRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
+                    }
+                }
+
+                TM.App.Log($"[FactionRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
+                return result;
+            }
+            finally
+            {
+                Service.EndBatchSave();
+            }
         }
     }
 }

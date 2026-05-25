@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace TM.Framework.User.Services
@@ -11,13 +12,14 @@ namespace TM.Framework.User.Services
         private readonly string _subscriptionFilePath;
         private SubscriptionData? _cachedData;
         private readonly object _lock = new object();
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
         private readonly ApiService _apiService;
 
         public SubscriptionService(ApiService apiService)
         {
             _subscriptionFilePath = StoragePathHelper.GetFilePath("Framework", "User/Services", "subscription.json");
             _apiService = apiService;
-            LoadSubscriptionData();
+            _ = LoadSubscriptionDataAsync();
         }
 
         #region 订阅状态
@@ -84,7 +86,7 @@ namespace TM.Framework.User.Services
         {
             try
             {
-                var apiResult = await _apiService.GetSubscriptionAsync();
+                var apiResult = await _apiService.GetSubscriptionAsync().ConfigureAwait(false);
                 if (apiResult.Success && apiResult.Data != null)
                 {
                     lock (_lock)
@@ -99,8 +101,8 @@ namespace TM.Framework.User.Services
                             IsActive = apiResult.Data.IsActive,
                             Source = apiResult.Data.Source
                         };
-                        SaveSubscriptionData();
                     }
+                    _ = SaveSubscriptionDataAsync();
 
                     TM.App.Log($"[SubscriptionService] 订阅信息已从服务器同步: {_cachedData.PlanType}, 到期: {_cachedData.EndTime:yyyy-MM-dd}");
                     return _cachedData;
@@ -129,7 +131,7 @@ namespace TM.Framework.User.Services
 
             try
             {
-                var apiResult = await _apiService.ActivateCardKeyAsync(cardKey);
+                var apiResult = await _apiService.ActivateCardKeyAsync(cardKey).ConfigureAwait(false);
                 if (apiResult.Success && apiResult.Data != null)
                 {
                     lock (_lock)
@@ -141,8 +143,8 @@ namespace TM.Framework.User.Services
                             IsActive = apiResult.Data.Subscription.IsActive,
                             Source = "card_key"
                         };
-                        SaveSubscriptionData();
                     }
+                    _ = SaveSubscriptionDataAsync();
 
                     TM.App.Log($"[SubscriptionService] 卡密续费成功: +{apiResult.Data.DaysAdded}天, 新到期时间: {apiResult.Data.NewExpireTime:yyyy-MM-dd}");
 
@@ -194,7 +196,7 @@ namespace TM.Framework.User.Services
             {
                 TM.App.Log($"[SubscriptionService] 开始为账号续费: {account}");
 
-                var apiResult = await _apiService.RenewAccountWithCardKeyAsync(account, cardKey);
+                var apiResult = await _apiService.RenewAccountWithCardKeyAsync(account, cardKey).ConfigureAwait(false);
 
                 if (apiResult.Success && apiResult.Data != null)
                 {
@@ -231,7 +233,7 @@ namespace TM.Framework.User.Services
         {
             try
             {
-                var apiResult = await _apiService.GetActivationHistoryAsync();
+                var apiResult = await _apiService.GetActivationHistoryAsync().ConfigureAwait(false);
                 if (apiResult.Success && apiResult.Data != null)
                 {
                     TM.App.Log($"[SubscriptionService] 获取到 {apiResult.Data.Records.Count} 条激活历史");
@@ -252,14 +254,15 @@ namespace TM.Framework.User.Services
 
         #region 本地存储
 
-        private void LoadSubscriptionData()
+        private async System.Threading.Tasks.Task LoadSubscriptionDataAsync()
         {
             try
             {
                 if (File.Exists(_subscriptionFilePath))
                 {
-                    var json = File.ReadAllText(_subscriptionFilePath);
-                    _cachedData = JsonSerializer.Deserialize<SubscriptionData>(json);
+                    var json = await File.ReadAllTextAsync(_subscriptionFilePath).ConfigureAwait(false);
+                    lock (_lock)
+                        _cachedData = JsonSerializer.Deserialize<SubscriptionData>(json);
                     TM.App.Log("[SubscriptionService] 订阅数据已加载");
                 }
             }
@@ -269,29 +272,9 @@ namespace TM.Framework.User.Services
             }
         }
 
-        private void SaveSubscriptionData()
-        {
-            try
-            {
-                var directory = Path.GetDirectoryName(_subscriptionFilePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.Serialize(_cachedData, JsonHelper.Default);
-                var tmpSub = _subscriptionFilePath + ".tmp";
-                File.WriteAllText(tmpSub, json);
-                File.Move(tmpSub, _subscriptionFilePath, overwrite: true);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SubscriptionService] 保存订阅数据失败: {ex.Message}");
-            }
-        }
-
         private async System.Threading.Tasks.Task SaveSubscriptionDataAsync()
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var directory = Path.GetDirectoryName(_subscriptionFilePath);
@@ -300,14 +283,20 @@ namespace TM.Framework.User.Services
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_cachedData, JsonHelper.Default);
-                var tmpSubA = _subscriptionFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpSubA, json);
+                var tmpSubA = _subscriptionFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpSubA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _cachedData, JsonHelper.Default).ConfigureAwait(false);
+                }
                 File.Move(tmpSubA, _subscriptionFilePath, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SubscriptionService] 异步保存订阅数据失败: {ex.Message}");
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
 
@@ -316,17 +305,15 @@ namespace TM.Framework.User.Services
             lock (_lock)
             {
                 _cachedData = null;
+            }
+            try
+            {
                 if (File.Exists(_subscriptionFilePath))
-                {
-                    try
-                    {
-                        File.Delete(_subscriptionFilePath);
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[SubscriptionService] 删除订阅缓存文件失败: {ex.Message}");
-                    }
-                }
+                    File.Delete(_subscriptionFilePath);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[SubscriptionService] 删除订阅缓存文件失败: {ex.Message}");
             }
         }
 

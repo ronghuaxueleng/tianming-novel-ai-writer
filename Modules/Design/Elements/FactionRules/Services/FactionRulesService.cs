@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Design.Factions;
 
 namespace TM.Modules.Design.Elements.FactionRules.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class FactionRulesService : ModuleServiceBase<FactionRulesCategory, FactionRulesData>
     {
         public FactionRulesService()
@@ -15,6 +16,8 @@ namespace TM.Modules.Design.Elements.FactionRules.Services
                 dataFileName: "faction_rules.json")
         {
         }
+
+        protected override string? GetEntityTypeKeyForPropagation() => "factions";
 
         public List<FactionRulesData> GetAllFactionRules() => GetAllData();
 
@@ -39,7 +42,7 @@ namespace TM.Modules.Design.Elements.FactionRules.Services
             }
             data.CreatedAt = DateTime.Now;
             data.UpdatedAt = DateTime.Now;
-            await AddDataAsync(data);
+            await AddDataAsync(data).ConfigureAwait(false);
         }
 
         public void UpdateFactionRule(FactionRulesData data)
@@ -53,7 +56,7 @@ namespace TM.Modules.Design.Elements.FactionRules.Services
         {
             if (data == null) return;
             data.UpdatedAt = DateTime.Now;
-            await UpdateDataAsync(data);
+            await UpdateDataAsync(data).ConfigureAwait(false);
         }
 
         public void DeleteFactionRule(string id)

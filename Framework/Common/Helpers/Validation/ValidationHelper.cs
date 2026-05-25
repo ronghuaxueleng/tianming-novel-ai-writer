@@ -2,22 +2,20 @@ using System.Text.RegularExpressions;
 
 namespace TM.Framework.Common.Helpers.Validation
 {
-    public static class ValidationHelper
+    public static partial class ValidationHelper
     {
-        private static readonly Regex EmailRegex = new Regex(
-            @"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$",
-            RegexOptions.Compiled);
+        [GeneratedRegex(@"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$")]
+        private static partial Regex EmailRegex();
 
-        private static readonly Regex PhoneRegex = new Regex(
-            @"^1[3-9]\d{9}$",
-            RegexOptions.Compiled);
+        [GeneratedRegex(@"^1[3-9]\d{9}$")]
+        private static partial Regex PhoneRegex();
 
         public static bool IsValidEmail(string email)
         {
             if (string.IsNullOrWhiteSpace(email))
                 return false;
 
-            return EmailRegex.IsMatch(email);
+            return EmailRegex().IsMatch(email);
         }
 
         public static bool IsValidPhone(string phone)
@@ -25,7 +23,7 @@ namespace TM.Framework.Common.Helpers.Validation
             if (string.IsNullOrWhiteSpace(phone))
                 return false;
 
-            return PhoneRegex.IsMatch(phone);
+            return PhoneRegex().IsMatch(phone);
         }
 
         public static bool IsValidLength(string value, int minLength, int maxLength)

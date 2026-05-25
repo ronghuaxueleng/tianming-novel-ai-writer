@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Text.RegularExpressions;
 
 namespace TM.Framework.Common.Helpers
 {
@@ -104,6 +105,92 @@ namespace TM.Framework.Common.Helpers
             }
 
             return counts;
+        }
+
+        public static bool TryParseVolumeDivision(
+            string? volumeDivision,
+            int expectedVolumes,
+            int expectedTotalChapters,
+            out List<VolumeChapterRange> ranges)
+        {
+            ranges = new List<VolumeChapterRange>();
+            if (string.IsNullOrWhiteSpace(volumeDivision) || expectedVolumes <= 0 || expectedTotalChapters <= 0)
+                return false;
+
+            var pattern = @"(?:(?:第?\s*(?<vol>\d+)\s*卷|(?<vol>\d+))\s*[：:]\s*)?第?\s*(?<start>\d+)\s*(?:章)?\s*[-~～—–－至到]\s*第?\s*(?<end>\d+)\s*(?:章)?";
+
+            var parsed = new List<(int vol, int start, int end)>();
+            int implicitVol = 1;
+            var lines = volumeDivision
+                .Split(new[] { '\r', '\n' }, StringSplitOptions.RemoveEmptyEntries);
+            foreach (var rawLine in lines)
+            {
+                var line = rawLine.Trim();
+                if (string.IsNullOrWhiteSpace(line)) continue;
+                var ms = Regex.Matches(line, pattern);
+                if (ms.Count == 0) continue;
+
+                foreach (Match m in ms)
+                {
+                    if (!m.Success) continue;
+                    int vol = m.Groups["vol"].Success && int.TryParse(m.Groups["vol"].Value, out var v) ? v : implicitVol;
+                    if (!int.TryParse(m.Groups["start"].Value, out var s)) continue;
+                    if (!int.TryParse(m.Groups["end"].Value, out var e)) continue;
+                    if (s > e || s <= 0) continue;
+
+                    parsed.Add((vol, s, e));
+                    implicitVol = vol + 1;
+                }
+            }
+
+            if (parsed.Count == 0)
+                return false;
+
+            parsed.Sort((a, b) => a.vol.CompareTo(b.vol));
+
+            foreach (var (vol, start, end) in parsed)
+            {
+                ranges.Add(new VolumeChapterRange
+                {
+                    VolumeNumber = vol,
+                    StartChapter = start,
+                    EndChapter = end,
+                    TargetChapterCount = end - start + 1
+                });
+            }
+
+            if (ranges.Count != expectedVolumes)
+                return false;
+
+            var seen = new HashSet<int>();
+            for (int i = 0; i < ranges.Count; i++)
+            {
+                var v = ranges[i].VolumeNumber;
+                if (v <= 0 || v > expectedVolumes) return false;
+                if (!seen.Add(v)) return false;
+            }
+            for (int v = 1; v <= expectedVolumes; v++)
+            {
+                if (!seen.Contains(v)) return false;
+            }
+
+            for (int i = 0; i < ranges.Count; i++)
+            {
+                if (ranges[i].VolumeNumber != i + 1)
+                    return false;
+            }
+
+            try
+            {
+                AssertInvariants(ranges, expectedTotalChapters);
+            }
+            catch
+            {
+                ranges = new List<VolumeChapterRange>();
+                return false;
+            }
+
+            return true;
         }
 
         private static void AssertInvariants(List<VolumeChapterRange> ranges, int totalChapters)

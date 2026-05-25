@@ -1,0 +1,236 @@
+<UserControl x:Class="TM.Framework.SystemSettings.DataBackup.DataBackupView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
+             mc:Ignorable="d"
+             d:DesignHeight="700" d:DesignWidth="600">
+
+    <UserControl.Resources>
+
+        <Style x:Key="SectionTagStyle" TargetType="Border">
+            <Setter Property="CornerRadius" Value="3"/>
+            <Setter Property="Padding" Value="6,1"/>
+            <Setter Property="Margin" Value="8,0,0,0"/>
+            <Setter Property="VerticalAlignment" Value="Center"/>
+        </Style>
+
+        <Style x:Key="SectionTagTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="11"/>
+            <Setter Property="FontWeight" Value="SemiBold"/>
+        </Style>
+
+        <Style x:Key="DescTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="13"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="LineHeight" Value="20"/>
+            <Setter Property="Margin" Value="0,0,0,4"/>
+        </Style>
+
+        <Style x:Key="BulletTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextTertiary}"/>
+            <Setter Property="TextWrapping" Value="Wrap"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+        </Style>
+
+        <Style x:Key="StatusTextStyle" TargetType="TextBlock">
+            <Setter Property="FontSize" Value="12"/>
+            <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
+            <Setter Property="Margin" Value="0,2,0,0"/>
+        </Style>
+
+    </UserControl.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,12">
+            <TextBlock Text="备份管理"
+                       FontSize="16"
+                       FontWeight="SemiBold"
+                       Foreground="{DynamicResource TextPrimary}"/>
+            <TextBlock Text="对项目数据进行导出、备份与恢复操作。所有操作均会让您选择保存或读取位置。"
+                       FontSize="12"
+                       Foreground="{DynamicResource TextSecondary}"
+                       TextWrapping="Wrap"
+                       Margin="0,4,0,0"/>
+        </StackPanel>
+
+        <ScrollViewer Grid.Row="1"
+                      VerticalScrollBarVisibility="Auto"
+                      Padding="0,0,10,0">
+            <StackPanel>
+
+                <layout:IconHeaderGroupBox Title="章节导出"
+                                           Icon="{DynamicResource Icon.Download}"
+                                           Margin="0,0,0,12"
+                                           Padding="12">
+                    <layout:IconHeaderGroupBox.Style>
+                        <Style TargetType="layout:IconHeaderGroupBox" BasedOn="{StaticResource StandardGroupBoxStyle}"/>
+                    </layout:IconHeaderGroupBox.Style>
+
+                    <StackPanel>
+
+                        <TextBlock Style="{StaticResource DescTextStyle}">
+                            <Run Text="📝 "/>
+                            <Run Text="将当前项目的所有章节正文压缩为 ZIP 文件，便于分享给读者、编辑或上传至发布平台。" FontWeight="SemiBold"/>
+                        </TextBlock>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 仅包含 Generated/chapters/ 下的 .md 正文文件"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 不含设计、配置、会话等内部数据"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 导出后的 ZIP 不能用于「数据恢复」"/>
+
+                        <Border BorderThickness="0,1,0,0"
+                                BorderBrush="{DynamicResource GlassBorderBrush}"
+                                Margin="0,10,0,0"
+                                Padding="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource StatusTextStyle}">
+                                    <Run Text="📊 当前章节：" Foreground="{DynamicResource TextTertiary}"/>
+                                    <Run Text="{Binding ChaptersStatusText}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="📤  导出章节为 ZIP"
+                                Command="{Binding ExportChaptersCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}"
+                                IsEnabled="{Binding IsNotBusy}"
+                                Padding="20,8"
+                                HorizontalAlignment="Center"
+                                Margin="0,12,0,0"/>
+                    </StackPanel>
+                </layout:IconHeaderGroupBox>
+
+                <layout:IconHeaderGroupBox Title="数据备份"
+                                           Icon="{DynamicResource Icon.Database}"
+                                           Margin="0,0,0,12"
+                                           Padding="12">
+                    <layout:IconHeaderGroupBox.Style>
+                        <Style TargetType="layout:IconHeaderGroupBox" BasedOn="{StaticResource StandardGroupBoxStyle}">
+                            <Setter Property="BorderBrush" Value="{DynamicResource SuccessColor}"/>
+                        </Style>
+                    </layout:IconHeaderGroupBox.Style>
+
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource DescTextStyle}">
+                            <Run Text="📝 "/>
+                            <Run Text="完整打包项目的全部数据，生成单个 ZIP 备份文件。建议定期备份到云盘或 U 盘，防止数据丢失。" FontWeight="SemiBold"/>
+                        </TextBlock>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 设计模块：角色、势力、地点、剧情规则、拆书数据、模板"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 创作模块：蓝图、章节计划、分卷设计、大纲、全局设置"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 项目数据：生成正文、配置快照、会话、历史"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 文件名：项目名_备份_yyyyMMdd_HHmmss.zip"/>
+
+                        <Border BorderThickness="0,1,0,0"
+                                BorderBrush="{DynamicResource GlassBorderBrush}"
+                                Margin="0,10,0,0"
+                                Padding="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource StatusTextStyle}">
+                                    <Run Text="📦 待备份大小：" Foreground="{DynamicResource TextTertiary}"/>
+                                    <Run Text="{Binding BackupSizeText}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                </TextBlock>
+                                <TextBlock Style="{StaticResource StatusTextStyle}">
+                                    <Run Text="🕐 上次备份：" Foreground="{DynamicResource TextTertiary}"/>
+                                    <Run Text="{Binding LastBackupText}" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="💾  一键备份"
+                                Command="{Binding ExportFullBackupCommand}"
+                                Style="{DynamicResource PrimaryButtonStyle}"
+                                IsEnabled="{Binding IsNotBusy}"
+                                Padding="24,8"
+                                HorizontalAlignment="Center"
+                                Margin="0,12,0,0"/>
+                    </StackPanel>
+                </layout:IconHeaderGroupBox>
+
+                <layout:IconHeaderGroupBox Title="数据恢复"
+                                           Icon="{DynamicResource Icon.Refresh}"
+                                           Margin="0,0,0,12"
+                                           Padding="12">
+                    <layout:IconHeaderGroupBox.Style>
+                        <Style TargetType="layout:IconHeaderGroupBox" BasedOn="{StaticResource StandardGroupBoxStyle}">
+                            <Setter Property="BorderBrush" Value="{DynamicResource WarningColor}"/>
+                        </Style>
+                    </layout:IconHeaderGroupBox.Style>
+
+                    <StackPanel>
+                        <TextBlock Style="{StaticResource DescTextStyle}">
+                            <Run Text="📝 "/>
+                            <Run Text="从「数据备份」生成的 ZIP 中还原全部数据（设计/创作/项目）。" FontWeight="SemiBold"/>
+                        </TextBlock>
+                        <TextBlock FontSize="13"
+                                   Foreground="{DynamicResource WarningColor}"
+                                   FontWeight="SemiBold"
+                                   TextWrapping="Wrap"
+                                   Margin="0,4,0,0"
+                                   Text="⚠️ 还原会覆盖当前的设计、创作和项目数据！"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 操作前自动保存安全副本至 Storage/_backup_safety/"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 仅接受由「数据备份」生成的 ZIP 文件"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 章节导出 ZIP 无法用于恢复"/>
+                        <TextBlock Style="{StaticResource BulletTextStyle}" Text="➜ 解压失败会自动回滚到操作前的状态"/>
+
+                        <Border BorderThickness="0,1,0,0"
+                                BorderBrush="{DynamicResource GlassBorderBrush}"
+                                Margin="0,10,0,0"
+                                Padding="0,8,0,0">
+                            <StackPanel>
+                                <TextBlock Style="{StaticResource StatusTextStyle}">
+                                    <Run Text="🔒 安全副本：" Foreground="{DynamicResource TextTertiary}"/>
+                                    <Run Text="保留在 Storage/_backup_safety/，可手动还原" FontWeight="SemiBold" Foreground="{DynamicResource TextPrimary}"/>
+                                </TextBlock>
+                            </StackPanel>
+                        </Border>
+
+                        <Button Content="♻  选择备份文件并恢复"
+                                Command="{Binding RestoreFromBackupCommand}"
+                                Style="{DynamicResource DangerButtonStyle}"
+                                IsEnabled="{Binding IsNotBusy}"
+                                Padding="24,8"
+                                HorizontalAlignment="Center"
+                                Margin="0,12,0,0"/>
+                    </StackPanel>
+                </layout:IconHeaderGroupBox>
+
+            </StackPanel>
+        </ScrollViewer>
+
+        <Border Grid.Row="2"
+                BorderThickness="0,1,0,0"
+                BorderBrush="{DynamicResource GlassBorderBrush}"
+                Margin="0,10,0,0"
+                Padding="0,8,0,0">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <TextBlock Grid.Column="0"
+                           Text="{Binding StatusMessage}"
+                           Foreground="{DynamicResource TextTertiary}"
+                           FontSize="12"
+                           VerticalAlignment="Center"
+                           TextTrimming="CharacterEllipsis"/>
+
+                <Button Grid.Column="1"
+                        Content="🔄 刷新"
+                        Command="{Binding RefreshStatusCommand}"
+                        Style="{DynamicResource SecondaryButtonStyle}"
+                        Padding="12,4"
+                        FontSize="12"/>
+            </Grid>
+        </Border>
+
+    </Grid>
+</UserControl>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using TM.Framework.Common.Helpers.Id;
@@ -22,6 +22,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
             {
                 RunId = effectiveRunId,
                 Mode = ChatMode.Plan,
+                RunType = RunType.Execution,
                 EventType = ExecutionEventType.RunStarted,
                 Title = $"生成计划（{planPayload.Steps.Count} 步骤）"
             });
@@ -46,6 +47,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
                 {
                     RunId = effectiveRunId,
                     Mode = ChatMode.Plan,
+                    RunType = RunType.Execution,
                     EventType = ExecutionEventType.PlanStepStarted,
                     StepIndex = step.Index,
                     Title = step.Title,

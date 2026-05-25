@@ -35,34 +35,6 @@ namespace TM.Framework.UI.Workspace.Services.Spec
             WriteIndented = true
         };
 
-        public CreativeSpec? LoadProjectSpecSync()
-        {
-            if (_cache != null && DateTime.Now - _cacheTime < _cacheExpiration)
-                return _cache;
-
-            try
-            {
-                var projectPath = StoragePathHelper.GetCurrentProjectPath();
-                var path = Path.Combine(projectPath, "Config", "project_spec.json");
-                if (!File.Exists(path))
-                {
-                    _cache = CreateDefaultProjectSpec();
-                    _cacheTime = DateTime.Now;
-                    return _cache;
-                }
-
-                var json = File.ReadAllText(path);
-                _cache = JsonSerializer.Deserialize<CreativeSpec>(json, JsonOptions);
-                _cacheTime = DateTime.Now;
-                return _cache;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SpecLoader] 同步加载项目Spec失败: {ex.Message}");
-                return CreateDefaultProjectSpec();
-            }
-        }
-
         public async Task<CreativeSpec?> LoadProjectSpecAsync()
         {
             if (_cache != null && DateTime.Now - _cacheTime < _cacheExpiration)
@@ -83,8 +55,8 @@ namespace TM.Framework.UI.Workspace.Services.Spec
                     return _cache;
                 }
 
-                var json = await File.ReadAllTextAsync(path);
-                _cache = JsonSerializer.Deserialize<CreativeSpec>(json, JsonOptions);
+                await using var stream = File.OpenRead(path);
+                _cache = await JsonSerializer.DeserializeAsync<CreativeSpec>(stream, JsonOptions);
                 _cacheTime = DateTime.Now;
 
                 TM.App.Log("[SpecLoader] 加载项目Spec成功");
@@ -110,9 +82,11 @@ namespace TM.Framework.UI.Workspace.Services.Spec
                     Directory.CreateDirectory(configDir);
                 }
 
-                var json = JsonSerializer.Serialize(spec, JsonOptions);
-                var tmpSpec = path + ".tmp";
-                await File.WriteAllTextAsync(tmpSpec, json);
+                var tmpSpec = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpSpec))
+                {
+                    await JsonSerializer.SerializeAsync(stream, spec, JsonOptions);
+                }
                 File.Move(tmpSpec, path, overwrite: true);
 
                 _cache = spec;
@@ -138,7 +112,10 @@ namespace TM.Framework.UI.Workspace.Services.Spec
                 TargetWordCount = 3500,
                 ParagraphLength = 200,
                 DialogueRatio = 0.3,
-                PolishMode = 1
+                PolishMode = CreativeSpec.DefaultPolishMode,
+                PolishModel = CreativeSpec.DefaultPolishModel,
+                WordCountControl = CreativeSpec.DefaultWordCountControl,
+                PolishControl = CreativeSpec.DefaultPolishControl
             };
         }
     }

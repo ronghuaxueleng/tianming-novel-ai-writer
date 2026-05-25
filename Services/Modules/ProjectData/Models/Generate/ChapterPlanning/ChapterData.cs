@@ -1,5 +1,5 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Models.Common;
@@ -7,6 +7,7 @@ using TM.Services.Modules.ProjectData.Models.Design.Worldview;
 
 namespace TM.Services.Modules.ProjectData.Models.Generate.ChapterPlanning
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class ChapterData : BusinessDataBase, ICoreRuleSummaryProvider, IDependencyTracked
     {
         [JsonPropertyName("DependencyModuleVersions")]
@@ -22,9 +23,6 @@ namespace TM.Services.Modules.ProjectData.Models.Generate.ChapterPlanning
 
         [JsonPropertyName("Volume")]
         public string Volume { get; set; } = string.Empty;
-
-        [JsonPropertyName("EstimatedWordCount")]
-        public string EstimatedWordCount { get; set; } = string.Empty;
 
         [JsonPropertyName("ChapterTheme")]
         public string ChapterTheme { get; set; } = string.Empty;

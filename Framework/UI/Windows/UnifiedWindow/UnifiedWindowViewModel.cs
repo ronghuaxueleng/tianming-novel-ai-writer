@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -9,22 +9,18 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Reflection;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Models;
-using TM.Framework.Common.Services;
 using TM.Framework.Common.Constants;
 using TM.Framework.User.Services;
-using TM.Services.Framework.AI.Core;
 using TM.Framework.UI.Helpers;
 using TM.Framework.Common.Services.Factories;
+using System.Windows.Media;
 using System.Windows.Threading;
 
 namespace TM.Framework.UI.Windows
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public partial class UnifiedWindowViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public partial class UnifiedWindowViewModel : INotifyPropertyChanged, IDisposable
     {
         #region 枚举定义
 
@@ -39,13 +35,14 @@ namespace TM.Framework.UI.Windows
         #region 配置模型类
 
         [Obfuscation(Exclude = true, ApplyToMembers = true)]
+        [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
         public class SettingsTab : INotifyPropertyChanged
         {
             private bool _isSelected;
             private string _title = string.Empty;
 
             public int Index { get; set; }
-            public string Icon { get; set; } = string.Empty;
+            public ImageSource? Icon { get; set; }
             public string Title
             {
                 get => _title;
@@ -83,14 +80,15 @@ namespace TM.Framework.UI.Windows
         private Dictionary<Type, UserControl> _viewCache = new();
         private System.Threading.CancellationTokenSource? _preWarmCts;
         private System.Threading.Tasks.Task? _preWarmTask;
-        private WindowMode _currentMode = WindowMode.Settings;
+        private WindowMode _currentMode = WindowMode.Writing;
         private SettingsTab? _selectedTab;
         private ObservableCollection<TreeNodeItem>? _treeNodes;
         private UserControl? _currentView;
         private ICommand _nodeClickCommand;
         private ICommand _nodeDoubleClickCommand;
-        private readonly Lazy<UserControl> _loadingPlaceholder = new(() => CreateLoadingPlaceholder());
         private int _viewSwitchRequestId;
+
+        public Action<UserControl>? PreWarmViewCallback { get; set; }
 
         private static readonly object _debugLogLock = new();
         private static readonly HashSet<string> _debugLoggedKeys = new();
@@ -130,6 +128,10 @@ namespace TM.Framework.UI.Windows
                     OnPropertyChanged(nameof(IsSettingsMode));
                     OnPropertyChanged(nameof(WindowTitle));
                     LoadTabsForMode(value);
+
+                    CancelPreWarm();
+                    _preWarmTask = null;
+                    _ = PreWarmAllViewsAsync();
                 }
             }
         }
@@ -173,7 +175,10 @@ namespace TM.Framework.UI.Windows
                     OnPropertyChanged();
                     if (value != null)
                     {
-                        LoadTreeForTab(value);
+                        var tab = value;
+                        Application.Current?.Dispatcher.InvokeAsync(
+                            () => LoadTreeForTab(tab),
+                            System.Windows.Threading.DispatcherPriority.Input);
                     }
                 }
             }
@@ -184,6 +189,7 @@ namespace TM.Framework.UI.Windows
             get => _treeNodes;
             set
             {
+                if (ReferenceEquals(_treeNodes, value)) return;
                 _treeNodes = value;
                 OnPropertyChanged();
             }
@@ -198,6 +204,7 @@ namespace TM.Framework.UI.Windows
             get => _currentView;
             set
             {
+                if (_currentView == value) return;
                 _currentView = value;
                 OnPropertyChanged();
             }
@@ -208,14 +215,43 @@ namespace TM.Framework.UI.Windows
         #region 构造函数
 
         private readonly CurrentUserContext _userContext;
+        private bool _disposed;
+        private readonly EventHandler _userChangedHandler;
+        private readonly Action<string, string> _projectChangedHandler;
 
         public UnifiedWindowViewModel(CurrentUserContext userContext)
         {
             _userContext = userContext;
             _nodeClickCommand = new AsyncRelayCommand(OnNodeClickedAsync);
             _nodeDoubleClickCommand = new AsyncRelayCommand(OnNodeDoubleClickedAsync);
-            _userContext.UserChanged += (s, e) => UpdateUserTabTitle();
-            LoadTabsForMode(WindowMode.Settings);
+
+            _userChangedHandler = (s, e) => UpdateUserTabTitle();
+            _userContext.UserChanged += _userChangedHandler;
+
+            LoadTabsForMode(WindowMode.Writing);
+
+            _projectChangedHandler = (_, _) =>
+            {
+                _viewCache = new Dictionary<Type, UserControl>();
+                _preWarmTask = null;
+                CancelPreWarm();
+                CurrentView = null;
+                TM.Framework.Common.Services.UIPreWarmService.ClearPreCreatedViews();
+                _ = PreWarmAllViewsAsync();
+            };
+            StoragePathHelper.CurrentProjectChanged += _projectChangedHandler;
+        }
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            _userContext.UserChanged -= _userChangedHandler;
+            StoragePathHelper.CurrentProjectChanged -= _projectChangedHandler;
+            CancelPreWarm();
+            _viewCache.Clear();
+            GC.SuppressFinalize(this);
         }
 
         private void UpdateUserTabTitle()
@@ -230,57 +266,65 @@ namespace TM.Framework.UI.Windows
         {
             Tabs.Clear();
 
-            var tabDefs = mode == WindowMode.Writing 
-                ? NavigationDefinitions.WritingTabs 
+            var tabDefs = mode == WindowMode.Writing
+                ? NavigationDefinitions.WritingTabs
                 : NavigationDefinitions.PersonalTabs;
 
             foreach (var tabDef in tabDefs)
             {
-                Tabs.Add(new SettingsTab 
-                { 
-                    Index = tabDef.Index, 
-                    Icon = tabDef.Icon, 
-                    Title = tabDef.Title, 
-                    ModuleName = tabDef.ModuleName 
+                Tabs.Add(new SettingsTab
+                {
+                    Index = tabDef.Index,
+                    Icon = IconHelper.TryGet(tabDef.Icon),
+                    Title = tabDef.Title,
+                    ModuleName = tabDef.ModuleName
                 });
             }
 
             SelectedTab = Tabs.FirstOrDefault();
         }
 
+        private static readonly Dictionary<string, ObservableCollection<TreeNodeItem>> _treeNodesCacheByModule = new();
+
         private void LoadTreeForTab(SettingsTab tab)
         {
             if (tab == null) return;
 
-            var moduleNav = NavigationDefinitions.GetModuleByName(tab.ModuleName);
-            TreeNodes = moduleNav != null 
-                ? BuildTreeFromNavigation(moduleNav) 
-                : new ObservableCollection<TreeNodeItem>();
+            if (!_treeNodesCacheByModule.TryGetValue(tab.ModuleName, out var cached))
+            {
+                var moduleNav = NavigationDefinitions.GetModuleByName(tab.ModuleName);
+                cached = moduleNav != null
+                    ? BuildTreeFromNavigation(moduleNav)
+                    : new ObservableCollection<TreeNodeItem>();
+                _treeNodesCacheByModule[tab.ModuleName] = cached;
+            }
+
+            TreeNodes = cached;
         }
 
         #endregion
 
         #region 节点创建辅助方法
 
-        private TreeNodeItem CreateParentNode(string icon, string name, params TreeNodeItem[] children)
+        private TreeNodeItem CreateParentNode(string iconKey, string name, params TreeNodeItem[] children)
         {
             var node = new TreeNodeItem
             {
-                Icon = icon,
+                Icon = IconHelper.TryGet(iconKey),
                 Name = name,
                 Level = 1,
-                Children = new ObservableCollection<TreeNodeItem>(children)
+                Children = new TM.Framework.Common.ViewModels.RangeObservableCollection<TreeNodeItem>(children)
             };
 
             SetChildrenLevel(node, 1);
             return node;
         }
 
-        private TreeNodeItem CreateLeafNode(string icon, string name, Type viewType)
+        private TreeNodeItem CreateLeafNode(string iconKey, string name, Type viewType)
         {
             return new TreeNodeItem
             {
-                Icon = icon,
+                Icon = IconHelper.TryGet(iconKey),
                 Name = name,
                 Level = 1,
                 Tag = viewType
@@ -303,14 +347,13 @@ namespace TM.Framework.UI.Windows
 
         #region 节点点击和视图加载
 
-        private System.Threading.Tasks.Task OnNodeClickedAsync(object? parameter)
+        private async System.Threading.Tasks.Task OnNodeClickedAsync(object? parameter)
         {
-            if (parameter is not TreeNodeItem node) return System.Threading.Tasks.Task.CompletedTask;
-            if (node.Tag is not Type viewType) return System.Threading.Tasks.Task.CompletedTask;
-            CancelPreWarm();
+            if (parameter is not TreeNodeItem node) return;
+            if (node.Tag is not Type viewType) return;
 
-            if (!BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSession(SelectedTab?.ModuleName))
-                return System.Threading.Tasks.Task.CompletedTask;
+            if (!await BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSessionAsync(SelectedTab?.ModuleName))
+                return;
 
             if (CurrentView?.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost oldHost)
                 oldHost.OnTreeNodeSelected(null);
@@ -322,10 +365,10 @@ namespace TM.Framework.UI.Windows
                 CurrentView = cached;
                 if (cached.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost host)
                     host.OnTreeNodeSelected(null);
-                return System.Threading.Tasks.Task.CompletedTask;
+                return;
             }
 
-            CurrentView = _loadingPlaceholder.Value;
+            CancelPreWarm();
             _ = Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (requestId != _viewSwitchRequestId)
@@ -342,19 +385,24 @@ namespace TM.Framework.UI.Windows
 
                 _viewCache[viewType] = view;
                 CurrentView = view;
-            }, DispatcherPriority.Background);
-
-            return System.Threading.Tasks.Task.CompletedTask;
+                SchedulePreWarmResume();
+            }, DispatcherPriority.Normal);
         }
 
-        private System.Threading.Tasks.Task OnNodeDoubleClickedAsync(object? parameter)
+        private async System.Threading.Tasks.Task OnNodeDoubleClickedAsync(object? parameter)
         {
-            if (parameter is not TreeNodeItem node) return System.Threading.Tasks.Task.CompletedTask;
-            if (node.Tag is not Type viewType) return System.Threading.Tasks.Task.CompletedTask;
-            CancelPreWarm();
+            if (parameter is not TreeNodeItem node) return;
+            if (node.Tag is not Type viewType) return;
 
-            if (!BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSession(SelectedTab?.ModuleName))
-                return System.Threading.Tasks.Task.CompletedTask;
+            if (_viewCache.TryGetValue(viewType, out var fastCached) && ReferenceEquals(_currentView, fastCached))
+            {
+                if (fastCached.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost fastHost)
+                    fastHost.OnBusinessActivated();
+                return;
+            }
+
+            if (!await BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSessionAsync(SelectedTab?.ModuleName))
+                return;
 
             if (CurrentView?.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost oldHost)
                 oldHost.OnTreeNodeSelected(null);
@@ -366,10 +414,10 @@ namespace TM.Framework.UI.Windows
                 CurrentView = cached;
                 if (cached.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost host)
                     host.OnBusinessActivated();
-                return System.Threading.Tasks.Task.CompletedTask;
+                return;
             }
 
-            CurrentView = _loadingPlaceholder.Value;
+            CancelPreWarm();
             _ = Application.Current.Dispatcher.InvokeAsync(() =>
             {
                 if (requestId != _viewSwitchRequestId)
@@ -389,25 +437,8 @@ namespace TM.Framework.UI.Windows
 
                 if (view.DataContext is TM.Framework.Common.ViewModels.IBulkToggleSelectionHost host)
                     host.OnBusinessActivated();
-            }, DispatcherPriority.Background);
-
-            return System.Threading.Tasks.Task.CompletedTask;
-        }
-
-        private static UserControl CreateLoadingPlaceholder()
-        {
-            var placeholder = new UserControl();
-            var grid = new System.Windows.Controls.Grid();
-            var indicator = new TM.Framework.Common.Controls.Feedback.LoadingIndicator
-            {
-                Width = 48,
-                Height = 48,
-                HorizontalAlignment = HorizontalAlignment.Center,
-                VerticalAlignment = VerticalAlignment.Center
-            };
-            grid.Children.Add(indicator);
-            placeholder.Content = grid;
-            return placeholder;
+                SchedulePreWarmResume();
+            }, DispatcherPriority.Normal);
         }
 
         private UserControl GetOrCreateView(Type viewType)
@@ -422,10 +453,22 @@ namespace TM.Framework.UI.Windows
             return newView;
         }
 
+        public TViewModel? GetOrEnsureViewModel<TViewModel>(Type viewType) where TViewModel : class
+        {
+            var view = GetOrCreateView(viewType);
+            return view?.DataContext as TViewModel;
+        }
+
         private UserControl LoadView(Type viewType)
         {
             try
             {
+                var preCreated = TM.Framework.Common.Services.UIPreWarmService.TakePreCreatedView(viewType);
+                if (preCreated != null)
+                {
+                    return preCreated;
+                }
+
                 var view = ServiceLocator.GetOrDefault(viewType) as UserControl;
                 if (view != null)
                 {
@@ -506,14 +549,14 @@ namespace TM.Framework.UI.Windows
         {
             if (_preWarmTask != null)
             {
-                await _preWarmTask.ConfigureAwait(false);
+                await _preWarmTask;
                 return;
             }
 
             _preWarmCts?.Cancel();
             _preWarmCts = new System.Threading.CancellationTokenSource();
             _preWarmTask = PreWarmAllViewsCoreAsync(_preWarmCts.Token);
-            await _preWarmTask.ConfigureAwait(false);
+            await _preWarmTask;
         }
 
         public void CancelPreWarm()
@@ -521,34 +564,58 @@ namespace TM.Framework.UI.Windows
             _preWarmCts?.Cancel();
         }
 
+        private void SchedulePreWarmResume()
+        {
+            _preWarmTask = null;
+            _ = PreWarmAllViewsAsync();
+        }
+
+        private static HashSet<Type> BuildViewTypeSet(params ModuleNavigation[] modules)
+        {
+            var set = new HashSet<Type>();
+            foreach (var module in modules)
+                foreach (var sub in module.SubModules)
+                    foreach (var func in sub.Functions)
+                        set.Add(func.ViewType);
+            return set;
+        }
+
+        private static readonly HashSet<Type> _writingModeViewTypes = BuildViewTypeSet(
+            NavigationDefinitions.Design,
+            NavigationDefinitions.Generate,
+            NavigationDefinitions.Validate,
+            NavigationDefinitions.SmartAssistant);
+
+        private static readonly HashSet<Type> _settingsModeViewTypes = BuildViewTypeSet(
+            NavigationDefinitions.User,
+            NavigationDefinitions.Appearance,
+            NavigationDefinitions.Notifications,
+            NavigationDefinitions.SystemSettings);
+
+        private static readonly HashSet<Type> _priorityPreWarmTypes = BuildViewTypeSet(
+            NavigationDefinitions.Design,
+            NavigationDefinitions.Generate,
+            NavigationDefinitions.SmartAssistant);
+
+        private static readonly HashSet<Type> _alwaysSkipPreWarmTypes = new()
+        {
+            typeof(TM.Modules.Design.SmartParsing.BookAnalysis.BookAnalysisView),
+            typeof(TM.Framework.SystemSettings.Logging.LogRotation.LogRotationView),
+            typeof(TM.Framework.SystemSettings.Info.AppInfo.AppInfoView),
+            typeof(TM.Framework.SystemSettings.Info.SystemInfo.SystemInfoView),
+            typeof(TM.Framework.SystemSettings.Info.RuntimeEnv.RuntimeEnvView),
+            typeof(TM.Framework.SystemSettings.Info.DiagnosticInfo.DiagnosticInfoView),
+        };
+
         private bool ShouldSkipPreWarm(Type viewType)
         {
-            var fullName = viewType.FullName;
-            if (string.IsNullOrWhiteSpace(fullName))
-                return false;
-
-            if (fullName.StartsWith("TM.Framework.SystemSettings.Info.", StringComparison.Ordinal))
-                return true;
-            if (fullName == "TM.Framework.SystemSettings.Logging.LogRotation.LogRotationView")
-                return true;
-            if (fullName.StartsWith("TM.Modules.Design.SmartParsing.BookAnalysis.", StringComparison.Ordinal))
+            if (_alwaysSkipPreWarmTypes.Contains(viewType))
                 return true;
 
-            if (_currentMode == WindowMode.Settings)
-            {
-                if (fullName.StartsWith("TM.Modules.Design.", StringComparison.Ordinal)
-                    || fullName.StartsWith("TM.Modules.Generate.", StringComparison.Ordinal)
-                    || fullName.StartsWith("TM.Modules.Validate.", StringComparison.Ordinal))
-                    return true;
-            }
-            else if (_currentMode == WindowMode.Writing)
-            {
-                if (fullName.StartsWith("TM.Framework.User.", StringComparison.Ordinal)
-                    || fullName.StartsWith("TM.Framework.Appearance.", StringComparison.Ordinal)
-                    || fullName.StartsWith("TM.Framework.Notifications.", StringComparison.Ordinal)
-                    || fullName.StartsWith("TM.Framework.SystemSettings.", StringComparison.Ordinal))
-                    return true;
-            }
+            if (_currentMode == WindowMode.Settings && _writingModeViewTypes.Contains(viewType))
+                return true;
+            if (_currentMode == WindowMode.Writing && _settingsModeViewTypes.Contains(viewType))
+                return true;
 
             return false;
         }
@@ -557,7 +624,6 @@ namespace TM.Framework.UI.Windows
         {
             try
             {
-                TM.App.Log("[UnifiedWindowVM] 开始视图预热...");
                 int count = 0;
 
                 foreach (var viewType in TM.Framework.Common.Constants.NavigationDefinitions.GetAllViewTypes())
@@ -572,10 +638,9 @@ namespace TM.Framework.UI.Windows
                         continue;
                     }
 
-                    if (_viewCache.ContainsKey(viewType))
-                    {
-                        continue;
-                    }
+                    var priority = _priorityPreWarmTypes.Contains(viewType)
+                        ? System.Windows.Threading.DispatcherPriority.Background
+                        : System.Windows.Threading.DispatcherPriority.ApplicationIdle;
 
                     await Application.Current.Dispatcher.InvokeAsync(
                         () =>
@@ -583,20 +648,32 @@ namespace TM.Framework.UI.Windows
                             try
                             {
                                 if (cancellationToken.IsCancellationRequested) return;
-                                if (_viewCache.ContainsKey(viewType)) return;
-                                var view = LoadView(viewType);
-                                _viewCache[viewType] = view;
-                                count++;
+                                UserControl preWarmView;
+                                if (_viewCache.TryGetValue(viewType, out var existingView))
+                                {
+                                    preWarmView = existingView;
+                                }
+                                else
+                                {
+                                    preWarmView = LoadView(viewType);
+                                    _viewCache[viewType] = preWarmView;
+                                    count++;
+                                }
+                                PreWarmViewCallback?.Invoke(preWarmView);
                             }
                             catch (Exception ex)
                             {
                                 TM.App.Log($"[UnifiedWindowVM] 预热失败: {viewType.Name} - {ex.Message}");
                             }
                         },
-                        System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                        priority);
                 }
 
-                TM.App.Log($"[UnifiedWindowVM] 视图预热完成，共预热 {count} 个视图");
+                await Application.Current.Dispatcher.InvokeAsync(
+                    () => TM.Framework.Common.Services.UIPreWarmService.PreWarmDialogsAndControls(),
+                    System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+
+                _ = TM.Framework.Common.Services.UIPreWarmService.PreJitCriticalTypesAsync();
             }
             catch (Exception ex)
             {

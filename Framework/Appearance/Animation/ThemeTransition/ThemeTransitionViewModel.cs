@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -6,15 +6,15 @@ using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Appearance.Animation.ThemeTransition
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ThemeTransitionViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly ThemeTransitionService _transitionService;
@@ -22,11 +22,18 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
 
         private TransitionEffectItem? _selectedEffectItem;
         private EasingFunctionItem? _selectedEasingFunction;
+        private (double x, double y)[]? _cachedCurvePoints;
+        private EasingFunctionType? _cachedCurveType;
         private int _duration;
         private int _targetFPS;
         private int _detectedMonitorFPS;
         private double _intensity;
+        private bool _viewSwitchEnabled = true;
+        private int _viewSwitchOutMs = 60;
+        private int _viewSwitchInMs = 120;
+        private ViewSwitchEffect _viewSwitchEffect = ViewSwitchEffect.Fade;
         private bool _disposed;
+        private System.Windows.Threading.DispatcherTimer? _saveSettingsDebounceTimer;
 
         public ThemeTransitionViewModel(ThemeTransitionService transitionService)
         {
@@ -34,31 +41,31 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
 
             TransitionEffects = new ObservableCollection<TransitionEffectItem>
             {
-                new TransitionEffectItem { Effect = TransitionEffect.None, Icon = "🚫", DisplayName = "无动画" },
-                new TransitionEffectItem { Effect = TransitionEffect.Rotate, Icon = "🔄", DisplayName = "旋转" },
-                new TransitionEffectItem { Effect = TransitionEffect.Blur, Icon = "💫", DisplayName = "模糊" },
-                new TransitionEffectItem { Effect = TransitionEffect.SlideLeft, Icon = "⬅️", DisplayName = "左滑" },
-                new TransitionEffectItem { Effect = TransitionEffect.SlideRight, Icon = "➡️", DisplayName = "右滑" },
-                new TransitionEffectItem { Effect = TransitionEffect.SlideUp, Icon = "⬆️", DisplayName = "上滑" },
-                new TransitionEffectItem { Effect = TransitionEffect.SlideDown, Icon = "⬇️", DisplayName = "下滑" },
-                new TransitionEffectItem { Effect = TransitionEffect.FlipHorizontal, Icon = "↔️", DisplayName = "水平翻转" },
-                new TransitionEffectItem { Effect = TransitionEffect.FlipVertical, Icon = "↕️", DisplayName = "垂直翻转" }
+                new TransitionEffectItem { Effect = TransitionEffect.None, Icon = IconHelper.TryGet("Icon.Forbidden"), DisplayName = "无动画" },
+                new TransitionEffectItem { Effect = TransitionEffect.Rotate, Icon = IconHelper.TryGet("Icon.Refresh"), DisplayName = "旋转" },
+                new TransitionEffectItem { Effect = TransitionEffect.Blur, Icon = IconHelper.TryGet("Icon.Sparkle"), DisplayName = "模糊" },
+                new TransitionEffectItem { Effect = TransitionEffect.SlideLeft, Icon = IconHelper.TryGet("Icon.ChevronLeft"), DisplayName = "左滑" },
+                new TransitionEffectItem { Effect = TransitionEffect.SlideRight, Icon = IconHelper.TryGet("Icon.ChevronRight"), DisplayName = "右滑" },
+                new TransitionEffectItem { Effect = TransitionEffect.SlideUp, Icon = IconHelper.TryGet("Icon.ChevronUp"), DisplayName = "上滑" },
+                new TransitionEffectItem { Effect = TransitionEffect.SlideDown, Icon = IconHelper.TryGet("Icon.ChevronDown"), DisplayName = "下滑" },
+                new TransitionEffectItem { Effect = TransitionEffect.FlipHorizontal, Icon = IconHelper.TryGet("Icon.Shuffle"), DisplayName = "水平翻转" },
+                new TransitionEffectItem { Effect = TransitionEffect.FlipVertical, Icon = IconHelper.TryGet("Icon.Shuffle"), DisplayName = "垂直翻转" }
             };
 
             EasingFunctions = new ObservableCollection<EasingFunctionItem>
             {
-                new EasingFunctionItem { Type = EasingFunctionType.Linear, Icon = "➖", DisplayName = "线性", Description = "匀速运动" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInQuad, Icon = "📈", DisplayName = "二次缓入", Description = "加速进入" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseOutQuad, Icon = "📉", DisplayName = "二次缓出", Description = "减速退出" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutQuad, Icon = "〰️", DisplayName = "二次缓入缓出", Description = "先加速后减速" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInCubic, Icon = "📊", DisplayName = "三次缓入", Description = "强加速进入" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseOutCubic, Icon = "📉", DisplayName = "三次缓出", Description = "强减速退出" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutCubic, Icon = "〽️", DisplayName = "三次缓入缓出", Description = "先强加速后强减速" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInElastic, Icon = "🔄", DisplayName = "弹性缓入", Description = "弹簧效果进入" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseOutElastic, Icon = "🎯", DisplayName = "弹性缓出", Description = "弹簧效果退出" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInBounce, Icon = "⚽", DisplayName = "弹跳缓入", Description = "弹跳效果进入" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseOutBounce, Icon = "🏀", DisplayName = "弹跳缓出", Description = "弹跳效果退出" },
-                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutBounce, Icon = "🎾", DisplayName = "弹跳缓入缓出", Description = "两端弹跳效果" }
+                new EasingFunctionItem { Type = EasingFunctionType.Linear, Icon = IconHelper.TryGet("Icon.Minus"), DisplayName = "线性", Description = "匀速运动" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInQuad, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "二次缓入", Description = "加速进入" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseOutQuad, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "二次缓出", Description = "减速退出" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutQuad, Icon = IconHelper.TryGet("Icon.Sparkle"), DisplayName = "二次缓入缓出", Description = "先加速后减速" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInCubic, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "三次缓入", Description = "强加速进入" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseOutCubic, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "三次缓出", Description = "强减速退出" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutCubic, Icon = IconHelper.TryGet("Icon.Sparkle"), DisplayName = "三次缓入缓出", Description = "先强加速后强减速" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInElastic, Icon = IconHelper.TryGet("Icon.Refresh"), DisplayName = "弹性缓入", Description = "弹簧效果进入" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseOutElastic, Icon = IconHelper.TryGet("Icon.Target"), DisplayName = "弹性缓出", Description = "弹簧效果退出" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInBounce, Icon = IconHelper.TryGet("Icon.Lightning"), DisplayName = "弹跳缓入", Description = "弹跳效果进入" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseOutBounce, Icon = IconHelper.TryGet("Icon.Lightning"), DisplayName = "弹跳缓出", Description = "弹跳效果退出" },
+                new EasingFunctionItem { Type = EasingFunctionType.EaseInOutBounce, Icon = IconHelper.TryGet("Icon.Lightning"), DisplayName = "弹跳缓入缓出", Description = "两端弹跳效果" }
             };
 
             foreach (var effect in TransitionEffects)
@@ -113,6 +120,7 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 if (_selectedEasingFunction != value)
                 {
                     _selectedEasingFunction = value;
+                    _cachedCurvePoints = null;
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(EasingCurvePoints));
                     if (value != null)
@@ -127,11 +135,12 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
         {
             get
             {
-                if (SelectedEasingFunction != null)
-                {
-                    return ThemeTransition.EasingFunctions.GetCurvePoints(SelectedEasingFunction.Type, 50);
-                }
-                return ThemeTransition.EasingFunctions.GetCurvePoints(EasingFunctionType.Linear, 50);
+                var type = SelectedEasingFunction?.Type ?? EasingFunctionType.Linear;
+                if (_cachedCurvePoints != null && _cachedCurveType == type)
+                    return _cachedCurvePoints;
+                _cachedCurveType = type;
+                _cachedCurvePoints = ThemeTransition.EasingFunctions.GetCurvePoints(type, 50);
+                return _cachedCurvePoints;
             }
         }
 
@@ -155,15 +164,15 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             get => _targetFPS;
             set
             {
-                var maxFPS = Math.Max(60, _detectedMonitorFPS);
-                var clampedValue = Math.Clamp(value, 30, maxFPS);
+                var clampedValue = Math.Clamp(value, 1, 1000);
                 if (_targetFPS != clampedValue)
                 {
                     _targetFPS = clampedValue;
                     _currentSettings.TargetFPS = clampedValue;
                     OnPropertyChanged();
-                    SaveSettings();
-                    TM.App.Log($"[ThemeTransition] FPS已更新并保存: {clampedValue}");
+                    DebounceSaveSettings();
+                    if (InfoLogDedup.ShouldLog("ThemeTransition:FPS"))
+                        TM.App.Log($"[ThemeTransition] FPS已更新: {clampedValue}");
                 }
             }
         }
@@ -196,6 +205,48 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             }
         }
 
+        public List<ViewSwitchEffectItem> ViewSwitchEffects { get; } = new()
+        {
+            new(ViewSwitchEffect.None,      IconHelper.TryGet("Icon.Forbidden"), "无动画",         "直接切换，无过渡"),
+            new(ViewSwitchEffect.Fade,      IconHelper.TryGet("Icon.Sparkle"), "淡入淡出(默认)",  "仅透明度过渡，性能最优"),
+            new(ViewSwitchEffect.FadeScale, IconHelper.TryGet("Icon.Sparkle"), "淡入+缩放",       "淡入淡出+微缩放+轻微位移（开销略大）"),
+            new(ViewSwitchEffect.SlideUp,   IconHelper.TryGet("Icon.ChevronUp"), "上滑入",         "新视图从下方滑入"),
+            new(ViewSwitchEffect.SlideDown, IconHelper.TryGet("Icon.ChevronDown"), "下滑入",         "新视图从上方滑入"),
+            new(ViewSwitchEffect.SlideLeft, IconHelper.TryGet("Icon.ChevronLeft"), "左滑入",         "新视图从右向左滑入"),
+            new(ViewSwitchEffect.SlideRight,IconHelper.TryGet("Icon.ChevronRight"), "右滑入",         "新视图从左向右滑入"),
+        };
+
+        public ViewSwitchEffectItem? SelectedViewSwitchEffect
+        {
+            get => ViewSwitchEffects.FirstOrDefault(x => x.Effect == _viewSwitchEffect);
+            set
+            {
+                if (value == null || value.Effect == _viewSwitchEffect) return;
+                _viewSwitchEffect = value.Effect;
+                _currentSettings.ViewSwitchEffect = value.Effect;
+                OnPropertyChanged();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ThemeTransitionViewModel] {ex.Message}"));
+            }
+        }
+
+        public bool ViewSwitchEnabled
+        {
+            get => _viewSwitchEnabled;
+            set { if (_viewSwitchEnabled != value) { _viewSwitchEnabled = value; _currentSettings.ViewSwitchEnabled = value; OnPropertyChanged(); SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ThemeTransitionViewModel] {ex.Message}")); } }
+        }
+
+        public int ViewSwitchOutMs
+        {
+            get => _viewSwitchOutMs;
+            set { var v = Math.Clamp(value, 50, 500); if (_viewSwitchOutMs != v) { _viewSwitchOutMs = v; _currentSettings.ViewSwitchOutMs = v; OnPropertyChanged(); } }
+        }
+
+        public int ViewSwitchInMs
+        {
+            get => _viewSwitchInMs;
+            set { var v = Math.Clamp(value, 50, 500); if (_viewSwitchInMs != v) { _viewSwitchInMs = v; _currentSettings.ViewSwitchInMs = v; OnPropertyChanged(); } }
+        }
+
         #endregion
 
         #region 命令
@@ -222,42 +273,42 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 {
                     case "Fast":
                         Duration = 300;
-                        TargetFPS = 60;
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[2];
                         _currentSettings.Preset = TransitionPreset.Fast;
                         break;
 
                     case "Smooth":
                         Duration = 600;
-                        TargetFPS = 60;
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[2];
                         _currentSettings.Preset = TransitionPreset.Smooth;
                         break;
 
                     case "Fancy":
                         Duration = 1000;
-                        TargetFPS = 60;
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[1];
                         _currentSettings.Preset = TransitionPreset.Fancy;
                         break;
 
                     case "Simple":
                         Duration = 400;
-                        TargetFPS = 60;
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[2];
                         _currentSettings.Preset = TransitionPreset.Simple;
                         break;
 
                     case "Dynamic":
                         Duration = 800;
-                        TargetFPS = 60;
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[3];
                         _currentSettings.Preset = TransitionPreset.Dynamic;
                         break;
 
                     case "Cool":
                         Duration = 1200;
-                        TargetFPS = Math.Min(120, _detectedMonitorFPS);
+                        TargetFPS = _detectedMonitorFPS;
                         SelectedEffectItem = TransitionEffects[1];
                         _currentSettings.Preset = TransitionPreset.Cool;
                         break;
@@ -297,7 +348,7 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
         {
             try
             {
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ThemeTransitionViewModel] {ex.Message}"));
 
                 TM.App.Log("[ThemeTransition] 设置已保存");
             }
@@ -316,11 +367,11 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 var defaultSettings = ThemeTransitionSettings.CreateDefault();
 
                 Duration = defaultSettings.Duration;
-                TargetFPS = defaultSettings.TargetFPS;
+                TargetFPS = _detectedMonitorFPS;
                 SelectedEffectItem = TransitionEffects[0];
                 _currentSettings = defaultSettings;
 
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ThemeTransitionViewModel] {ex.Message}"));
 
                 TM.App.Log("[ThemeTransition] 已重置为默认设置");
             }
@@ -335,9 +386,17 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             _duration = _currentSettings.Duration;
             _targetFPS = _currentSettings.TargetFPS;
             _intensity = _currentSettings.IntensityMultiplier;
+            _viewSwitchEnabled = _currentSettings.ViewSwitchEnabled;
+            _viewSwitchOutMs = _currentSettings.ViewSwitchOutMs;
+            _viewSwitchInMs = _currentSettings.ViewSwitchInMs;
+            _viewSwitchEffect = _currentSettings.ViewSwitchEffect;
             OnPropertyChanged(nameof(Duration));
             OnPropertyChanged(nameof(TargetFPS));
             OnPropertyChanged(nameof(Intensity));
+            OnPropertyChanged(nameof(ViewSwitchEnabled));
+            OnPropertyChanged(nameof(ViewSwitchOutMs));
+            OnPropertyChanged(nameof(ViewSwitchInMs));
+            OnPropertyChanged(nameof(SelectedViewSwitchEffect));
 
             foreach (var item in TransitionEffects)
             {
@@ -347,6 +406,8 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                     break;
                 }
             }
+
+            SyncTargetFPSIfNeeded();
 
             foreach (var effect in TransitionEffects)
             {
@@ -365,7 +426,25 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             }
         }
 
-        private async void SaveSettings()
+        private void DebounceSaveSettings()
+        {
+            if (_saveSettingsDebounceTimer == null)
+            {
+                _saveSettingsDebounceTimer = new System.Windows.Threading.DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(300)
+                };
+                _saveSettingsDebounceTimer.Tick += (_, _) =>
+                {
+                    _saveSettingsDebounceTimer.Stop();
+                    SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ThemeTransitionViewModel] {ex.Message}"));
+                };
+            }
+            _saveSettingsDebounceTimer.Stop();
+            _saveSettingsDebounceTimer.Start();
+        }
+
+        private async Task SaveSettings()
         {
             try
             {
@@ -376,13 +455,18 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 );
 
                 var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(_currentSettings, options);
-                var tmpTtv = settingsFile + ".tmp";
-                await System.IO.File.WriteAllTextAsync(tmpTtv, json);
+                var tmpTtv = settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = System.IO.File.Create(tmpTtv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _currentSettings, options);
+                }
                 System.IO.File.Move(tmpTtv, settingsFile, overwrite: true);
 
-                TM.App.Log($"[ThemeTransition] 设置已异步保存到: {settingsFile}");
-                TM.App.Log($"[ThemeTransition] 配置详情: {_currentSettings.Effect}, {_currentSettings.Duration}ms, {_currentSettings.TargetFPS}fps");
+                if (InfoLogDedup.ShouldLog("ThemeTransition:SaveSettings"))
+                {
+                    TM.App.Log($"[ThemeTransition] 设置已异步保存到: {settingsFile}");
+                    TM.App.Log($"[ThemeTransition] 配置详情: {_currentSettings.Effect}, {_currentSettings.Duration}ms, {_currentSettings.TargetFPS}fps");
+                }
             }
             catch (Exception ex)
             {
@@ -390,31 +474,55 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             }
         }
 
+        [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+        private struct DEVMODE
+        {
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+            public ushort dmSpecVersion, dmDriverVersion, dmSize, dmDriverExtra;
+            public uint dmFields;
+            public int dmPositionX, dmPositionY;
+            public uint dmDisplayOrientation, dmDisplayFixedOutput;
+            public short dmColor, dmDuplex, dmYResolution, dmTTOption, dmCollate;
+            [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+            public ushort dmLogPixels;
+            public uint dmBitsPerPel, dmPelsWidth, dmPelsHeight, dmDisplayFlags, dmDisplayFrequency;
+        }
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        private static extern bool EnumDisplaySettingsW(string? lpszDeviceName, uint iModeNum, ref DEVMODE lpDevMode);
+        private const uint ENUM_CURRENT_SETTINGS = unchecked((uint)-1);
+
         private void DetectMonitorFPS()
         {
             try
             {
-                using (var searcher = new System.Management.ManagementObjectSearcher("SELECT * FROM Win32_VideoController"))
+                var dm = new DEVMODE { dmSize = (ushort)Marshal.SizeOf(typeof(DEVMODE)) };
+                if (EnumDisplaySettingsW(null, ENUM_CURRENT_SETTINGS, ref dm) && dm.dmDisplayFrequency > 0)
                 {
-                    foreach (var obj in searcher.Get())
-                    {
-                        var refreshRate = obj["CurrentRefreshRate"];
-                        if (refreshRate != null && int.TryParse(refreshRate.ToString(), out int fps))
-                        {
-                            DetectedMonitorFPS = fps;
-                            TM.App.Log($"[ThemeTransition] 检测到显示器刷新率: {DetectedMonitorFPS}Hz");
-                            return;
-                        }
-                    }
+                    DetectedMonitorFPS = (int)dm.dmDisplayFrequency;
+                    if (InfoLogDedup.ShouldLog("ThemeTransition:DetectFPS"))
+                        TM.App.Log($"[ThemeTransition] 检测到主屏刷新率: {DetectedMonitorFPS}Hz");
+                    SyncTargetFPSIfNeeded();
+                    return;
                 }
-
                 DetectedMonitorFPS = 60;
-                TM.App.Log("[ThemeTransition] 无法检测显示器刷新率，使用默认值60Hz");
+                TM.App.Log("[ThemeTransition] EnumDisplaySettings 返回0，使用默认值60Hz");
             }
             catch (Exception ex)
             {
                 DetectedMonitorFPS = 60;
                 TM.App.Log($"[ThemeTransition] 检测显示器刷新率失败: {ex.Message}");
+            }
+            SyncTargetFPSIfNeeded();
+        }
+
+        private void SyncTargetFPSIfNeeded()
+        {
+            if (_targetFPS != _detectedMonitorFPS && _detectedMonitorFPS > 0)
+            {
+                if (InfoLogDedup.ShouldLog("ThemeTransition:Sync"))
+                    TM.App.Log($"[ThemeTransition] TargetFPS({_targetFPS}) != 检测值({_detectedMonitorFPS})，自动同步");
+                TargetFPS = _detectedMonitorFPS;
             }
         }
 
@@ -472,6 +580,12 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
 
             if (disposing)
             {
+                if (_saveSettingsDebounceTimer != null)
+                {
+                    _saveSettingsDebounceTimer.Stop();
+                    _saveSettingsDebounceTimer = null;
+                }
+
                 foreach (var effect in TransitionEffects)
                 {
                     effect.PropertyChanged -= OnEffectPropertyChanged;

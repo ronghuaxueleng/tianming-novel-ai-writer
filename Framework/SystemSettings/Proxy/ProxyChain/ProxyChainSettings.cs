@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.SystemSettings.Proxy.Services;
 
 namespace TM.Framework.SystemSettings.Proxy.ProxyChain
 {
@@ -35,9 +34,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
     [System.Reflection.Obfuscation(Exclude = true)]
     public enum ChainStrategy
     {
-        Sequential,
-        Failover,
-        LoadBalance
+        Sequential, Failover, LoadBalance
     }
 
     public class ProxyChainHistory
@@ -64,20 +61,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
         [JsonPropertyName("FailedUses")] public int FailedUses { get; set; }
         public double SuccessRate => TotalUses > 0 ? (SuccessfulUses * 100.0 / TotalUses) : 0;
         [JsonPropertyName("AverageTotalLatency")] public double AverageTotalLatency { get; set; }
-        [JsonPropertyName("NodePerformances")] public List<NodePerformance> NodePerformances { get; set; } = new();
         [JsonPropertyName("FirstUsed")] public DateTime FirstUsed { get; set; }
         [JsonPropertyName("LastUsed")] public DateTime LastUsed { get; set; }
-    }
-
-    public class NodePerformance
-    {
-        [JsonPropertyName("NodeId")] public string NodeId { get; set; } = string.Empty;
-        [JsonPropertyName("NodeName")] public string NodeName { get; set; } = string.Empty;
-        [JsonPropertyName("AverageLatency")] public double AverageLatency { get; set; }
-        [JsonPropertyName("SuccessCount")] public int SuccessCount { get; set; }
-        [JsonPropertyName("FailCount")] public int FailCount { get; set; }
-        public double SuccessRate => (SuccessCount + FailCount) > 0 
-            ? (SuccessCount * 100.0 / (SuccessCount + FailCount)) : 0;
     }
 
     public class ProxyChainComparison
@@ -105,27 +90,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
         [JsonPropertyName("ChainId")] public string ChainId { get; set; } = string.Empty;
         [JsonPropertyName("ChainName")] public string ChainName { get; set; } = string.Empty;
         [JsonPropertyName("Suggestions")] public List<string> Suggestions { get; set; } = new();
-        [JsonPropertyName("NodeOptimizations")] public List<NodeOptimization> NodeOptimizations { get; set; } = new();
         [JsonPropertyName("Priority")] public OptimizationPriority Priority { get; set; }
         [JsonPropertyName("Summary")] public string Summary { get; set; } = string.Empty;
-    }
-
-    public class NodeOptimization
-    {
-        [JsonPropertyName("NodeId")] public string NodeId { get; set; } = string.Empty;
-        [JsonPropertyName("NodeName")] public string NodeName { get; set; } = string.Empty;
-        [JsonPropertyName("RecommendedAction")] public NodeAction RecommendedAction { get; set; }
-        [JsonPropertyName("Reason")] public string Reason { get; set; } = string.Empty;
-    }
-
-    [System.Reflection.Obfuscation(Exclude = true)]
-    public enum NodeAction
-    {
-        Keep,
-        MoveUp,
-        MoveDown,
-        Remove,
-        Replace
     }
 
     [System.Reflection.Obfuscation(Exclude = true)]

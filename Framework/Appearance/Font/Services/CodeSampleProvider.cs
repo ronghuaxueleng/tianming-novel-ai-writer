@@ -1,4 +1,3 @@
-using System;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -93,7 +92,7 @@ namespace Example
             result ??= new List<int>();
 
             // Lambda 表达式
-            await Task.Run(() => result.ForEach(x => 
+            await Task.Run(() => result.ForEach(x =>
                 Console.WriteLine($""Processed: {x}"")));
 
             return result;
@@ -270,7 +269,7 @@ class Repository<T extends { id: number }> {
 }
 
 // 联合类型与类型守卫
-type Result<T> = 
+type Result<T> =
     | { success: true; data: T }
     | { success: false; error: string };
 

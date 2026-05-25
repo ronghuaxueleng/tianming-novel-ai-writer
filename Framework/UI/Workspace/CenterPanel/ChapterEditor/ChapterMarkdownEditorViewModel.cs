@@ -1,22 +1,17 @@
-using System;
-using System.Collections.ObjectModel;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Text;
-using System.Text.RegularExpressions;
-using System.Threading.Tasks;
-using System.Windows;
-using System.Windows.Documents;
 using System.Windows.Input;
-using System.Windows.Media;
-using TM.Framework.Common.Helpers.MVVM;
+using System.Windows.Threading;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class ChapterMarkdownEditorViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public partial class ChapterMarkdownEditorViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
         public event Action<string>? ContentSaved;
@@ -43,11 +38,11 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
         }
 
         private string _content = "";
-        private string _previewContent = "";
         private bool _isEditMode = true;
-        private bool _isPreviewMode;
-        private bool _isSplitMode;
         private bool _isPolishSplitMode;
+        private bool _isDiffMode;
+        private string _diffOriginalContent = "";
+        private string _diffModifiedContent = "";
         private int _wordCount;
         private int _paragraphCount;
         private int _lineCount;
@@ -60,6 +55,8 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
         private string _matchInfo = "";
         private int _currentMatchIndex = -1;
         private System.Collections.Generic.List<int> _matchPositions = new();
+        private DispatcherTimer? _statisticsDebounceTimer;
+        private DispatcherTimer? _searchDebounceTimer;
 
         public ChapterMarkdownEditorViewModel()
         {
@@ -79,7 +76,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             ReplaceOneCommand = new RelayCommand(ReplaceOne);
             ReplaceAllCommand = new RelayCommand(ReplaceAll);
             CloseSearchCommand = new RelayCommand(() => ShowSearchBar = false);
-            ToggleOutlineCommand = new RelayCommand(() => ShowOutline = !ShowOutline);
 
             UpdateLineNumbers();
         }
@@ -101,16 +97,9 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                     _content = value;
                     IsDirty = true;
                     OnPropertyChanged();
-                    UpdateStatistics();
-                    UpdatePreview();
+                    ScheduleStatisticsUpdate();
                 }
             }
-        }
-
-        public string PreviewContent
-        {
-            get => _previewContent;
-            set { if (_previewContent != value) { _previewContent = value; OnPropertyChanged(); } }
         }
 
         public bool IsEditMode
@@ -121,53 +110,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                 if (_isEditMode != value)
                 {
                     _isEditMode = value;
-                    if (value)
-                    {
-                        IsPreviewMode = false;
-                        IsSplitMode = false;
-                    }
-                    OnPropertyChanged();
-                }
-            }
-        }
-
-        public bool IsPreviewMode
-        {
-            get => _isPreviewMode;
-            set
-            {
-                if (_isPreviewMode != value)
-                {
-                    _isPreviewMode = value;
-                    if (value)
-                    {
-                        IsEditMode = false;
-                        IsSplitMode = false;
-                        UpdatePreview();
-                    }
-                    OnPropertyChanged();
-                }
-            }
-        }
-
-        public bool IsSplitMode
-        {
-            get => _isSplitMode;
-            set
-            {
-                if (_isSplitMode != value)
-                {
-                    _isSplitMode = value;
-                    if (value)
-                    {
-                        IsEditMode = false;
-                        IsPreviewMode = false;
-                        UpdatePreview();
-                    }
-                    else
-                    {
-                        IsPolishSplitMode = false;
-                    }
                     OnPropertyChanged();
                 }
             }
@@ -184,6 +126,35 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                     OnPropertyChanged();
                 }
             }
+        }
+
+        public bool IsDiffMode
+        {
+            get => _isDiffMode;
+            set
+            {
+                if (_isDiffMode != value)
+                {
+                    _isDiffMode = value;
+                    if (value)
+                    {
+                        IsEditMode = false;
+                    }
+                    OnPropertyChanged();
+                }
+            }
+        }
+
+        public string DiffOriginalContent
+        {
+            get => _diffOriginalContent;
+            set { if (_diffOriginalContent != value) { _diffOriginalContent = value; OnPropertyChanged(); } }
+        }
+
+        public string DiffModifiedContent
+        {
+            get => _diffModifiedContent;
+            set { if (_diffModifiedContent != value) { _diffModifiedContent = value; OnPropertyChanged(); } }
         }
 
         public int WordCount
@@ -231,7 +202,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             set { if (_currentColumn != value) { _currentColumn = value; OnPropertyChanged(); } }
         }
 
-        public ObservableCollection<int> LineNumberList { get; } = new();
+        public RangeObservableCollection<int> LineNumberList { get; } = new();
 
         #endregion
 
@@ -253,7 +224,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
         public ICommand ReplaceOneCommand { get; }
         public ICommand ReplaceAllCommand { get; }
         public ICommand CloseSearchCommand { get; }
-        public ICommand ToggleOutlineCommand { get; }
 
         #endregion
 
@@ -268,14 +238,14 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
         public string SearchText
         {
             get => _searchText;
-            set 
-            { 
-                if (_searchText != value) 
-                { 
-                    _searchText = value; 
+            set
+            {
+                if (_searchText != value)
+                {
+                    _searchText = value;
                     OnPropertyChanged();
-                    UpdateSearchMatches();
-                } 
+                    ScheduleSearchUpdate();
+                }
             }
         }
 
@@ -290,51 +260,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             get => _matchInfo;
             set { if (_matchInfo != value) { _matchInfo = value; OnPropertyChanged(); } }
         }
-
-        private FlowDocument? _previewDocument;
-        private FlowDocument? _splitPreviewDocument;
-
-        public FlowDocument? PreviewDocument
-        {
-            get => _previewDocument;
-            set { if (_previewDocument != value) { _previewDocument = value; OnPropertyChanged(); } }
-        }
-
-        public FlowDocument? SplitPreviewDocument
-        {
-            get => _splitPreviewDocument;
-            set { if (_splitPreviewDocument != value) { _splitPreviewDocument = value; OnPropertyChanged(); } }
-        }
-
-        private bool _showOutline;
-        private OutlineItem? _selectedOutlineItem;
-
-        public bool ShowOutline
-        {
-            get => _showOutline;
-            set { if (_showOutline != value) { _showOutline = value; OnPropertyChanged(); } }
-        }
-
-        public ObservableCollection<OutlineItem> OutlineItems { get; } = new();
-
-        public OutlineItem? SelectedOutlineItem
-        {
-            get => _selectedOutlineItem;
-            set
-            {
-                if (_selectedOutlineItem != value)
-                {
-                    _selectedOutlineItem = value;
-                    OnPropertyChanged();
-                    if (value != null)
-                    {
-                        JumpToLineRequested?.Invoke(value.LineNumber);
-                    }
-                }
-            }
-        }
-
-        public event Action<int>? JumpToLineRequested;
 
         #endregion
 
@@ -382,7 +307,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 
         private void InsertLinePrefix(string prefix, string placeholder)
         {
-            if (!string.IsNullOrEmpty(Content) && !Content.EndsWith("\n"))
+            if (!string.IsNullOrEmpty(Content) && !Content.EndsWith('\n'))
             {
                 Content += "\n";
             }
@@ -413,48 +338,44 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                 return;
             }
 
-            int count = 0;
-            bool inWord = false;
+            WordCount = WordCountHelper.CountRaw(Content);
 
+            int lineCount = 1;
             foreach (char c in Content)
             {
-                if (char.IsWhiteSpace(c) || char.IsPunctuation(c))
-                {
-                    inWord = false;
-                }
-                else if (c >= 0x4E00 && c <= 0x9FFF)
-                {
-                    count++;
-                    inWord = false;
-                }
-                else if (!inWord)
-                {
-                    count++;
-                    inWord = true;
-                }
+                if (c == '\n') lineCount++;
             }
-
-            WordCount = count;
 
             var paragraphs = Content.Split(new[] { "\n\n", "\r\n\r\n" }, StringSplitOptions.RemoveEmptyEntries);
             ParagraphCount = paragraphs.Count(p => !string.IsNullOrWhiteSpace(p));
 
-            UpdateLineNumbers();
-            UpdateOutline();
+            UpdateLineNumbers(lineCount);
         }
 
-        private void UpdateLineNumbers()
+        private void ScheduleStatisticsUpdate()
         {
-            var newLineCount = string.IsNullOrEmpty(Content) ? 1 : Content.Split('\n').Length;
+            if (_statisticsDebounceTimer == null)
+            {
+                _statisticsDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
+                {
+                    Interval = TimeSpan.FromMilliseconds(500)
+                };
+                _statisticsDebounceTimer.Tick += (_, _) => { _statisticsDebounceTimer.Stop(); UpdateStatistics(); };
+            }
+            _statisticsDebounceTimer.Stop();
+            _statisticsDebounceTimer.Start();
+        }
+
+        private void UpdateLineNumbers(int precomputedLineCount = -1)
+        {
+            var newLineCount = precomputedLineCount >= 1
+                ? precomputedLineCount
+                : string.IsNullOrEmpty(Content) ? 1 : Content.Count(c => c == '\n') + 1;
 
             if (newLineCount == LineCount) return;
 
             LineCount = newLineCount;
-            LineNumberList.Clear();
-            for (int i = 1; i <= LineCount; i++)
-            {
-                LineNumberList.Add(i);
-            }
+            LineNumberList.ReplaceAll(Enumerable.Range(1, LineCount).ToList());
         }
 
         #region 搜索替换方法
@@ -495,6 +416,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 
         private void FindNext()
         {
+            FlushPendingSearch();
             if (_matchPositions.Count == 0) return;
 
             _currentMatchIndex = (_currentMatchIndex + 1) % _matchPositions.Count;
@@ -505,6 +427,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 
         private void FindPrevious()
         {
+            FlushPendingSearch();
             if (_matchPositions.Count == 0) return;
 
             _currentMatchIndex = _currentMatchIndex <= 0 ? _matchPositions.Count - 1 : _currentMatchIndex - 1;
@@ -515,6 +438,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 
         private void ReplaceOne()
         {
+            FlushPendingSearch();
             if (_matchPositions.Count == 0 || _currentMatchIndex < 0) return;
 
             var pos = _matchPositions[_currentMatchIndex];
@@ -541,295 +465,29 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 
         #endregion
 
-        private void UpdatePreview()
+        private void FlushPendingSearch()
         {
-            if (string.IsNullOrEmpty(Content))
+            if (_searchDebounceTimer != null && _searchDebounceTimer.IsEnabled)
             {
-                PreviewContent = "";
-                PreviewDocument = new FlowDocument();
-                SplitPreviewDocument = new FlowDocument();
-                return;
+                _searchDebounceTimer.Stop();
+                UpdateSearchMatches();
             }
-
-            var preview = Content;
-            preview = Regex.Replace(preview, @"^#{1,6}\s+", "", RegexOptions.Multiline);
-            preview = Regex.Replace(preview, @"\*\*(.+?)\*\*", "$1");
-            preview = Regex.Replace(preview, @"\*(.+?)\*", "$1");
-            preview = Regex.Replace(preview, @"^>\s+", "「", RegexOptions.Multiline);
-            preview = Regex.Replace(preview, @"^[-*]\s+", "• ", RegexOptions.Multiline);
-            preview = Regex.Replace(preview, @"^\d+\.\s+", "", RegexOptions.Multiline);
-            PreviewContent = preview;
-
-            PreviewDocument = MarkdownToFlowDocument(Content);
-            SplitPreviewDocument = MarkdownToFlowDocument(Content);
         }
 
-        private FlowDocument MarkdownToFlowDocument(string markdown)
+        private void ScheduleSearchUpdate()
         {
-            var doc = new FlowDocument
+            if (_searchDebounceTimer == null)
             {
-                FontFamily = new FontFamily("Microsoft YaHei UI"),
-                FontSize = 14,
-                LineHeight = 24
-            };
-
-            var lines = markdown.Split('\n');
-            bool inCodeBlock = false;
-            var codeBlockContent = new StringBuilder();
-            string codeLanguage = "";
-
-            foreach (var line in lines)
-            {
-                var trimmed = line.TrimEnd('\r');
-
-                if (trimmed.StartsWith("```"))
+                _searchDebounceTimer = new DispatcherTimer(DispatcherPriority.Background)
                 {
-                    if (!inCodeBlock)
-                    {
-                        inCodeBlock = true;
-                        codeLanguage = trimmed.Length > 3 ? trimmed.Substring(3).Trim() : "";
-                        codeBlockContent.Clear();
-                    }
-                    else
-                    {
-                        var codeBlock = new Paragraph
-                        {
-                            Background = new SolidColorBrush(Color.FromRgb(40, 44, 52)),
-                            Foreground = new SolidColorBrush(Color.FromRgb(171, 178, 191)),
-                            FontFamily = new FontFamily("Consolas, Courier New"),
-                            FontSize = 13,
-                            Padding = new Thickness(12),
-                            Margin = new Thickness(0, 8, 0, 8)
-                        };
-                        codeBlock.Inlines.Add(new Run(codeBlockContent.ToString().TrimEnd()));
-                        doc.Blocks.Add(codeBlock);
-
-                        inCodeBlock = false;
-                        codeBlockContent.Clear();
-                    }
-                    continue;
-                }
-
-                if (inCodeBlock)
-                {
-                    if (codeBlockContent.Length > 0) codeBlockContent.AppendLine();
-                    codeBlockContent.Append(trimmed);
-                    continue;
-                }
-
-                if (trimmed.StartsWith("# "))
-                {
-                    var heading = new Paragraph(new Run(trimmed.Substring(2)))
-                    {
-                        FontSize = 24,
-                        FontWeight = FontWeights.Bold,
-                        Margin = new Thickness(0, 12, 0, 8)
-                    };
-                    doc.Blocks.Add(heading);
-                }
-                else if (trimmed.StartsWith("## "))
-                {
-                    var heading = new Paragraph(new Run(trimmed.Substring(3)))
-                    {
-                        FontSize = 20,
-                        FontWeight = FontWeights.SemiBold,
-                        Margin = new Thickness(0, 10, 0, 6)
-                    };
-                    doc.Blocks.Add(heading);
-                }
-                else if (trimmed.StartsWith("### "))
-                {
-                    var heading = new Paragraph(new Run(trimmed.Substring(4)))
-                    {
-                        FontSize = 16,
-                        FontWeight = FontWeights.SemiBold,
-                        Margin = new Thickness(0, 8, 0, 4)
-                    };
-                    doc.Blocks.Add(heading);
-                }
-                else if (trimmed.StartsWith("> "))
-                {
-                    var quote = new Paragraph(new Run(trimmed.Substring(2)))
-                    {
-                        Margin = new Thickness(16, 4, 0, 4),
-                        BorderBrush = Brushes.Gray,
-                        BorderThickness = new Thickness(3, 0, 0, 0),
-                        Padding = new Thickness(8, 0, 0, 0),
-                        Foreground = Brushes.Gray
-                    };
-                    doc.Blocks.Add(quote);
-                }
-                else if (trimmed.StartsWith("- ") || trimmed.StartsWith("* "))
-                {
-                    var listItem = new Paragraph(new Run("• " + trimmed.Substring(2)))
-                    {
-                        Margin = new Thickness(16, 2, 0, 2)
-                    };
-                    doc.Blocks.Add(listItem);
-                }
-                else if (Regex.IsMatch(trimmed, @"^\d+\.\s"))
-                {
-                    var match = Regex.Match(trimmed, @"^(\d+)\.\s(.*)");
-                    if (match.Success)
-                    {
-                        var listItem = new Paragraph(new Run($"{match.Groups[1].Value}. {match.Groups[2].Value}"))
-                        {
-                            Margin = new Thickness(16, 2, 0, 2)
-                        };
-                        doc.Blocks.Add(listItem);
-                    }
-                }
-                else if (trimmed == "---" || trimmed == "***" || trimmed == "___")
-                {
-                    var separator = new Paragraph
-                    {
-                        Margin = new Thickness(0, 12, 0, 12)
-                    };
-                    separator.Inlines.Add(new Run("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
-                    {
-                        Foreground = Brushes.LightGray
-                    });
-                    doc.Blocks.Add(separator);
-                }
-                else if (string.IsNullOrWhiteSpace(trimmed))
-                {
-                }
-                else
-                {
-                    var para = new Paragraph
-                    {
-                        Margin = new Thickness(0, 4, 0, 4)
-                    };
-
-                    ParseInlineMarkdown(trimmed, para.Inlines);
-                    doc.Blocks.Add(para);
-                }
+                    Interval = TimeSpan.FromMilliseconds(300)
+                };
+                _searchDebounceTimer.Tick += (_, _) => { _searchDebounceTimer.Stop(); UpdateSearchMatches(); };
             }
-
-            return doc;
-        }
-
-        private void ParseInlineMarkdown(string text, InlineCollection inlines)
-        {
-            var pattern = @"(\*\*(.+?)\*\*)|(\*(.+?)\*)|(`(.+?)`)|(\[(.+?)\]\((.+?)\))";
-            var lastIndex = 0;
-
-            foreach (Match match in Regex.Matches(text, pattern))
-            {
-                if (match.Index > lastIndex)
-                {
-                    inlines.Add(new Run(text.Substring(lastIndex, match.Index - lastIndex)));
-                }
-
-                if (match.Groups[2].Success)
-                {
-                    inlines.Add(new Bold(new Run(match.Groups[2].Value)));
-                }
-                else if (match.Groups[4].Success)
-                {
-                    inlines.Add(new Italic(new Run(match.Groups[4].Value)));
-                }
-                else if (match.Groups[6].Success)
-                {
-                    var codeRun = new Run(match.Groups[6].Value)
-                    {
-                        FontFamily = new FontFamily("Consolas, Courier New"),
-                        Background = new SolidColorBrush(Color.FromRgb(230, 230, 230)),
-                        Foreground = new SolidColorBrush(Color.FromRgb(200, 50, 50))
-                    };
-                    inlines.Add(codeRun);
-                }
-                else if (match.Groups[8].Success)
-                {
-                    var linkText = match.Groups[8].Value;
-                    var linkUrl = match.Groups[9].Value;
-                    var hyperlink = new Hyperlink(new Run(linkText))
-                    {
-                        Foreground = new SolidColorBrush(Color.FromRgb(66, 133, 244)),
-                        TextDecorations = null
-                    };
-                    hyperlink.Click += (s, e) =>
-                    {
-                        try
-                        {
-                            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo
-                            {
-                                FileName = linkUrl,
-                                UseShellExecute = true
-                            });
-                        }
-                        catch (Exception ex)
-                        {
-                            DebugLogOnce("OpenHyperlink", ex);
-                        }
-                    };
-                    inlines.Add(hyperlink);
-                }
-
-                lastIndex = match.Index + match.Length;
-            }
-
-            if (lastIndex < text.Length)
-            {
-                inlines.Add(new Run(text.Substring(lastIndex)));
-            }
-
-            if (inlines.Count == 0)
-            {
-                inlines.Add(new Run(text));
-            }
+            _searchDebounceTimer.Stop();
+            _searchDebounceTimer.Start();
         }
 
         #endregion
-
-        private void UpdateOutline()
-        {
-            OutlineItems.Clear();
-            if (string.IsNullOrEmpty(Content)) return;
-
-            var lines = Content.Split('\n');
-            for (int i = 0; i < lines.Length; i++)
-            {
-                var line = lines[i].TrimEnd('\r');
-                if (line.StartsWith("# "))
-                {
-                    OutlineItems.Add(new OutlineItem
-                    {
-                        Title = line.Substring(2),
-                        Level = 1,
-                        LineNumber = i + 1,
-                        Indent = new Thickness(0, 2, 0, 2)
-                    });
-                }
-                else if (line.StartsWith("## "))
-                {
-                    OutlineItems.Add(new OutlineItem
-                    {
-                        Title = line.Substring(3),
-                        Level = 2,
-                        LineNumber = i + 1,
-                        Indent = new Thickness(12, 2, 0, 2)
-                    });
-                }
-                else if (line.StartsWith("### "))
-                {
-                    OutlineItems.Add(new OutlineItem
-                    {
-                        Title = line.Substring(4),
-                        Level = 3,
-                        LineNumber = i + 1,
-                        Indent = new Thickness(24, 2, 0, 2)
-                    });
-                }
-            }
-        }
-    }
-
-    public class OutlineItem
-    {
-        public string Title { get; set; } = "";
-        public int Level { get; set; }
-        public int LineNumber { get; set; }
-        public Thickness Indent { get; set; }
     }
 }

@@ -5,7 +5,6 @@ using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms;
 using TM.Framework.Notifications.SystemNotifications.SystemIntegration;
-using TM.Services.Framework.Notification;
 using Application = System.Windows.Application;
 
 namespace TM.Services.Framework.SystemIntegration
@@ -112,15 +111,15 @@ namespace TM.Services.Framework.SystemIntegration
                     Visible = true
                 };
 
-                var iconPath = StoragePathHelper.GetFrameworkPath("UI/Icons/app.ico");
-                if (System.IO.File.Exists(iconPath))
+                var exePath = System.Diagnostics.Process.GetCurrentProcess().MainModule?.FileName;
+                if (!string.IsNullOrEmpty(exePath))
                 {
-                    _notifyIcon.Icon = new Icon(iconPath);
+                    _notifyIcon.Icon = Icon.ExtractAssociatedIcon(exePath);
                 }
                 else
                 {
                     _notifyIcon.Icon = SystemIcons.Application;
-                    App.Log($"[TrayIcon] 图标文件不存在: {iconPath}，使用默认图标");
+                    App.Log("[TrayIcon] 无法获取 EXE 路径，使用默认图标");
                 }
 
                 CreateContextMenu();
@@ -450,6 +449,7 @@ namespace TM.Services.Framework.SystemIntegration
             }
 
             App.Log("[TrayIcon] 托盘服务已释放");
+            GC.SuppressFinalize(this);
         }
     }
 }

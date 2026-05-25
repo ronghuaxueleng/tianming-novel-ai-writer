@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Design.Templates;
 
 namespace TM.Modules.Design.Templates.CreativeMaterials.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class CreativeMaterialsService : ModuleServiceBase<CreativeMaterialCategory, CreativeMaterialData>
     {
         public CreativeMaterialsService()
@@ -15,6 +16,8 @@ namespace TM.Modules.Design.Templates.CreativeMaterials.Services
                 dataFileName: "creative_materials.json")
         {
         }
+
+        protected override string? GetEntityTypeKeyForPropagation() => "templates";
 
         public List<CreativeMaterialData> GetAllMaterials() => GetAllData();
 

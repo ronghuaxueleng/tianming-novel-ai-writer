@@ -1,20 +1,21 @@
-using System;
-using System.Collections.ObjectModel;
+﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Reflection;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Helpers.Storage;
+using TM.Framework.Common.Helpers.AI;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.UI.Workspace.Services.Spec;
 using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
 
 namespace TM.Framework.UI.Workspace.Common.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class ProjectSpecPanelViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class ProjectSpecPanelViewModel : INotifyPropertyChanged, IDisposable
     {
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -34,7 +35,10 @@ namespace TM.Framework.UI.Workspace.Common.Controls
         private string _statusMessage = "";
         private bool _hasStatusMessage;
         private string? _selectedTemplateName;
-        private int _polishMode = 1;
+        private int _polishMode = CreativeSpec.DefaultPolishMode;
+        private int _polishModel = CreativeSpec.DefaultPolishModel;
+        private int _wordCountControl = CreativeSpec.DefaultWordCountControl;
+        private int _polishControl = CreativeSpec.DefaultPolishControl;
         private string? _pendingTemplateNameRestore;
         private bool _isSavingInternally;
 
@@ -43,20 +47,29 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             _specLoader = specLoader;
             _promptService = promptService;
 
+            WritingStyleOptions.ReplaceAll(DefaultWritingStyleOptions);
+            ToneOptions.ReplaceAll(DefaultToneOptions);
+
             SaveCommand = new AsyncRelayCommand(async () => await SaveAsync());
             ResetCommand = new RelayCommand(Reset);
 
             PromptService.TemplatesChanged += OnPromptTemplatesChanged;
 
-            _promptService.EnsureInitialized();
+            _ = InitializeTemplatesAsync();
 
             _specLoader.SpecSaved += OnSpecSavedExternally;
 
             StoragePathHelper.CurrentProjectChanged += OnCurrentProjectChanged;
 
-            LoadSpecTemplateNames();
-
             _ = LoadAsync();
+        }
+
+        public void Dispose()
+        {
+            PromptService.TemplatesChanged -= OnPromptTemplatesChanged;
+            _specLoader.SpecSaved -= OnSpecSavedExternally;
+            StoragePathHelper.CurrentProjectChanged -= OnCurrentProjectChanged;
+            GC.SuppressFinalize(this);
         }
 
         private void OnCurrentProjectChanged(string oldProject, string newProject)
@@ -66,6 +79,7 @@ namespace TM.Framework.UI.Workspace.Common.Controls
                 System.Windows.Application.Current?.Dispatcher.InvokeAsync(async () =>
                 {
                     _specLoader.InvalidateCache();
+                    await InitializeTemplatesAsync();
                     await LoadAsync();
                 });
             }
@@ -104,6 +118,19 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             catch (Exception ex)
             {
                 TM.App.Log($"[ProjectSpecPanel] 刷新模板列表失败: {ex.Message}");
+            }
+        }
+
+        private async Task InitializeTemplatesAsync()
+        {
+            try
+            {
+                await _promptService.InitializeAsync();
+                LoadSpecTemplateNames();
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[ProjectSpecPanel] 初始化模板列表失败: {ex.Message}");
             }
         }
 
@@ -168,6 +195,24 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             set { if (_polishMode != value) { _polishMode = value; OnPropertyChanged(); } }
         }
 
+        public int PolishModel
+        {
+            get => _polishModel;
+            set { if (_polishModel != value) { _polishModel = value; OnPropertyChanged(); } }
+        }
+
+        public int WordCountControl
+        {
+            get => _wordCountControl;
+            set { if (_wordCountControl != value) { _wordCountControl = value; OnPropertyChanged(); } }
+        }
+
+        public int PolishControl
+        {
+            get => _polishControl;
+            set { if (_polishControl != value) { _polishControl = value; OnPropertyChanged(); } }
+        }
+
         public string StatusMessage
         {
             get => _statusMessage;
@@ -180,7 +225,26 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             set { if (_hasStatusMessage != value) { _hasStatusMessage = value; OnPropertyChanged(); } }
         }
 
-        public ObservableCollection<string> TemplateNames { get; private set; } = new();
+        public RangeObservableCollection<string> TemplateNames { get; private set; } = new();
+
+        public RangeObservableCollection<string> WritingStyleOptions { get; } = new RangeObservableCollection<string>();
+
+        public RangeObservableCollection<string> ToneOptions { get; } = new RangeObservableCollection<string>();
+
+        private static readonly string[] DefaultWritingStyleOptions =
+        {
+            "流畅自然", "热血激昂", "飘逸洒脱", "沉稳内敛", "爽快明快",
+            "细腻温柔", "典雅古韵", "瑰丽奇幻", "豪迈洒脱", "理性冷峻",
+            "严谨缜密", "厚重深沉", "铁血硬朗", "诡异惊悚", "轻松幽默",
+            "朴实真挚", "精炼紧凑"
+        };
+
+        private static readonly string[] DefaultToneOptions =
+        {
+            "平衡", "紧张悬疑", "温馨治愈", "冷峻客观", "轻松诙谐",
+            "平和深沉", "热血激昂", "侠义豪情", "史诗宏大", "缠绵悱恻",
+            "严肃深沉", "豪迈悲壮"
+        };
 
         public string? SelectedTemplateName
         {
@@ -189,10 +253,7 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             {
                 if (_selectedTemplateName != value)
                 {
-                    if (value == null
-                        && !string.IsNullOrWhiteSpace(_pendingTemplateNameRestore)
-                        && (TemplateNames == null
-                            || TemplateNames.Count == 0))
+                    if (value == null && !string.IsNullOrWhiteSpace(_pendingTemplateNameRestore))
                     {
                         return;
                     }
@@ -240,17 +301,15 @@ namespace TM.Framework.UI.Workspace.Common.Controls
                 names.AddRange(templates.Select(t => t.Name));
             }
 
-            TemplateNames ??= new ObservableCollection<string>();
-            TemplateNames.Clear();
-            foreach (var n in names)
-            {
-                if (!string.IsNullOrWhiteSpace(n))
-                {
-                    TemplateNames.Add(n);
-                }
-            }
+            TemplateNames ??= new RangeObservableCollection<string>();
+            ReplaceCollection(TemplateNames, names.Where(n => !string.IsNullOrWhiteSpace(n)));
 
             TryRestoreTemplateNameAfterTemplatesLoaded();
+        }
+
+        private static void ReplaceCollection<T>(RangeObservableCollection<T> target, IEnumerable<T> items)
+        {
+            target.ReplaceAll(items is IList<T> list ? list : items.ToList());
         }
 
         private void TryRestoreTemplateNameAfterTemplatesLoaded()
@@ -354,9 +413,14 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             DialogueRatioPercent = 30;
             MustIncludeText = "";
             MustAvoidText = "";
-            PolishMode = 1;
+            PolishMode = CreativeSpec.DefaultPolishMode;
+            PolishModel = CreativeSpec.DefaultPolishModel;
+            WordCountControl = CreativeSpec.DefaultWordCountControl;
+            PolishControl = CreativeSpec.DefaultPolishControl;
             _pendingTemplateNameRestore = null;
             SelectedTemplateName = null;
+            WritingStyleOptions.ReplaceAll(DefaultWritingStyleOptions);
+            ToneOptions.ReplaceAll(DefaultToneOptions);
 
             StatusMessage = "已重置为默认值";
             HasStatusMessage = true;
@@ -378,8 +442,9 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             if (promptTemplate != null)
             {
                 TM.App.Log($"[ProjectSpecPanel] 找到模板，SystemPrompt长度: {promptTemplate.SystemPrompt?.Length ?? 0}");
-                var spec = ParseSpecFromPrompt(promptTemplate.SystemPrompt ?? "", SelectedTemplateName ?? "");
+                var spec = SpecTemplateParser.Parse(promptTemplate.SystemPrompt ?? "", SelectedTemplateName ?? "");
                 TM.App.Log($"[ProjectSpecPanel] 解析结果: 风格={spec.WritingStyle}, 视角={spec.Pov}, 基调={spec.Tone}");
+                UpdateStyleAndToneOptions(promptTemplate.SystemPrompt ?? "", spec);
                 ApplySpec(spec);
                 StatusMessage = $"当前选择模板：{SelectedTemplateName}";
                 HasStatusMessage = true;
@@ -393,47 +458,19 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             }
         }
 
-        private CreativeSpec ParseSpecFromPrompt(string systemPrompt, string templateName)
+        private void UpdateStyleAndToneOptions(string systemPrompt, CreativeSpec spec)
         {
-            var spec = new CreativeSpec { TemplateName = templateName };
+            var styleList = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrWhiteSpace(spec.WritingStyle)) styleList.Add(spec.WritingStyle);
+            foreach (var s in DefaultWritingStyleOptions)
+                if (!styleList.Contains(s)) styleList.Add(s);
+            WritingStyleOptions.ReplaceAll(styleList);
 
-            var lines = systemPrompt.Split('\n');
-            foreach (var line in lines)
-            {
-                if (line.Contains("【写作风格】")) spec.WritingStyle = ExtractValue(line, "【写作风格】");
-                else if (line.Contains("【叙述视角】")) spec.Pov = ExtractValue(line, "【叙述视角】");
-                else if (line.Contains("【情感基调】")) spec.Tone = ExtractValue(line, "【情感基调】");
-                else if (line.Contains("【目标字数】")) spec.TargetWordCount = ParseInt(ExtractValue(line, "【目标字数】"));
-                else if (line.Contains("【段落长度】")) spec.ParagraphLength = ParseInt(ExtractValue(line, "【段落长度】"));
-                else if (line.Contains("【对话比例】")) spec.DialogueRatio = ParsePercent(ExtractValue(line, "【对话比例】"));
-                else if (line.Contains("【必须包含】")) spec.MustInclude = ExtractValue(line, "【必须包含】")?.Split('、', ',', '，');
-                else if (line.Contains("【必须避免】")) spec.MustAvoid = ExtractValue(line, "【必须避免】")?.Split('、', ',', '，');
-            }
-
-            return spec;
-        }
-
-        private string? ExtractValue(string line, string prefix)
-        {
-            var idx = line.IndexOf(prefix);
-            if (idx >= 0) return line.Substring(idx + prefix.Length).Trim();
-            return null;
-        }
-
-        private int ParseInt(string? value)
-        {
-            if (string.IsNullOrEmpty(value)) return 3000;
-            var numStr = new string(value.TakeWhile(char.IsDigit).ToArray());
-            return int.TryParse(numStr, out var result) ? result : 3000;
-        }
-
-        private double ParsePercent(string? value)
-        {
-            if (string.IsNullOrEmpty(value)) return 0.3;
-            var numStr = new string(value.TakeWhile(c => char.IsDigit(c) || c == '.').ToArray());
-            if (double.TryParse(numStr, out var result))
-                return result > 1 ? result / 100 : result;
-            return 0.3;
+            var toneList = new System.Collections.Generic.List<string>();
+            if (!string.IsNullOrWhiteSpace(spec.Tone)) toneList.Add(spec.Tone);
+            foreach (var t in DefaultToneOptions)
+                if (!toneList.Contains(t)) toneList.Add(t);
+            ToneOptions.ReplaceAll(toneList);
         }
 
         private void ApplySpec(CreativeSpec spec, bool restoreTemplateName = false)
@@ -446,10 +483,10 @@ namespace TM.Framework.UI.Workspace.Common.Controls
             DialogueRatioPercent = (spec.DialogueRatio ?? 0.3) * 100;
             MustIncludeText = spec.MustInclude != null ? string.Join("、", spec.MustInclude) : "";
             MustAvoidText = spec.MustAvoid != null ? string.Join("、", spec.MustAvoid) : "";
-            if (spec.PolishMode != null)
-            {
-                PolishMode = spec.PolishMode.Value;
-            }
+            PolishMode = CreativeSpec.GetEffectivePolishMode(spec);
+            PolishModel = CreativeSpec.GetEffectivePolishModel(spec);
+            WordCountControl = CreativeSpec.GetEffectiveWordCountControl(spec);
+            PolishControl = CreativeSpec.GetEffectivePolishControl(spec);
 
             if (restoreTemplateName && !string.IsNullOrEmpty(spec.TemplateName))
             {
@@ -472,7 +509,10 @@ namespace TM.Framework.UI.Workspace.Common.Controls
                 DialogueRatio = DialogueRatioPercent / 100.0,
                 MustInclude = ParseArrayText(MustIncludeText),
                 MustAvoid = ParseArrayText(MustAvoidText),
-                PolishMode = PolishMode
+                PolishMode = PolishMode,
+                PolishModel = PolishModel,
+                WordCountControl = WordCountControl,
+                PolishControl = PolishControl
             };
         }
 

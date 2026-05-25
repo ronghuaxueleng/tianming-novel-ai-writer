@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.Json.Serialization;
 
@@ -49,7 +49,6 @@ namespace TM.Services.Modules.ProjectData.Models.Publishing
     public class ManifestInfo
     {
         [JsonPropertyName("ProjectName")] public string ProjectName { get; set; } = string.Empty;
-        [JsonPropertyName("SourceBookId")] public string SourceBookId { get; set; } = string.Empty;
         [JsonPropertyName("PublishTime")] public DateTime PublishTime { get; set; }
         [JsonPropertyName("Version")] public int Version { get; set; }
         [JsonPropertyName("Files")] public Dictionary<string, List<string>> Files { get; set; } = new();

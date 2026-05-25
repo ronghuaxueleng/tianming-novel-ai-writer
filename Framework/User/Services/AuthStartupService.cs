@@ -1,13 +1,15 @@
 using System;
 using System.Threading.Tasks;
 using System.Windows;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Services
 {
     public static class AuthStartupService
     {
         private static bool _initialized;
+        private static AuthTokenManager? _tokenManager;
+        private static AuthTokenManager TokenManager =>
+            _tokenManager ??= ServiceLocator.Get<AuthTokenManager>();
 
         public static void Initialize()
         {
@@ -23,18 +25,21 @@ namespace TM.Framework.User.Services
         {
             try
             {
-                if (!ServiceLocator.Get<AuthTokenManager>().IsLoggedIn)
+                var tokenManager = ServiceLocator.Get<AuthTokenManager>();
+                var apiService = ServiceLocator.Get<ApiService>();
+
+                if (!tokenManager.IsLoggedIn)
                 {
                     TM.App.Log("[AuthStartupService] 未检测到登录状态");
                     return false;
                 }
 
-                if (ServiceLocator.Get<AuthTokenManager>().IsAccessTokenExpired)
+                if (tokenManager.IsAccessTokenExpired)
                 {
-                    if (ServiceLocator.Get<AuthTokenManager>().HasRefreshToken)
+                    if (tokenManager.HasRefreshToken)
                     {
                         TM.App.Log("[AuthStartupService] refreshing...");
-                        var refreshResult = await ServiceLocator.Get<ApiService>().RefreshTokenAsync();
+                        var refreshResult = await apiService.RefreshTokenAsync();
 
                         if (refreshResult.Success)
                         {
@@ -45,7 +50,7 @@ namespace TM.Framework.User.Services
                         if (refreshResult.ErrorCode == ApiErrorCodes.AUTH_DEVICE_KICKED)
                         {
                             TM.App.Log("[AuthStartupService] 检测到被顶下线");
-                            ServiceLocator.Get<AuthTokenManager>().ClearTokens();
+                            tokenManager.ClearTokens();
                             return false;
                         }
 
@@ -57,7 +62,7 @@ namespace TM.Framework.User.Services
                     return false;
                 }
 
-                TM.App.Log($"[AuthStartupService] 登录状态有效，用户: {ServiceLocator.Get<AuthTokenManager>().Username}");
+                TM.App.Log($"[AuthStartupService] 登录状态有效，用户: {tokenManager.Username}");
                 return true;
             }
             catch (Exception ex)
@@ -74,7 +79,7 @@ namespace TM.Framework.User.Services
             ServiceLocator.Get<AuthTokenManager>().ClearTokens();
             ServiceLocator.Get<SubscriptionService>().ClearCache();
 
-            Application.Current?.Dispatcher?.Invoke(() =>
+            Application.Current?.Dispatcher?.InvokeAsync(() =>
             {
                 try
                 {
@@ -109,10 +114,10 @@ namespace TM.Framework.User.Services
             }
         }
 
-        public static string? CurrentUsername => ServiceLocator.Get<AuthTokenManager>().Username;
+        public static string? CurrentUsername => TokenManager.Username;
 
-        public static string? CurrentUserId => ServiceLocator.Get<AuthTokenManager>().UserId;
+        public static string? CurrentUserId => TokenManager.UserId;
 
-        public static bool IsLoggedIn => ServiceLocator.Get<AuthTokenManager>().IsLoggedIn;
+        public static bool IsLoggedIn => TokenManager.IsLoggedIn;
     }
 }

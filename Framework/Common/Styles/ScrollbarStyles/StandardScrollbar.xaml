@@ -2,7 +2,7 @@
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Style x:Key="StandardScrollBarStyle" TargetType="ScrollBar">
-        <Setter Property="Background" Value="{DynamicResource Surface}"/>
+        <Setter Property="Background" Value="Transparent"/>
         <Setter Property="Stylus.IsPressAndHoldEnabled" Value="False"/>
         <Setter Property="Stylus.IsFlicksEnabled" Value="False"/>
 
@@ -13,6 +13,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ScrollBar">
                     <Grid x:Name="GridRoot">
+
                         <Border Background="{TemplateBinding Background}"
                                 CornerRadius="0"/>
 
@@ -24,11 +25,12 @@
                             <RepeatButton.Template>
                                 <ControlTemplate>
                                     <Border x:Name="ArrowBorder"
-                                            Background="{DynamicResource ContentBackground}"
-                                            BorderBrush="{DynamicResource BorderBrush}"
+                                            Background="{DynamicResource SurfaceGlass}"
+                                            BorderBrush="{DynamicResource GlassBorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="6"
                                             Margin="0,2,0,2">
+
                                         <Path Data="M 0,3 L 3,0 L 6,3 Z"
                                               Fill="{DynamicResource Surface}"
                                               HorizontalAlignment="Center"
@@ -51,11 +53,12 @@
                             <RepeatButton.Template>
                                 <ControlTemplate>
                                     <Border x:Name="ArrowBorder"
-                                            Background="{DynamicResource ContentBackground}"
-                                            BorderBrush="{DynamicResource BorderBrush}"
+                                            Background="{DynamicResource SurfaceGlass}"
+                                            BorderBrush="{DynamicResource GlassBorderBrush}"
                                             BorderThickness="1"
                                             CornerRadius="6"
                                             Margin="0,2,0,2">
+
                                         <Path Data="M 0,0 L 6,0 L 3,3 Z"
                                               Fill="{DynamicResource Surface}"
                                               HorizontalAlignment="Center"
@@ -79,8 +82,8 @@
                                     <Thumb.Template>
                                         <ControlTemplate>
                                             <Border x:Name="ThumbBorder"
-                                                    Background="{DynamicResource ContentBackground}"
-                                                    BorderBrush="{DynamicResource BorderBrush}"
+                                                    Background="{DynamicResource SurfaceGlass}"
+                                                    BorderBrush="{DynamicResource GlassBorderBrush}"
                                                     BorderThickness="1"
                                                     CornerRadius="6"/>
                                             <ControlTemplate.Triggers>
@@ -121,8 +124,10 @@
     <Style x:Key="StandardScrollViewerStyle" TargetType="ScrollViewer">
         <Setter Property="VerticalScrollBarVisibility" Value="Auto"/>
         <Setter Property="HorizontalScrollBarVisibility" Value="Disabled"/>
+
         <Setter Property="CanContentScroll" Value="False"/>
         <Setter Property="Focusable" Value="False"/>
+
         <Setter Property="PanningMode" Value="VerticalOnly"/>
         <Setter Property="PanningDeceleration" Value="0.001"/>
         <Setter Property="PanningRatio" Value="1"/>

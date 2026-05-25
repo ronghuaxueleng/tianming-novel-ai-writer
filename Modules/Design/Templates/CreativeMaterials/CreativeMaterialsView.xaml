@@ -3,12 +3,12 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+             xmlns:controls="clr-namespace:TM.Framework.Common.Controls">
 
     <dm:TwoColumnEditorLayout
-        LeftIcon="💡"
+        LeftIcon="{DynamicResource Icon.Lightbulb}"
         LeftTitle="创作目录"
-        RightIcon="💡"
+        RightIcon="{DynamicResource Icon.Lightbulb}"
         RightTitle="素材详情"
         ItemsSource="{Binding TreeData}"
         ShowSearch="True"
@@ -32,33 +32,89 @@
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="3*"/>
+                    <RowDefinition Height="7*"/>
                 </Grid.RowDefinitions>
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="📚" Title="来源拆书" RequiredMark="True" Margin="0,0,0,10">
-                    <ComboBox ItemsSource="{Binding BookOptions}"
-                              SelectedValue="{Binding FormSourceBookId, Mode=TwoWay}"
-                              SelectedValuePath="Id"
-                              DisplayMemberPath="DisplayName"
-                              Style="{DynamicResource StandardComboBoxStyle}" Height="36"/>
+
+                <Grid Grid.Row="0" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="280"/>
+                    </Grid.ColumnDefinitions>
+                    <layout:IconHeaderGroupBox Grid.Column="0" Icon="{DynamicResource Icon.Books}" Title="来源拆书" RequiredMark="True">
+                        <ComboBox ItemsSource="{Binding BookOptions}"
+                                  SelectedValue="{Binding FormBookAnalysisId, Mode=TwoWay}"
+                                  SelectedValuePath="Id"
+                                  DisplayMemberPath="DisplayName"
+                                  Style="{DynamicResource StandardComboBoxStyle}" Height="36"/>
+                    </layout:IconHeaderGroupBox>
+                    <layout:IconHeaderGroupBox Grid.Column="2" Icon="{DynamicResource Icon.Sparkle}" Title="黄金三章">
+                        <ComboBox ItemsSource="{Binding GoldenChapterOptions}"
+                                  SelectedItem="{Binding FormGoldenChapterModeText, Mode=TwoWay}"
+                                  Style="{DynamicResource StandardComboBoxStyle}" Height="36"
+                                  ToolTip="启用后，前3章蓝图设计自动注入黄金三章爽点要求"/>
+                    </layout:IconHeaderGroupBox>
+                </Grid>
+
+                <Grid Grid.Row="1" Margin="0,0,0,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="10"/>
+                        <ColumnDefinition Width="280"/>
+                    </Grid.ColumnDefinitions>
+                    <layout:IconHeaderGroupBox Grid.Column="0" Icon="{DynamicResource Icon.Target}" Title="题材/类型" RequiredMark="True">
+                        <Grid>
+                            <ComboBox ItemsSource="{Binding GenreOptions}"
+                                      SelectedValue="{Binding FormGenre, Mode=TwoWay}"
+                                      SelectedValuePath="Name"
+                                      Style="{DynamicResource StandardComboBoxStyle}" Height="36"
+                                      Visibility="{Binding IsSingleGenreMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel>
+                                            <Image Source="{Binding Icon}" Width="14" Height="14" DockPanel.Dock="Left" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" DockPanel.Dock="Left" VerticalAlignment="Center" MinWidth="36"/>
+                                            <TextBlock Text="{Binding Description}" Foreground="{DynamicResource TextTertiary}"
+                                                       HorizontalAlignment="Right" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                            </ComboBox>
+                            <controls:MultiSelectComboBox ItemsSource="{Binding GenreOptions}"
+                                                          SelectedItems="{Binding FormSelectedGenres, Mode=OneWay}"
+                                                          DisplayMemberPath="Name"
+                                                          MaxSelectionCount="5"
+                                                          Placeholder="请选择题材（最多5个）..."
+                                                          Visibility="{Binding IsMultiGenreMode, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <controls:MultiSelectComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <DockPanel>
+                                            <Image Source="{Binding Icon}" Width="14" Height="14" DockPanel.Dock="Left" Margin="0,0,6,0" VerticalAlignment="Center"/>
+                                            <TextBlock Text="{Binding Name}" FontWeight="SemiBold" DockPanel.Dock="Left" VerticalAlignment="Center" MinWidth="36"/>
+                                            <TextBlock Text="{Binding Description}" Foreground="{DynamicResource TextTertiary}"
+                                                       HorizontalAlignment="Right" VerticalAlignment="Center" Margin="10,0,0,0"/>
+                                        </DockPanel>
+                                    </DataTemplate>
+                                </controls:MultiSelectComboBox.ItemTemplate>
+                            </controls:MultiSelectComboBox>
+                        </Grid>
+                    </layout:IconHeaderGroupBox>
+                    <layout:IconHeaderGroupBox Grid.Column="2" Icon="{DynamicResource Icon.Layers}" Title="题材数量">
+                        <ComboBox ItemsSource="{Binding GenreSelectionModeOptions}"
+                                  SelectedItem="{Binding FormGenreSelectionMode, Mode=TwoWay}"
+                                  Style="{DynamicResource StandardComboBoxStyle}" Height="36"
+                                  ToolTip="单选：每次生成1个素材；多选：按选中题材数量批量生成（最多5个）"/>
+                    </layout:IconHeaderGroupBox>
+                </Grid>
+
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Book}" Title="小说简介" Margin="0,0,0,10">
+                    <TextBox Text="{Binding FormNovelSynopsis, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                             AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
+                             Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="🎯" Title="题材/类型" RequiredMark="True" Margin="0,0,0,10">
-                    <ComboBox ItemsSource="{Binding GenreOptions}"
-                              SelectedValue="{Binding FormGenre, Mode=TwoWay}"
-                              SelectedValuePath="Name"
-                              Style="{DynamicResource StandardComboBoxStyle}" Height="36">
-                        <ComboBox.ItemTemplate>
-                            <DataTemplate>
-                                <DockPanel>
-                                    <emoji:TextBlock Text="{Binding Icon}" FontSize="14" DockPanel.Dock="Left" Margin="0,0,6,0" VerticalAlignment="Center"/>
-                                    <TextBlock Text="{Binding Name}" FontWeight="SemiBold" DockPanel.Dock="Left" VerticalAlignment="Center" MinWidth="36"/>
-                                    <TextBlock Text="{Binding Description}" Foreground="{DynamicResource TextTertiary}"
-                                               HorizontalAlignment="Right" VerticalAlignment="Center" Margin="10,0,0,0"/>
-                                </DockPanel>
-                            </DataTemplate>
-                        </ComboBox.ItemTemplate>
-                    </ComboBox>
-                </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="💡" Title="整体构思" Margin="0">
+
+                <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Lightbulb}" Title="整体构思" Margin="0">
                     <TextBox Text="{Binding FormOverallIdea, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
@@ -75,27 +131,27 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="🌍" Title="世界观素材-构建手法" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Globe}" Title="世界观素材-构建手法" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormWorldBuildingMethod, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="⚡" Title="世界观素材-力量体系" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Lightning}" Title="世界观素材-力量体系" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormPowerSystemDesign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="🏞️" Title="世界观素材-环境描写" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Landscape}" Title="世界观素材-环境描写" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormEnvironmentDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="3" Icon="🏰" Title="世界观素材-势力设计" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Castle}" Title="世界观素材-势力设计" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormFactionDesign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="4" Icon="✨" Title="世界观素材-亮点" Margin="0">
+                <layout:IconHeaderGroupBox Grid.Row="4" Icon="{DynamicResource Icon.Sparkle}" Title="世界观素材-亮点" Margin="0">
                     <TextBox Text="{Binding FormWorldviewHighlights, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
@@ -112,27 +168,27 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="👤" Title="角色素材-主角塑造" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.User}" Title="角色素材-主角塑造" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormProtagonistDesign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="👥" Title="角色素材-配角设计" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Users}" Title="角色素材-配角设计" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormSupportingRoles, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="🔗" Title="角色素材-人物关系" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Link}" Title="角色素材-人物关系" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormCharacterRelations, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="3" Icon="🖐️" Title="角色素材-金手指" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Hand}" Title="角色素材-金手指" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormGoldenFingerDesign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="4" Icon="✨" Title="角色素材-角色亮点" Margin="0">
+                <layout:IconHeaderGroupBox Grid.Row="4" Icon="{DynamicResource Icon.Sparkle}" Title="角色素材-角色亮点" Margin="0">
                     <TextBox Text="{Binding FormCharacterHighlights, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
@@ -149,27 +205,27 @@
                     <RowDefinition Height="*"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="📖" Title="剧情素材-情节结构" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Book}" Title="剧情素材-情节结构" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormPlotStructure, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="⚔️" Title="剧情素材-冲突设计" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Swords}" Title="剧情素材-冲突设计" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormConflictDesign, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="🔥" Title="剧情素材-高潮布局" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Fire}" Title="剧情素材-高潮布局" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormClimaxArrangement, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="3" Icon="🎭" Title="剧情素材-伏笔设计" Margin="0,0,0,5">
+                <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Theater}" Title="剧情素材-伏笔设计" Margin="0,0,0,5">
                     <TextBox Text="{Binding FormForeshadowingTechnique, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
-                <layout:IconHeaderGroupBox Grid.Row="4" Icon="✨" Title="剧情素材-剧情亮点" Margin="0">
+                <layout:IconHeaderGroupBox Grid.Row="4" Icon="{DynamicResource Icon.Sparkle}" Title="剧情素材-剧情亮点" Margin="0">
                     <TextBox Text="{Binding FormPlotHighlights, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                              Height="Auto" VerticalAlignment="Stretch" BorderThickness="0" Background="Transparent"/>

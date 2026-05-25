@@ -14,6 +14,20 @@ namespace TM.Framework.Common.Helpers.Storage
         public static event Action<string, string>? CurrentProjectChanging;
         public static event Action<string, string>? CurrentProjectChanged;
 
+        public static event Action<string, bool>? ModuleDataIsEnabledChanged;
+
+        public static void NotifyModuleDataIsEnabledChanged(string storageDirectoryPath, bool enabled)
+        {
+            try
+            {
+                ModuleDataIsEnabledChanged?.Invoke(storageDirectoryPath, enabled);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[StoragePathHelper] ModuleDataIsEnabledChanged异常: {ex.Message}");
+            }
+        }
+
         public static string CurrentProjectName
         {
             get => _currentProjectName;
@@ -81,11 +95,6 @@ namespace TM.Framework.Common.Helpers.Storage
             return path;
         }
 
-        public static string GetProjectCategoriesPath()
-        {
-            return Path.Combine(GetProjectGeneratedPath(), "categories.json");
-        }
-
         public static string GetProjectValidationPath()
         {
             var path = Path.Combine(GetCurrentProjectPath(), "Validation");
@@ -144,51 +153,51 @@ namespace TM.Framework.Common.Helpers.Storage
                 if (_storageRootCache != null)
                     return _storageRootCache;
 
-            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            TM.App.Log($"[StoragePathHelper] 程序运行目录: {baseDir}");
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
+                TM.App.Log($"[StoragePathHelper] 程序运行目录: {baseDir}");
 
-            var currentDir = new DirectoryInfo(baseDir);
-            int level = 0;
-            while (currentDir != null && level < 10)
-            {
-                var storagePath = Path.Combine(currentDir.FullName, "Storage");
-                TM.App.Log($"[StoragePathHelper] [{level}] 检查: {storagePath}");
-
-                if (Directory.Exists(storagePath))
+                var currentDir = new DirectoryInfo(baseDir);
+                int level = 0;
+                while (currentDir != null && level < 10)
                 {
-                    var frameworkPath = Path.Combine(storagePath, "Framework");
-                    if (!Directory.Exists(frameworkPath))
+                    var storagePath = Path.Combine(currentDir.FullName, "Storage");
+                    TM.App.Log($"[StoragePathHelper] [{level}] 检查: {storagePath}");
+
+                    if (Directory.Exists(storagePath))
                     {
-                        TM.App.Log($"[StoragePathHelper] ⚠️ 跳过（缺少Framework目录）: {storagePath}");
-                        currentDir = currentDir.Parent;
-                        level++;
-                        continue;
+                        var frameworkPath = Path.Combine(storagePath, "Framework");
+                        if (!Directory.Exists(frameworkPath))
+                        {
+                            TM.App.Log($"[StoragePathHelper] [!] 跳过（缺少Framework目录）: {storagePath}");
+                            currentDir = currentDir.Parent;
+                            level++;
+                            continue;
+                        }
+
+                        var parentDir = currentDir.FullName;
+                        var projectMarkers = new[] { "Core", "Framework", "Services", "Modules" };
+                        var markerCount = projectMarkers.Count(marker => Directory.Exists(Path.Combine(parentDir, marker)));
+
+                        if (markerCount >= 2)
+                        {
+                            _storageRootCache = storagePath;
+                            TM.App.Log($"[StoragePathHelper] ✓ 找到项目Storage目录: {storagePath}（父目录特征匹配数: {markerCount}）");
+                            return _storageRootCache;
+                        }
+                        else
+                        {
+                            TM.App.Log($"[StoragePathHelper] [!] 跳过（不在项目根目录）: {storagePath}（特征匹配数: {markerCount}）");
+                        }
                     }
 
-                    var parentDir = currentDir.FullName;
-                    var projectMarkers = new[] { "Core", "Framework", "Services", "Modules" };
-                    var markerCount = projectMarkers.Count(marker => Directory.Exists(Path.Combine(parentDir, marker)));
-
-                    if (markerCount >= 2)
-                    {
-                        _storageRootCache = storagePath;
-                        TM.App.Log($"[StoragePathHelper] ✅ 找到项目Storage目录: {storagePath}（父目录特征匹配数: {markerCount}）");
-                        return _storageRootCache;
-                    }
-                    else
-                    {
-                        TM.App.Log($"[StoragePathHelper] ⚠️ 跳过（不在项目根目录）: {storagePath}（特征匹配数: {markerCount}）");
-                    }
+                    currentDir = currentDir.Parent;
+                    level++;
                 }
 
-                currentDir = currentDir.Parent;
-                level++;
-            }
-
-            var exeStoragePath = Path.Combine(baseDir, "Storage");
-            _storageRootCache = exeStoragePath;
-            TM.App.Log($"[StoragePathHelper] 使用exe目录下的Storage: {exeStoragePath}");
-            return _storageRootCache;
+                var exeStoragePath = Path.Combine(baseDir, "Storage");
+                _storageRootCache = exeStoragePath;
+                TM.App.Log($"[StoragePathHelper] 使用exe目录下的Storage: {exeStoragePath}");
+                return _storageRootCache;
             }
         }
 
@@ -202,38 +211,49 @@ namespace TM.Framework.Common.Helpers.Storage
                 if (_projectRootCache != null)
                     return _projectRootCache;
 
-            var baseDir = AppDomain.CurrentDomain.BaseDirectory;
-            TM.App.Log($"[StoragePathHelper] 查找项目根目录，起始位置: {baseDir}");
+                var baseDir = AppDomain.CurrentDomain.BaseDirectory;
 
-            var currentDir = new DirectoryInfo(baseDir);
-            int level = 0;
-            while (currentDir != null && level < 10)
-            {
-                TM.App.Log($"[StoragePathHelper] [{level}] 检查项目根: {currentDir.FullName}");
-
-                var projectMarkers = new[] { "Core", "Framework", "Services", "Modules" };
-                var markerCount = projectMarkers.Count(marker => Directory.Exists(Path.Combine(currentDir.FullName, marker)));
-
-                if (markerCount >= 2)
+                var currentDir = new DirectoryInfo(baseDir);
+                int level = 0;
+                while (currentDir != null && level < 10)
                 {
-                    _projectRootCache = currentDir.FullName;
-                    TM.App.Log($"[StoragePathHelper] ✅ 找到项目根目录: {_projectRootCache}（特征匹配数: {markerCount}）");
-                    return _projectRootCache;
+                    var projectMarkers = new[] { "Core", "Framework", "Services", "Modules" };
+                    var markerCount = projectMarkers.Count(marker => Directory.Exists(Path.Combine(currentDir.FullName, marker)));
+                    var hasRealStorage = Directory.Exists(Path.Combine(currentDir.FullName, "Storage", "Framework"));
+
+                    if (markerCount >= 2 && hasRealStorage)
+                    {
+                        _projectRootCache = currentDir.FullName;
+                        TM.App.Log($"[StoragePathHelper] 找到项目根目录: {_projectRootCache}（向上{level}级，特征匹配: {markerCount}，Storage/Framework 验证通过）");
+                        return _projectRootCache;
+                    }
+
+                    currentDir = currentDir.Parent;
+                    level++;
                 }
 
-                currentDir = currentDir.Parent;
-                level++;
-            }
-            _projectRootCache = baseDir;
-            TM.App.Log($"[StoragePathHelper] 使用程序目录作为项目根: {baseDir}");
-            return _projectRootCache;
-            }
-        }
+                currentDir = new DirectoryInfo(baseDir);
+                level = 0;
+                while (currentDir != null && level < 10)
+                {
+                    var projectMarkers = new[] { "Core", "Framework", "Services", "Modules" };
+                    var markerCount = projectMarkers.Count(marker => Directory.Exists(Path.Combine(currentDir.FullName, marker)));
 
-        public static string GetFrameworkPath(string subPath)
-        {
-            var path = Path.Combine(GetProjectRoot(), "Framework", subPath);
-            return Path.GetFullPath(path);
+                    if (markerCount >= 2)
+                    {
+                        _projectRootCache = currentDir.FullName;
+                        TM.App.Log($"[StoragePathHelper] 找到项目根目录(兜底): {_projectRootCache}（向上{level}级，特征匹配: {markerCount}）");
+                        return _projectRootCache;
+                    }
+
+                    currentDir = currentDir.Parent;
+                    level++;
+                }
+
+                _projectRootCache = baseDir;
+                TM.App.Log($"[StoragePathHelper] 未找到项目特征目录（遍历{level}级），使用程序目录: {baseDir}");
+                return _projectRootCache;
+            }
         }
 
         public static string GetFrameworkStoragePath(string subPath)

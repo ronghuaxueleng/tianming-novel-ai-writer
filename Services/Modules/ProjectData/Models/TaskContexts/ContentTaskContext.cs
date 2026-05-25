@@ -1,6 +1,4 @@
-using System.Collections.Generic;
-using TM.Services.Modules.ProjectData.Models.Contexts.Design;
-using TM.Services.Modules.ProjectData.Models.Contexts.Generate;
+﻿using System.Collections.Generic;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Design.Characters;
 using TM.Services.Modules.ProjectData.Models.Design.Worldview;
@@ -87,8 +85,8 @@ namespace TM.Services.Modules.ProjectData.Models.TaskContexts
         [JsonPropertyName("HistoricalMilestones")]
         public List<VolumeMilestoneEntry> HistoricalMilestones { get; set; } = new();
 
-        [JsonPropertyName("VectorRecallFragments")]
-        public List<VectorRecallFragment> VectorRecallFragments { get; set; } = new();
+        [JsonPropertyName("LongDistanceRecallFragments")]
+        public List<LongDistanceRecallFragment> LongDistanceRecallFragments { get; set; } = new();
 
         [JsonPropertyName("PreviousVolumeArchives")]
         public List<VolumeFactArchive> PreviousVolumeArchives { get; set; } = new();
@@ -96,14 +94,17 @@ namespace TM.Services.Modules.ProjectData.Models.TaskContexts
         [JsonPropertyName("StateDivergenceWarnings")]
         public List<string> StateDivergenceWarnings { get; set; } = new();
 
-        [JsonPropertyName("VectorRecallDegraded")]
-        public bool VectorRecallDegraded { get; set; } = false;
+        [JsonPropertyName("CompressedKeyEvents")]
+        public List<ChapterKeyEventEntry> CompressedKeyEvents { get; set; } = new();
+
+        [JsonPropertyName("FirstDescriptionSnippets")]
+        public List<FirstDescriptionSnippet> FirstDescriptionSnippets { get; set; } = new();
 
         [JsonIgnore]
         public string? RepairHints { get; set; }
     }
 
-    public class VectorRecallFragment
+    public class LongDistanceRecallFragment
     {
         [JsonPropertyName("ChapterId")]
         public string ChapterId { get; set; } = string.Empty;
@@ -111,5 +112,17 @@ namespace TM.Services.Modules.ProjectData.Models.TaskContexts
         public string Content { get; set; } = string.Empty;
         [JsonPropertyName("Score")]
         public double Score { get; set; }
+
+        [JsonPropertyName("Category")]
+        public string? Category { get; set; }
     }
+
+    public enum RecallCategory
+    {
+        Foreshadowing = 0,
+        Character = 1,
+        General = 2
+    }
+
+    public record FirstDescriptionSnippet(string EntityId, string EntityName, string ChapterId, string Content);
 }

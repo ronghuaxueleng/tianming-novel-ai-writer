@@ -1,9 +1,13 @@
 <UserControl x:Class="TM.Framework.SystemSettings.Info.SystemInfo.SystemInfoView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:local="clr-namespace:TM.Framework.SystemSettings.Info.SystemInfo"
-             xmlns:common="clr-namespace:TM.Framework.Common.Controls.Layout">
+             xmlns:common="clr-namespace:TM.Framework.Common.Controls.Layout"
+             xmlns:converters="clr-namespace:TM.Framework.Common.Converters">
+
+    <UserControl.Resources>
+        <converters:IconKeyToImageSourceConverter x:Key="IconKeyToImageSourceConverter"/>
+    </UserControl.Resources>
 
     <Grid Margin="5">
         <Grid.RowDefinitions>
@@ -12,16 +16,16 @@
         </Grid.RowDefinitions>
 
         <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,20">
-            <Button Content="刷新" Command="{Binding RefreshCommand}" 
+            <Button Content="刷新" Command="{Binding RefreshCommand}"
                    Style="{DynamicResource PrimaryButtonStyle}" Width="100" Height="36" Margin="0,0,10,0"/>
-            <Button Content="导出" Command="{Binding ExportCommand}" 
+            <Button Content="导出" Command="{Binding ExportCommand}"
                    Style="{DynamicResource SecondaryButtonStyle}" Width="100" Height="36"/>
         </StackPanel>
 
         <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto">
             <StackPanel>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="💻" Title="操作系统信息">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Computer}" Title="操作系统信息">
                     <Grid Margin="10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
@@ -60,9 +64,10 @@
                     </Grid>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="⚡" Title="处理器信息">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Lightning}" Title="处理器信息">
                     <StackPanel Margin="10">
-                        <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+
+                        <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                             <StackPanel>
                                 <TextBlock Text="处理器名称" Foreground="{DynamicResource TextSecondary}" FontSize="11" Margin="0,0,0,5"/>
                                 <TextBlock Text="{Binding CPUName}" FontSize="13" FontWeight="Bold" TextWrapping="Wrap"/>
@@ -75,7 +80,7 @@
                                 <ColumnDefinition Width="*"/>
                             </Grid.ColumnDefinitions>
 
-                            <Border Grid.Column="0" Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,5,0">
+                            <Border Grid.Column="0" Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,5,0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -103,7 +108,7 @@
                                 </Grid>
                             </Border>
 
-                            <Border Grid.Column="1" Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="5,0,0,0">
+                            <Border Grid.Column="1" Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="5,0,0,0">
                                 <Grid>
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="Auto"/>
@@ -134,16 +139,17 @@
                     </StackPanel>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="💾" Title="内存信息">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Save}" Title="内存信息">
                     <StackPanel Margin="10">
-                        <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+
+                        <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                             <StackPanel>
                                 <TextBlock Text="总内存" Foreground="{DynamicResource TextSecondary}" FontSize="11"/>
                                 <TextBlock Text="{Binding TotalMemory}" FontSize="13" FontWeight="Bold" Margin="0,5,0,0"/>
                             </StackPanel>
                         </Border>
 
-                        <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+                        <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -169,13 +175,14 @@
                         </Border>
 
                         <StackPanel Orientation="Horizontal" Margin="0,5,0,5">
-                            <emoji:TextBlock Text="🔧" FontSize="12" Margin="0,0,5,0"/>
+                            <Image Source="{DynamicResource Icon.Settings}" Width="12" Height="12" Margin="0,0,5,0"/>
                             <TextBlock Text="内存模块" FontWeight="SemiBold" FontSize="12"/>
                         </StackPanel>
-                        <ListBox ItemsSource="{Binding MemoryModules}" MaxHeight="300" BorderThickness="0" Background="Transparent">
+                        <ListBox ItemsSource="{Binding MemoryModules}" MaxHeight="300" BorderThickness="0" Background="Transparent"
+                                VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
                             <ListBox.ItemTemplate>
                                 <DataTemplate>
-                                    <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="12" Margin="0,0,0,8">
+                                    <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="12" Margin="0,0,0,8">
                                         <Grid>
                                             <Grid.ColumnDefinitions>
                                                 <ColumnDefinition Width="Auto"/>
@@ -214,11 +221,12 @@
                     </StackPanel>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="🎮" Title="显卡信息">
-                    <ListBox ItemsSource="{Binding GpuInfos}" Margin="10" MaxHeight="300" BorderThickness="0" Background="Transparent">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Gamepad}" Title="显卡信息">
+                    <ListBox ItemsSource="{Binding GpuInfos}" Margin="10" MaxHeight="300" BorderThickness="0" Background="Transparent"
+                            VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+                                <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                                     <StackPanel>
                                         <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="14" Margin="0,0,0,10"/>
                                         <Grid>
@@ -252,17 +260,17 @@
                     </ListBox>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="🔧" Title="主板和BIOS">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Wrench}" Title="主板和BIOS">
                     <Grid Margin="10">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="*"/>
                             <ColumnDefinition Width="*"/>
                         </Grid.ColumnDefinitions>
 
-                        <Border Grid.Column="0" Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,10,0">
+                        <Border Grid.Column="0" Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,10,0">
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <emoji:TextBlock Text="🔲" FontSize="14" Margin="0,0,5,0"/>
+                                    <Image Source="{DynamicResource Icon.Package}" Width="14" Height="14" Margin="0,0,5,0"/>
                                     <TextBlock Text="主板" FontWeight="SemiBold" FontSize="14"/>
                                 </StackPanel>
                                 <Grid>
@@ -292,10 +300,10 @@
                             </StackPanel>
                         </Border>
 
-                        <Border Grid.Column="1" Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="10,0,0,0">
+                        <Border Grid.Column="1" Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="10,0,0,0">
                             <StackPanel>
                                 <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                    <emoji:TextBlock Text="💾" FontSize="14" Margin="0,0,5,0"/>
+                                    <Image Source="{DynamicResource Icon.Save}" Width="14" Height="14" Margin="0,0,5,0"/>
                                     <TextBlock Text="BIOS" FontWeight="SemiBold" FontSize="14"/>
                                 </StackPanel>
                                 <Grid>
@@ -327,11 +335,12 @@
                     </Grid>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="💿" Title="磁盘信息">
-                    <ListBox ItemsSource="{Binding DriveInfos}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Disc}" Title="磁盘信息">
+                    <ListBox ItemsSource="{Binding DriveInfos}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent"
+                            VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+                                <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
                                             <TextBlock Text="{Binding DriveName}" FontWeight="Bold" FontSize="14" Margin="0,0,10,0"/>
@@ -382,14 +391,15 @@
                     </ListBox>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="🖥️" Title="显示器信息">
-                    <ListBox ItemsSource="{Binding Displays}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent">
+                <common:IconHeaderGroupBox Margin="0,0,0,20" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Monitor}" Title="显示器信息">
+                    <ListBox ItemsSource="{Binding Displays}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent"
+                            VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+                                <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <emoji:TextBlock Text="🖥️" FontSize="14" Margin="0,0,8,0"/>
+                                            <Image Source="{DynamicResource Icon.Monitor}" Width="14" Height="14" Margin="0,0,8,0"/>
                                             <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
                                         </StackPanel>
 
@@ -468,14 +478,15 @@
                     </ListBox>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Margin="0,0,0,0" Style="{DynamicResource StandardGroupBoxStyle}" Icon="🌐" Title="网络适配器">
-                    <ListBox ItemsSource="{Binding NetworkAdapters}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent">
+                <common:IconHeaderGroupBox Margin="0,0,0,0" Style="{DynamicResource StandardGroupBoxStyle}" Icon="{DynamicResource Icon.Globe}" Title="网络适配器">
+                    <ListBox ItemsSource="{Binding NetworkAdapters}" Margin="10" MaxHeight="400" BorderThickness="0" Background="Transparent"
+                            VirtualizingPanel.IsVirtualizing="True" VirtualizingPanel.VirtualizationMode="Recycling" ScrollViewer.CanContentScroll="True">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
+                                <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="15" Margin="0,0,0,10">
                                     <StackPanel>
                                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                                            <emoji:TextBlock Text="{Binding ConnectionIcon}" FontSize="14" Margin="0,0,8,0"/>
+                                            <Image Source="{Binding ConnectionIcon, Converter={StaticResource IconKeyToImageSourceConverter}}" Width="14" Height="14" Margin="0,0,8,0"/>
                                             <TextBlock Text="{Binding Name}" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
                                         </StackPanel>
                                         <TextBlock Text="{Binding Description}" FontSize="11" Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,10"/>

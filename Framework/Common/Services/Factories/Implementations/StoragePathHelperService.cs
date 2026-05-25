@@ -1,5 +1,3 @@
-using TM.Framework.Common.Helpers.Storage;
-
 namespace TM.Framework.Common.Services.Factories
 {
     public class StoragePathHelperService : IStoragePathHelper
@@ -45,11 +43,6 @@ namespace TM.Framework.Common.Services.Factories
             return StoragePathHelper.GetProjectChaptersPath();
         }
 
-        public string GetProjectCategoriesPath()
-        {
-            return StoragePathHelper.GetProjectCategoriesPath();
-        }
-
         public string GetProjectValidationPath()
         {
             return StoragePathHelper.GetProjectValidationPath();
@@ -68,11 +61,6 @@ namespace TM.Framework.Common.Services.Factories
         public bool CreateProject(string projectName)
         {
             return StoragePathHelper.CreateProject(projectName);
-        }
-
-        public string GetFrameworkPath(string subPath)
-        {
-            return StoragePathHelper.GetFrameworkPath(subPath);
         }
 
         public string GetFrameworkStoragePath(string subPath)

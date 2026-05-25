@@ -1,18 +1,17 @@
-<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
-                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-                    xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+﻿<ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 
     <Style x:Key="StandardDialogBorderStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource ContentBackground}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="Background" Value="{DynamicResource DialogGlass}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="CornerRadius" Value="12"/>
     </Style>
 
     <Style x:Key="StandardDialogTitleBarStyle" TargetType="Border">
-        <Setter Property="Background" Value="{DynamicResource Surface}"/>
+        <Setter Property="Background" Value="{DynamicResource SurfaceGlass}"/>
         <Setter Property="CornerRadius" Value="12,12,0,0"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="BorderThickness" Value="0,0,0,1"/>
         <Setter Property="Height" Value="34"/>
     </Style>
@@ -21,6 +20,7 @@
         <Setter Property="Width" Value="34"/>
         <Setter Property="Height" Value="34"/>
         <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource TextSecondary}"/>
         <Setter Property="BorderThickness" Value="0"/>
         <Setter Property="Cursor" Value="Hand"/>
         <Setter Property="ToolTip" Value="关闭"/>
@@ -29,16 +29,19 @@
             <Setter.Value>
                 <ControlTemplate TargetType="Button">
                     <Border x:Name="bg" Background="Transparent" CornerRadius="0,12,0,0">
-                        <TextBlock Text="✕" 
-                                   FontSize="12" 
-                                   Foreground="{DynamicResource TextSecondary}"
-                                   HorizontalAlignment="Center" 
-                                   VerticalAlignment="Center"/>
+                        <Rectangle Width="12" Height="12"
+                                   HorizontalAlignment="Center"
+                                   VerticalAlignment="Center"
+                                   Fill="{TemplateBinding Foreground}">
+                            <Rectangle.OpacityMask>
+                                <ImageBrush ImageSource="{DynamicResource Icon.Close}" Stretch="Uniform"/>
+                            </Rectangle.OpacityMask>
+                        </Rectangle>
                     </Border>
                     <ControlTemplate.Triggers>
                         <Trigger Property="IsMouseOver" Value="True">
                             <Setter TargetName="bg" Property="Background" Value="{DynamicResource DangerColor}"/>
-                            <Setter TargetName="bg" Property="TextBlock.Foreground" Value="White"/>
+                            <Setter Property="Foreground" Value="White"/>
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Config

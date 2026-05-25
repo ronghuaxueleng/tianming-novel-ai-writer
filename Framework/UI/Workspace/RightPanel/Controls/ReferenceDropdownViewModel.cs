@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -9,18 +9,17 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 
-using System.IO;
 using System.Text.Json;
-
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.UI.Workspace.Services;
+using TM.Modules.Design.Templates.OneClickGenerate.ShortStoryBlueprint.Services;
 using TM.Services.Framework.AI.QueryRouting;
 using TM.Services.Modules.ProjectData.Implementations;
 
 namespace TM.Framework.UI.Workspace.RightPanel.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ReferenceDropdownViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -52,7 +51,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             ReferenceTypes = new ObservableCollection<ReferenceTypeInfo>(
                 ReferenceParser.GetAvailableTypes());
 
-            FilteredItems = new ObservableCollection<ReferenceItem>();
+            FilteredItems = new RangeObservableCollection<ReferenceItem>();
 
             SelectTypeCommand = new RelayCommand(p => SelectType(p as ReferenceTypeInfo));
             SelectItemCommand = new RelayCommand(p => SelectItem(p as ReferenceItem));
@@ -140,7 +139,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
 
         public ObservableCollection<ReferenceTypeInfo> ReferenceTypes { get; }
 
-        public ObservableCollection<ReferenceItem> FilteredItems { get; }
+        public RangeObservableCollection<ReferenceItem> FilteredItems { get; }
 
         public ICommand SelectTypeCommand { get; }
 
@@ -265,7 +264,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                         break;
 
                     case "仿写":
-                        await LoadCrawledBookInfosAsync();
+                        await LoadShortStoryBlueprintsAsync();
                         break;
 
                     case "大纲":
@@ -304,77 +303,28 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             OnPropertyChanged(nameof(IsEmpty));
         }
 
-        private async Task LoadCrawledBookInfosAsync()
+        private async Task LoadShortStoryBlueprintsAsync()
         {
-            var entries = new List<(DateTime SortTime, string BookId, string Title)>();
-
             try
             {
-                entries = await System.Threading.Tasks.Task.Run(() =>
+                var blueprintService = ServiceLocator.Get<ShortStoryBlueprintService>();
+                await blueprintService.InitializeAsync();
+                var blueprints = blueprintService.GetAllBlueprints();
+
+                foreach (var bp in blueprints.OrderByDescending(b => b.ModifiedTime))
                 {
-                    var result = new List<(DateTime SortTime, string BookId, string Title)>();
-                    var crawledBasePath = StoragePathHelper.GetModulesStoragePath("Design/SmartParsing/BookAnalysis/CrawledBooks");
-                    if (!Directory.Exists(crawledBasePath))
-                        return result;
-
-                    foreach (var bookDir in Directory.GetDirectories(crawledBasePath))
+                    if (string.IsNullOrWhiteSpace(bp.Name)) continue;
+                    _allItems.Add(new ReferenceItem
                     {
-                        var bookId = Path.GetFileName(bookDir);
-                        if (string.IsNullOrWhiteSpace(bookId))
-                            continue;
-
-                        var bookInfoPath = Path.Combine(bookDir, "book_info.json");
-                        if (!File.Exists(bookInfoPath))
-                            continue;
-
-                        var json = File.ReadAllText(bookInfoPath);
-                        var title = TryReadBookTitle(json);
-                        if (string.IsNullOrWhiteSpace(title))
-                            title = bookId;
-
-                        var sortTime = File.GetLastWriteTime(bookInfoPath);
-                        result.Add((sortTime, bookId, title));
-                    }
-
-                    return result;
-                }).ConfigureAwait(false);
+                        Id = bp.Id,
+                        Name = bp.Name
+                    });
+                }
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ReferenceDropdown] 读取爬取书名失败: {ex.Message}");
+                TM.App.Log($"[ReferenceDropdown] 读取短篇蓝图失败: {ex.Message}");
             }
-
-            foreach (var entry in entries.OrderByDescending(e => e.SortTime))
-            {
-                _allItems.Add(new ReferenceItem
-                {
-                    Id = entry.BookId,
-                    Name = entry.Title
-                });
-            }
-        }
-
-        private static string? TryReadBookTitle(string json)
-        {
-            try
-            {
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("title", out var titleProp))
-                {
-                    return titleProp.GetString();
-                }
-
-                if (doc.RootElement.TryGetProperty("Title", out var titleProp2))
-                {
-                    return titleProp2.GetString();
-                }
-            }
-            catch
-            {
-                return null;
-            }
-
-            return null;
         }
 
         private async Task<bool> TryLoadItemsFromRoutingAsync(string category)
@@ -429,27 +379,12 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
                 return;
             }
 
-            FilteredItems.Clear();
-
             var keyword = SearchText?.Trim();
+            var filtered = string.IsNullOrEmpty(keyword)
+                ? _allItems
+                : _allItems.Where(item => IsMatch(item, keyword)).ToList();
 
-            if (string.IsNullOrEmpty(keyword))
-            {
-                foreach (var item in _allItems)
-                {
-                    FilteredItems.Add(item);
-                }
-            }
-            else
-            {
-                foreach (var item in _allItems)
-                {
-                    if (IsMatch(item, keyword))
-                    {
-                        FilteredItems.Add(item);
-                    }
-                }
-            }
+            FilteredItems.ReplaceAll(filtered);
 
             OnPropertyChanged(nameof(IsEmpty));
         }
@@ -459,9 +394,9 @@ namespace TM.Framework.UI.Workspace.RightPanel.Controls
             if (string.IsNullOrEmpty(keyword)) return true;
 
             return (!string.IsNullOrEmpty(item.Name) &&
-                    item.Name.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) >= 0)
+                    item.Name.Contains(keyword, StringComparison.CurrentCultureIgnoreCase))
                    || (!string.IsNullOrEmpty(item.Id) &&
-                       item.Id.IndexOf(keyword, StringComparison.CurrentCultureIgnoreCase) >= 0);
+                       item.Id.Contains(keyword, StringComparison.CurrentCultureIgnoreCase));
         }
 
         #endregion

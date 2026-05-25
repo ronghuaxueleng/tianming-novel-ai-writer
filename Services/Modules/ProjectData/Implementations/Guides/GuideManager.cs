@@ -3,9 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Text.Json.Serialization.Metadata;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers.Storage;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
@@ -43,17 +43,44 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private readonly Dictionary<string, long> _cacheAccessOrder = new();
         private long _accessCounter = 0L;
-        private const int MaxCleanCacheEntries = 200;
+        private const int MaxCleanCacheEntries = 1000;
 
         private readonly SemaphoreSlim _saveSemaphore = new(1, 1);
 
-        private readonly Dictionary<string, Task<object>> _loadingTasks = new();
+        private readonly Dictionary<string, (Task<object> Task, int Epoch)> _loadingTasks = new();
+        private int _cacheEpoch;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
             PropertyNameCaseInsensitive = true,
             WriteIndented = true
         };
+
+        private static JsonTypeInfo<T>? TryGetSourceGenTypeInfo<T>()
+        {
+            var ctx = GuideSerializerContext.Default;
+            var info = ctx.GetTypeInfo(typeof(T));
+            return info as JsonTypeInfo<T>;
+        }
+
+        #endregion
+
+        #region 实体变更事件（供 EntityFirstChapterIndex 等订阅者触发 Rebuild）
+
+        public event Action<string, string, string>? EntryChanged;
+
+        public void RaiseEntryChanged(string entityId, string entityName, string entityDescription)
+        {
+            if (string.IsNullOrEmpty(entityId)) return;
+            try
+            {
+                EntryChanged?.Invoke(entityId, entityName ?? string.Empty, entityDescription ?? string.Empty);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[GuideManager] EntryChanged 处理器异常（已吞）: {ex.Message}");
+            }
+        }
 
         #endregion
 
@@ -70,7 +97,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
-            Task<object>? loadTask;
+            (Task<object> Task, int Epoch) loading;
             lock (_lock)
             {
                 if (_cache.TryGetValue(fileName, out var cached))
@@ -79,14 +106,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     return (T)cached;
                 }
 
-                if (!_loadingTasks.TryGetValue(fileName, out loadTask) || loadTask == null)
+                if (!_loadingTasks.TryGetValue(fileName, out loading))
                 {
-                    loadTask = LoadAndCacheInternalAsync<T>(fileName);
-                    _loadingTasks[fileName] = loadTask;
+                    var epoch = Volatile.Read(ref _cacheEpoch);
+                    var loadTask = LoadAndCacheInternalAsync<T>(fileName, epoch);
+                    loading = (loadTask, epoch);
+                    _loadingTasks[fileName] = loading;
                 }
             }
 
-            return (T)await loadTask;
+            return (T)await loading.Task.ConfigureAwait(false);
         }
 
         public void MarkDirty(string fileName)
@@ -114,10 +143,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task FlushAllAsync(string projectName)
         {
-            await _saveSemaphore.WaitAsync();
+            await _saveSemaphore.WaitAsync().ConfigureAwait(false);
             try
             {
-                await FlushAllInternalAsync(projectName);
+                await FlushAllInternalAsync(projectName).ConfigureAwait(false);
             }
             finally
             {
@@ -138,8 +167,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     .Select(f => (f, _cache[f]))
                     .ToList();
 
-                foreach (var (fileName, _) in toSave)
-                    _dirtyFiles.Remove(fileName);
+                _dirtyFiles.Clear();
             }
 
             var guidesDir = GetGuidesDir(projectName);
@@ -154,20 +182,28 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     Directory.Delete(stagingDir, recursive: true);
                 Directory.CreateDirectory(stagingDir);
 
-                foreach (var (fileName, guide) in toSave)
+                await Task.WhenAll(toSave.Select(async entry =>
                 {
+                    var (fileName, guide) = entry;
                     var stagingPath = Path.Combine(stagingDir, fileName);
-                    var json = JsonSerializer.Serialize(guide, JsonOptions);
-                    await File.WriteAllTextAsync(stagingPath, json);
-                }
+                    await using var fs = new FileStream(stagingPath, FileMode.Create, FileAccess.Write, FileShare.None,
+                        bufferSize: 4096, useAsync: true);
+                    var sgInfo = GuideSerializerContext.Default.GetTypeInfo(guide.GetType());
+                    if (sgInfo != null)
+                        await JsonSerializer.SerializeAsync(fs, guide, sgInfo).ConfigureAwait(false);
+                    else
+                        await JsonSerializer.SerializeAsync(fs, guide, JsonOptions).ConfigureAwait(false);
+                })).ConfigureAwait(false);
 
-                await File.WriteAllTextAsync(commitMarker, DateTime.Now.ToString("O"));
+                await File.WriteAllTextAsync(commitMarker, DateTime.Now.ToString("O")).ConfigureAwait(false);
 
-                TM.App.Log($"[GuideManager] P1: {toSave.Count}");
+                if (TM.App.IsDebugMode)
+                    TM.App.Log($"[GuideManager] P1: {toSave.Count}");
 
                 CommitStagingFiles(stagingDir, guidesDir);
 
-                TM.App.Log($"[GuideManager] P2: {toSave.Count}");
+                if (TM.App.IsDebugMode)
+                    TM.App.Log($"[GuideManager] P2: {toSave.Count}");
             }
             catch (Exception ex)
             {
@@ -199,7 +235,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     _changeCount = 0;
             }
 
-            TM.App.Log($"[GuideManager] 批量保存完成，共{toSave.Count}个文件");
+            if (InfoLogDedup.ShouldLog("GuideManager:Flush:Saved"))
+                TM.App.Log($"[GuideManager] 批量保存完成，共{toSave.Count}个文件");
         }
 
         public void RecoverPendingFlush()
@@ -242,7 +279,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task FlushOnExitAsync()
         {
-            await FlushAllAsync();
+            await FlushAllAsync().ConfigureAwait(false);
             TM.App.Log("[GuideManager] 已保存所有未写入的数据");
         }
 
@@ -250,6 +287,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             lock (_lock)
             {
+                Interlocked.Increment(ref _cacheEpoch);
                 _cache.Clear();
                 _cacheAccessOrder.Clear();
                 _loadingTasks.Clear();
@@ -262,6 +300,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             lock (_lock)
             {
+                Interlocked.Increment(ref _cacheEpoch);
                 foreach (var key in _dirtyFiles)
                 {
                     _cache.Remove(key);
@@ -312,15 +351,55 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private async Task<object> LoadAndCacheInternalAsync<T>(string fileName) where T : new()
         {
+            return await LoadAndCacheInternalAsync<T>(fileName, Volatile.Read(ref _cacheEpoch)).ConfigureAwait(false);
+        }
+
+        private async Task<object> LoadAndCacheInternalAsync<T>(string fileName, int epoch) where T : new()
+        {
             try
             {
-                var guide = await LoadFromFileAsync<T>(fileName);
+                var guide = await LoadFromFileAsync<T>(fileName).ConfigureAwait(false);
+                bool needEvict = false;
+                List<string>? cleanKeys = null;
+                Dictionary<string, long>? accessSnapshot = null;
+                int maxEntries = 0;
+                HashSet<string>? dirtySnapshot = null;
                 lock (_lock)
                 {
-                    _cache[fileName] = guide!;
-                    _cacheAccessOrder[fileName] = ++_accessCounter;
-                    if (_cache.Count - _dirtyFiles.Count > MaxCleanCacheEntries)
-                        EvictLRUCleanInternal();
+                    if (epoch == Volatile.Read(ref _cacheEpoch))
+                    {
+                        _cache[fileName] = guide!;
+                        _cacheAccessOrder[fileName] = ++_accessCounter;
+                        if (_cache.Count - _dirtyFiles.Count > MaxCleanCacheEntries)
+                        {
+                            cleanKeys = new List<string>(_cache.Keys);
+                            dirtySnapshot = new HashSet<string>(_dirtyFiles);
+                            accessSnapshot = new Dictionary<string, long>(_cacheAccessOrder);
+                            maxEntries = MaxCleanCacheEntries;
+                            needEvict = true;
+                        }
+                    }
+                }
+                if (needEvict && cleanKeys != null)
+                {
+                    cleanKeys = cleanKeys.Where(k => !dirtySnapshot!.Contains(k)).ToList();
+                    needEvict = cleanKeys.Count > maxEntries;
+                }
+                if (needEvict && cleanKeys != null && accessSnapshot != null)
+                {
+                    var toEvict = cleanKeys
+                        .OrderBy(k => accessSnapshot.TryGetValue(k, out var o) ? o : 0L)
+                        .Take(cleanKeys.Count - maxEntries)
+                        .ToList();
+                    lock (_lock)
+                    {
+                        foreach (var key in toEvict)
+                        {
+                            if (_dirtyFiles.Contains(key)) continue;
+                            _cache.Remove(key);
+                            _cacheAccessOrder.Remove(key);
+                        }
+                    }
                 }
                 return guide!;
             }
@@ -328,7 +407,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 lock (_lock)
                 {
-                    _loadingTasks.Remove(fileName);
+                    if (_loadingTasks.TryGetValue(fileName, out var loading) && loading.Epoch == epoch)
+                        _loadingTasks.Remove(fileName);
                 }
             }
         }
@@ -347,8 +427,16 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                var result = JsonSerializer.Deserialize<T>(json, JsonOptions);
+                await using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+                    bufferSize: 4096, useAsync: true);
+
+                T? result;
+                var sgInfo = TryGetSourceGenTypeInfo<T>();
+                if (sgInfo != null)
+                    result = await JsonSerializer.DeserializeAsync(fs, sgInfo).ConfigureAwait(false);
+                else
+                    result = await JsonSerializer.DeserializeAsync<T>(fs, JsonOptions).ConfigureAwait(false);
+
                 TM.App.Log($"[GuideManager] 加载成功: {fileName}");
                 return result ?? new T();
             }
@@ -363,46 +451,65 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             lock (_lock)
             {
+                Interlocked.Increment(ref _cacheEpoch);
                 _cache[fileName] = newValue;
                 _cacheAccessOrder[fileName] = ++_accessCounter;
+                _loadingTasks.Remove(fileName);
                 _dirtyFiles.Remove(fileName);
             }
         }
 
         public void CleanupExpiredCache()
         {
+            List<string> cleanKeys;
+            Dictionary<string, long> accessSnapshot;
+            int maxEntries;
             lock (_lock)
             {
-                EvictLRUCleanInternal();
+                cleanKeys = _cache.Keys.Where(k => !_dirtyFiles.Contains(k)).ToList();
+                if (cleanKeys.Count <= MaxCleanCacheEntries) return;
+                maxEntries = MaxCleanCacheEntries;
+                accessSnapshot = new Dictionary<string, long>(_cacheAccessOrder);
             }
-        }
 
-        private void EvictLRUCleanInternal()
-        {
-            var cleanKeys = _cache.Keys.Where(k => !_dirtyFiles.Contains(k)).ToList();
-            if (cleanKeys.Count <= MaxCleanCacheEntries) return;
             var toEvict = cleanKeys
-                .OrderBy(k => _cacheAccessOrder.TryGetValue(k, out var o) ? o : 0L)
-                .Take(cleanKeys.Count - MaxCleanCacheEntries)
+                .OrderBy(k => accessSnapshot.TryGetValue(k, out var o) ? o : 0L)
+                .Take(cleanKeys.Count - maxEntries)
                 .ToList();
-            foreach (var key in toEvict)
+
+            lock (_lock)
             {
-                _cache.Remove(key);
-                _cacheAccessOrder.Remove(key);
+                foreach (var key in toEvict)
+                {
+                    if (_dirtyFiles.Contains(key)) continue;
+                    _cache.Remove(key);
+                    _cacheAccessOrder.Remove(key);
+                }
+                TM.App.Log($"[GuideManager] LRU驱逐{toEvict.Count}个缓存条目，剩余{_cache.Count}");
             }
-            TM.App.Log($"[GuideManager] LRU驱逐{toEvict.Count}个缓存条目，剩余{_cache.Count}");
         }
 
         private static void CommitStagingFiles(string stagingDir, string guidesDir)
         {
             Directory.CreateDirectory(guidesDir);
 
-            foreach (var stagingFile in Directory.GetFiles(stagingDir, "*.json"))
+            var stagingFiles = Directory.GetFiles(stagingDir, "*.json");
+            var committedCount = 0;
+
+            foreach (var stagingFile in stagingFiles)
             {
                 var fileName = Path.GetFileName(stagingFile);
                 var targetPath = Path.Combine(guidesDir, fileName);
                 File.Move(stagingFile, targetPath, overwrite: true);
+
+                if (!File.Exists(targetPath))
+                    throw new IOException($"CommitStagingFiles 验证失败: {fileName} 移动后目标文件不存在");
+
+                committedCount++;
             }
+
+            if (committedCount != stagingFiles.Length)
+                TM.App.Log($"[GuideManager] CommitStagingFiles 警告: 预期提交{stagingFiles.Length}个文件，实际{committedCount}个");
 
             Directory.Delete(stagingDir, recursive: true);
         }
@@ -415,13 +522,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static string GetStagingDir(string guidesDir)
         {
             return Path.Combine(guidesDir, ".flush_staging");
-        }
-
-        private static string GetGuidePath(string fileName)
-        {
-            var projectName = StoragePathHelper.CurrentProjectName;
-            var guidesDir = GetGuidesDir(projectName);
-            return Path.Combine(guidesDir, fileName);
         }
 
         #endregion

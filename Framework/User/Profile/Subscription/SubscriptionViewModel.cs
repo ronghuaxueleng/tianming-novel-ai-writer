@@ -1,26 +1,30 @@
-using System;
-using System.Collections.ObjectModel;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Profile.Subscription
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SubscriptionViewModel : INotifyPropertyChanged
     {
         private readonly SubscriptionService _subscriptionService;
+        private readonly ApiService _apiService;
 
-        public SubscriptionViewModel(SubscriptionService subscriptionService)
+        public SubscriptionViewModel(SubscriptionService subscriptionService, ApiService apiService)
         {
             _subscriptionService = subscriptionService;
+            _apiService = apiService;
 
             RefreshCommand = new SubscriptionRelayCommand(async () => await RefreshAsync());
             ActivateCardKeyCommand = new SubscriptionRelayCommand(async () => await ActivateCardKeyAsync());
             UpgradeCommand = new SubscriptionRelayCommand(async () => await UpgradeAsync());
+            CopyInviteCodeCommand = new SubscriptionRelayCommand(async () => await CopyInviteCodeAsync());
 
         }
 
@@ -91,8 +95,8 @@ namespace TM.Framework.User.Profile.Subscription
             set { _isActivating = value; OnPropertyChanged(); }
         }
 
-        private ObservableCollection<ActivationHistoryItem> _activationHistory = new();
-        public ObservableCollection<ActivationHistoryItem> ActivationHistory
+        private RangeObservableCollection<ActivationHistoryItem> _activationHistory = new();
+        public RangeObservableCollection<ActivationHistoryItem> ActivationHistory
         {
             get => _activationHistory;
             set { _activationHistory = value; OnPropertyChanged(); }
@@ -106,6 +110,29 @@ namespace TM.Framework.User.Profile.Subscription
             _ => "续费"
         };
 
+        private string _inviteCode = "--";
+        public string InviteCode
+        {
+            get => _inviteCode;
+            set { _inviteCode = value; OnPropertyChanged(); }
+        }
+
+        private int _inviteCount;
+        public int InviteCount
+        {
+            get => _inviteCount;
+            set { _inviteCount = value; OnPropertyChanged(); OnPropertyChanged(nameof(InviteStatsText)); }
+        }
+
+        private int _inviteRewardDays;
+        public int InviteRewardDays
+        {
+            get => _inviteRewardDays;
+            set { _inviteRewardDays = value; OnPropertyChanged(); OnPropertyChanged(nameof(InviteStatsText)); }
+        }
+
+        public string InviteStatsText => $"已邀请 {InviteCount} 人 | 累计获得 {InviteRewardDays} 天";
+
         #endregion
 
         #region 命令
@@ -113,6 +140,7 @@ namespace TM.Framework.User.Profile.Subscription
         public ICommand RefreshCommand { get; }
         public ICommand ActivateCardKeyCommand { get; }
         public ICommand UpgradeCommand { get; }
+        public ICommand CopyInviteCodeCommand { get; }
 
         #endregion
 
@@ -132,10 +160,21 @@ namespace TM.Framework.User.Profile.Subscription
                 }
 
                 var history = await _subscriptionService.GetActivationHistoryAsync();
-                ActivationHistory.Clear();
-                foreach (var item in history)
+                ActivationHistory.ReplaceAll(history);
+
+                try
                 {
-                    ActivationHistory.Add(item);
+                    var profileResult = await _apiService.GetProfileAsync();
+                    if (profileResult.Success && profileResult.Data != null)
+                    {
+                        InviteCode = profileResult.Data.InviteCode ?? "--";
+                        InviteCount = profileResult.Data.InviteCount;
+                        InviteRewardDays = profileResult.Data.InviteRewardDays;
+                    }
+                }
+                catch (Exception pex)
+                {
+                    TM.App.Log($"[SubscriptionViewModel] 获取邀请码失败: {pex.Message}");
                 }
             }
             catch (Exception ex)
@@ -145,6 +184,24 @@ namespace TM.Framework.User.Profile.Subscription
             finally
             {
                 IsLoading = false;
+            }
+        }
+
+        public async Task CopyInviteCodeAsync()
+        {
+            await Task.CompletedTask;
+            if (!string.IsNullOrWhiteSpace(InviteCode) && InviteCode != "--")
+            {
+                try
+                {
+                    System.Windows.Application.Current.Dispatcher.Invoke(() =>
+                        System.Windows.Clipboard.SetText(InviteCode));
+                    GlobalToast.Success("已复制", $"邀请码 {InviteCode} 已复制到剪贴板");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[SubscriptionViewModel] 复制邀请码失败: {ex.Message}");
+                }
             }
         }
 
@@ -178,20 +235,22 @@ namespace TM.Framework.User.Profile.Subscription
                 var result = await _subscriptionService.ActivateCardKeyAsync(CardKey);
                 if (result.Success)
                 {
-                    GlobalToast.Success("续费成功", result.Message ?? $"已增加{result.DaysAdded}天会员时长");
+                    TM.App.Log($"[SubscriptionViewModel] 续费成功: {result.Message}");
+                    GlobalToast.Success("续费成功", $"已增加{result.DaysAdded}天会员时长");
                     CardKey = string.Empty;
 
                     await RefreshAsync();
                 }
                 else
                 {
-                    GlobalToast.Error("续费失败", result.ErrorMessage ?? "卡密无效");
+                    TM.App.Log($"[SubscriptionViewModel] 续费失败: {result.ErrorMessage}");
+                    GlobalToast.Error("续费失败", $"续费失败：{result.ErrorMessage}");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SubscriptionViewModel] 续费卡密失败: {ex.Message}");
-                GlobalToast.Error("续费失败", $"操作失败: {ex.Message}");
+                GlobalToast.Error("续费失败", $"续费失败：{ex.Message}");
             }
             finally
             {
@@ -254,7 +313,9 @@ namespace TM.Framework.User.Profile.Subscription
             finally
             {
                 _isExecuting = false;
-                CommandManager.InvalidateRequerySuggested();
+                System.Windows.Application.Current?.Dispatcher.InvokeAsync(
+                    System.Windows.Input.CommandManager.InvalidateRequerySuggested,
+                    System.Windows.Threading.DispatcherPriority.Background);
             }
         }
     }

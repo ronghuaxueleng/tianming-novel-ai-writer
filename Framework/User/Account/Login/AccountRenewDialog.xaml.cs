@@ -1,14 +1,14 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.Login
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class AccountRenewDialog : Window
     {
         private readonly SubscriptionService _subscriptionService;
@@ -73,19 +73,20 @@ namespace TM.Framework.User.Account.Login
 
                 if (result.Success)
                 {
-                    StandardDialog.ShowInfo("续费成功", result.Message ?? $"已为账号 {account} 增加会员时长", this);
-                    TM.App.Log($"[AccountRenewDialog] 续费成功: {account}");
+                    TM.App.Log($"[AccountRenewDialog] 续费成功: {account}, {result.Message}");
+                    StandardDialog.ShowInfo($"已为账号 {account} 增加会员时长", "续费成功", this);
                     Close();
                 }
                 else
                 {
-                    ShowError(result.ErrorMessage ?? "续费失败");
+                    TM.App.Log($"[AccountRenewDialog] 续费失败: {result.ErrorMessage}");
+                    ShowError("续费失败，请稍后重试");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountRenewDialog] 续费异常: {ex.Message}");
-                ShowError($"续费失败: {ex.Message}");
+                ShowError($"续费失败：{ex.Message}");
             }
             finally
             {

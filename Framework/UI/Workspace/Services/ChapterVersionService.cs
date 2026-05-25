@@ -42,22 +42,35 @@ namespace TM.Framework.UI.Workspace.Services
             WriteIndented = true
         };
 
-        public void SaveVersion(string chapterId, string content, string? description = null)
+        public async System.Threading.Tasks.Task SaveVersionAsync(
+            string chapterId, string content, string? description = null)
         {
-            if (string.IsNullOrEmpty(chapterId) || string.IsNullOrEmpty(content))
-                return;
+            if (string.IsNullOrEmpty(chapterId) || string.IsNullOrEmpty(content)) return;
 
+            bool needsLoad;
+            lock (_lock)
+                needsLoad = !_histories.ContainsKey(chapterId) && _loadedFromDisk.Add(chapterId);
+            if (needsLoad)
+                await LoadHistoryFromFileAsync(chapterId).ConfigureAwait(false);
+
+            SaveVersionCore(chapterId, content, description);
+        }
+
+        private void SaveVersionCore(string chapterId, string content, string? description)
+        {
             ChapterVersionHistory history;
             int versionCount;
             lock (_lock)
             {
-                history = GetOrCreateHistory(chapterId);
+                if (!_histories.TryGetValue(chapterId, out history!))
+                {
+                    history = new ChapterVersionHistory { ChapterId = chapterId };
+                    _histories[chapterId] = history;
+                }
 
                 if (history.CurrentVersion != null &&
                     history.CurrentVersion.Content == content)
-                {
                     return;
-                }
 
                 history.RedoStack.Clear();
 
@@ -84,7 +97,8 @@ namespace TM.Framework.UI.Workspace.Services
             }
 
             TM.App.Log($"[ChapterVersionService] 保存版本: {chapterId}, 版本数: {versionCount}");
-            _ = SaveHistoryToFileAsync(chapterId);
+            SaveHistoryToFileAsync(chapterId)
+                .SafeFireAndForget(ex => TM.App.Log($"[ChapterVersionService] 保存历史失败: {ex.Message}"));
         }
 
         public string? Undo(string chapterId)
@@ -267,11 +281,11 @@ namespace TM.Framework.UI.Workspace.Services
                 }
                 var path = Path.Combine(historyDir, "version_history.json");
 
-                string json;
+                byte[] data;
                 lock (_lock)
-                    json = JsonSerializer.Serialize(history, JsonOptions);
-                var tmpPath = path + ".tmp";
-                await File.WriteAllTextAsync(tmpPath, json).ConfigureAwait(false);
+                    data = JsonSerializer.SerializeToUtf8Bytes(history, JsonOptions);
+                var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllBytesAsync(tmpPath, data).ConfigureAwait(false);
                 File.Move(tmpPath, path, overwrite: true);
             }
             catch (Exception ex)
@@ -293,7 +307,7 @@ namespace TM.Framework.UI.Workspace.Services
                 if (!File.Exists(path))
                     return;
 
-                var json = await File.ReadAllTextAsync(path);
+                var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
                 var history = JsonSerializer.Deserialize<ChapterVersionHistory>(json, JsonOptions);
 
                 if (history != null)
@@ -308,66 +322,7 @@ namespace TM.Framework.UI.Workspace.Services
             }
         }
 
-        private ChapterVersionHistory GetOrCreateHistory(string chapterId)
-        {
-            ChapterVersionHistory? history;
-            var shouldLoad = false;
-
-            if (!_histories.TryGetValue(chapterId, out history))
-            {
-                shouldLoad = _loadedFromDisk.Add(chapterId);
-            }
-            else
-            {
-                _loadedFromDisk.Add(chapterId);
-                return history;
-            }
-
-            if (shouldLoad)
-                TryLoadFromDiskSync(chapterId);
-
-            if (!_histories.TryGetValue(chapterId, out history))
-            {
-                history = new ChapterVersionHistory { ChapterId = chapterId };
-                _histories[chapterId] = history;
-            }
-
-            return history;
-        }
-
-        private void TryLoadFromDiskSync(string chapterId)
-        {
-            try
-            {
-                var path = Path.Combine(StoragePathHelper.GetProjectHistoryPath(), chapterId, "version_history.json");
-                if (!File.Exists(path)) return;
-                var json = File.ReadAllText(path);
-                var h = JsonSerializer.Deserialize<ChapterVersionHistory>(json, JsonOptions);
-                if (h != null)
-                {
-                    lock (_lock)
-                        _histories[chapterId] = h;
-                    TM.App.Log($"[ChapterVersionService] 从磁盘恢复版本历史: {chapterId}, {h.Versions.Count} 条");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ChapterVersionService] 磁盘加载历史失败 {chapterId}: {ex.Message}");
-            }
-        }
-
-        private static int CountWords(string text)
-        {
-            if (string.IsNullOrEmpty(text)) return 0;
-
-            int count = 0;
-            foreach (char c in text)
-            {
-                if (c >= 0x4E00 && c <= 0x9FFF)
-                    count++;
-            }
-            return count;
-        }
+        private static int CountWords(string text) => WordCountHelper.CountRaw(text);
     }
 
     public class ChapterVersionHistory
@@ -377,7 +332,7 @@ namespace TM.Framework.UI.Workspace.Services
         [System.Text.Json.Serialization.JsonPropertyName("CurrentIndex")] public int CurrentIndex { get; set; } = -1;
         [System.Text.Json.Serialization.JsonPropertyName("RedoStack")] public Stack<ChapterVersion> RedoStack { get; set; } = new();
 
-        public ChapterVersion? CurrentVersion => 
+        public ChapterVersion? CurrentVersion =>
             CurrentIndex >= 0 && CurrentIndex < Versions.Count ? Versions[CurrentIndex] : null;
     }
 

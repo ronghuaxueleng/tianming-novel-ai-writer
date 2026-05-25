@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Linq;
@@ -12,13 +12,15 @@ using TM.Framework.Appearance.ThemeManagement;
 namespace TM.Framework.Appearance.AutoTheme.TimeBased
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class TimelineControl : UserControl
     {
         private const double CanvasWidth = 720;
-        private const double CanvasHeight = 60;
         private const double PixelsPerHour = 30;
 
         private DispatcherTimer? _updateTimer;
+        private SolidColorBrush? _cachedPrimaryBrush;
+        private SolidColorBrush? _cachedDangerBrush;
 
         public static readonly DependencyProperty SchedulesProperty =
             DependencyProperty.Register(nameof(Schedules), typeof(List<TimeScheduleItem>), typeof(TimelineControl),
@@ -41,8 +43,11 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             _updateTimer.Tick += (s, e) => UpdateCurrentTimeIndicator();
             _updateTimer.Start();
 
-            Loaded += (s, e) => 
+            Loaded += (s, e) =>
             {
+                if (!_updateTimer.IsEnabled) _updateTimer.Start();
+                _cachedPrimaryBrush = null;
+                _cachedDangerBrush = null;
                 DrawTimeScale();
                 UpdateCurrentTimeIndicator();
                 DrawSchedules();
@@ -63,6 +68,8 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
         {
             var borderColor = TryFindResource("BorderBrush") as Color? ?? Colors.Gray;
             var textColor = TryFindResource("TextSecondary") as Color? ?? Colors.Gray;
+            var tickBrush = new SolidColorBrush(borderColor); tickBrush.Freeze();
+            var textBrush = new SolidColorBrush(textColor); textBrush.Freeze();
 
             for (int hour = 0; hour <= 24; hour += 3)
             {
@@ -74,7 +81,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                     Y1 = 25,
                     X2 = x,
                     Y2 = 35,
-                    Stroke = new SolidColorBrush(borderColor),
+                    Stroke = tickBrush,
                     StrokeThickness = 1
                 };
                 TimelineCanvas.Children.Add(tickLine);
@@ -83,7 +90,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                 {
                     Text = $"{hour:00}:00",
                     FontSize = 10,
-                    Foreground = new SolidColorBrush(textColor)
+                    Foreground = textBrush
                 };
                 Canvas.SetLeft(label, x - 15);
                 Canvas.SetTop(label, 40);
@@ -98,6 +105,8 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             {
                 TimelineCanvas.Children.Remove(rect);
             }
+            _cachedPrimaryBrush = null;
+            _cachedDangerBrush = null;
 
             if (Schedules == null || !Schedules.Any()) return;
 
@@ -127,13 +136,19 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
         private void DrawSingleBlock(double startX, double endX, ThemeType theme)
         {
-            var primaryColor = TryFindResource("PrimaryColor") as Color? ?? Colors.DodgerBlue;
+            if (_cachedPrimaryBrush == null)
+            {
+                var primaryColor = TryFindResource("PrimaryColor") as Color? ?? Colors.DodgerBlue;
+                _cachedPrimaryBrush = new SolidColorBrush(primaryColor);
+                _cachedPrimaryBrush.Freeze();
+            }
+            var primBrush = _cachedPrimaryBrush;
 
             var rect = new Rectangle
             {
                 Width = endX - startX,
                 Height = 20,
-                Fill = new SolidColorBrush(primaryColor),
+                Fill = primBrush,
                 Opacity = 0.6,
                 RadiusX = 4,
                 RadiusY = 4
@@ -205,13 +220,19 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
             if (overlapEnd > overlapStart)
             {
-                var dangerColor = TryFindResource("DangerColor") as Color? ?? Colors.Red;
+                if (_cachedDangerBrush == null)
+                {
+                    var dangerColor = TryFindResource("DangerColor") as Color? ?? Colors.Red;
+                    _cachedDangerBrush = new SolidColorBrush(dangerColor);
+                    _cachedDangerBrush.Freeze();
+                }
+                var dangBrush = _cachedDangerBrush;
 
                 var rect = new Rectangle
                 {
                     Width = (overlapEnd - overlapStart) * PixelsPerHour,
                     Height = 20,
-                    Fill = new SolidColorBrush(dangerColor),
+                    Fill = dangBrush,
                     Opacity = 0.3
                 };
 

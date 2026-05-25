@@ -3,8 +3,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
+using System.Threading;
+using System.Threading.Tasks;
 using TM.Services.Modules.VersionTracking.Models;
 
 namespace TM.Services.Modules.VersionTracking
@@ -12,12 +12,14 @@ namespace TM.Services.Modules.VersionTracking
     public class VersionTrackingService
     {
         private string _registryPath;
+        private string _lastKnownProjectRoot = string.Empty;
         private VersionRegistry _registry = new();
+        private int _registryVersion;
 
         public VersionTrackingService()
         {
             _registryPath = BuildRegistryPath();
-            LoadRegistry();
+            LoadRegistryAsync().SafeFireAndForget(ex => TM.App.Log($"[VersionTracking] 加载注册表失败: {ex.Message}"));
         }
 
         private static string BuildRegistryPath()
@@ -25,12 +27,14 @@ namespace TM.Services.Modules.VersionTracking
 
         private void EnsureCurrentProject()
         {
-            var currentPath = BuildRegistryPath();
-            if (_registryPath == currentPath) return;
-            _registryPath = currentPath;
+            var currentRoot = StoragePathHelper.GetCurrentProjectPath();
+            if (_lastKnownProjectRoot == currentRoot) return;
+            _lastKnownProjectRoot = currentRoot;
+            _registryPath = Path.Combine(currentRoot, "version_registry.json");
+            Interlocked.Increment(ref _registryVersion);
             _registry = new VersionRegistry();
-            LoadRegistry();
-            TM.App.Log("[VersionTracking] 检测到项目变化，已重载版本注册表");
+            LoadRegistryAsync().SafeFireAndForget(ex => TM.App.Log($"[VersionTracking] 重载注册表失败: {ex.Message}"));
+            TM.App.Log("[VersionTracking] 检测到项目变化，已异步重载版本注册表（乐观读）");
         }
 
         public int GetModuleVersion(string moduleName)
@@ -45,32 +49,37 @@ namespace TM.Services.Modules.VersionTracking
         public int IncrementModuleVersion(string moduleName, bool showDownstreamToast = true)
         {
             EnsureCurrentProject();
+            Interlocked.Increment(ref _registryVersion);
             if (!_registry.ModuleVersions.ContainsKey(moduleName))
                 _registry.ModuleVersions[moduleName] = 0;
 
             _registry.ModuleVersions[moduleName]++;
 
-            var json = JsonSerializer.Serialize(_registry, JsonHelper.Default);
+            var snapshot = new VersionRegistry
+            {
+                ModuleVersions = new Dictionary<string, int>(_registry.ModuleVersions)
+            };
             var path = _registryPath;
 
             lock (_saveTaskLock)
             {
-                _saveTask = _saveTask.ContinueWith(_ =>
+                _saveTask = _saveTask.ContinueWith(async _ =>
                 {
                     try
                     {
+                        var json = JsonSerializer.Serialize(snapshot, JsonHelper.Default);
                         var dir = Path.GetDirectoryName(path);
                         if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                             Directory.CreateDirectory(dir);
                         var tmp = path + "." + Guid.NewGuid().ToString("N")[..8] + ".tmp";
-                        File.WriteAllText(tmp, json);
+                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
                         File.Move(tmp, path, overwrite: true);
                     }
                     catch (Exception ex)
                     {
                         TM.App.Log($"[VersionTracking] 保存版本注册表失败: {ex.Message}");
                     }
-                }, System.Threading.Tasks.TaskScheduler.Default);
+                }, System.Threading.Tasks.TaskScheduler.Default).Unwrap();
             }
 
             TM.App.Log($"[VersionTracking] 模块版本自增: {moduleName} → {_registry.ModuleVersions[moduleName]}");
@@ -87,10 +96,16 @@ namespace TM.Services.Modules.VersionTracking
 
         public bool SuppressDownstreamToast { get; set; }
 
-        public void FlushPendingDownstreamNotifications()
+        public void FlushPendingDownstreamNotifications(bool showToast = true)
         {
             var pending = _pendingDownstreamNotifications.ToList();
             _pendingDownstreamNotifications.Clear();
+            if (!showToast)
+            {
+                if (pending.Count > 0)
+                    TM.App.Log($"[VersionTracking] 已清理 {pending.Count} 个被抑制的下游影响提示");
+                return;
+            }
             foreach (var moduleName in pending)
                 NotifyDownstreamModules(moduleName);
         }
@@ -107,7 +122,11 @@ namespace TM.Services.Modules.VersionTracking
             {
                 var displayName = DependencyConfig.GetDisplayName(moduleName);
                 var downstreamNames = DependencyConfig.GetDisplayNames(downstream);
-                GlobalToast.Info($"{displayName}已更新", $"下游模块({downstreamNames})可能需要重新生成");
+                var title = $"{displayName}已更新";
+                var msg = $"下游模块({downstreamNames})可能需要重新生成";
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+                    System.Windows.Threading.DispatcherPriority.Background,
+                    () => GlobalToast.Info(title, msg));
                 TM.App.Log($"[VersionTracking] 下游影响提示: {moduleName} → {string.Join(", ", downstream)}");
             }
         }
@@ -119,10 +138,11 @@ namespace TM.Services.Modules.VersionTracking
                 .GetValueOrDefault(currentModule, Array.Empty<string>());
 
             var snapshot = depModules.ToDictionary(
-                m => m, 
+                m => m,
                 m => GetModuleVersion(m));
 
-            TM.App.Log($"[VersionTracking] 获取依赖快照: {currentModule} → {snapshot.Count}个依赖");
+            if (InfoLogDedup.ShouldLog($"VersionTracking:Snapshot:{currentModule}"))
+                TM.App.Log($"[VersionTracking] 获取依赖快照: {currentModule} → {snapshot.Count}个依赖");
             return snapshot;
         }
 
@@ -146,24 +166,29 @@ namespace TM.Services.Modules.VersionTracking
             return outdated;
         }
 
-        private void LoadRegistry()
+        private async System.Threading.Tasks.Task LoadRegistryAsync()
         {
-            if (!File.Exists(_registryPath))
-            {
-                _registry = new VersionRegistry();
-                return;
-            }
-
+            var path = _registryPath;
+            var loadVersion = Volatile.Read(ref _registryVersion);
             try
             {
-                var json = File.ReadAllText(_registryPath);
-                _registry = JsonSerializer.Deserialize<VersionRegistry>(json) 
+                if (!File.Exists(path))
+                {
+                    if (loadVersion == Volatile.Read(ref _registryVersion))
+                        _registry = new VersionRegistry();
+                    return;
+                }
+                var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+                var loaded = JsonSerializer.Deserialize<VersionRegistry>(json)
                     ?? new VersionRegistry();
+                if (loadVersion == Volatile.Read(ref _registryVersion))
+                    _registry = loaded;
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[VersionTracking] 加载版本注册表失败: {ex.Message}");
-                _registry = new VersionRegistry();
+                if (loadVersion == Volatile.Read(ref _registryVersion))
+                    _registry = new VersionRegistry();
             }
         }
 

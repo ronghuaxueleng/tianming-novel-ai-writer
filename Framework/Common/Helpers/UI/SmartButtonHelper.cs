@@ -1,7 +1,6 @@
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
 
 namespace TM.Framework.Common.Helpers.UI
 {

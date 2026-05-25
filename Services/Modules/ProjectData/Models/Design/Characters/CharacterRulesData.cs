@@ -1,13 +1,19 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Text;
 using System.Text.Json.Serialization;
+using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Models.Common;
 
 namespace TM.Services.Modules.ProjectData.Models.Design.Characters
 {
-    public class CharacterRulesData : BusinessDataBase, Worldview.ICoreRuleSummaryProvider, IContextStringProvider
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public class CharacterRulesData : BusinessDataBase, Worldview.ICoreRuleSummaryProvider, IContextStringProvider, IDependencyTracked
     {
+        [JsonPropertyName("DependencyModuleVersions")]
+        public Dictionary<string, int> DependencyModuleVersions { get; set; } = new();
+
         #region Tab1: 基本信息（Identity）
 
         [JsonPropertyName("CharacterType")]
@@ -27,6 +33,9 @@ namespace TM.Services.Modules.ProjectData.Models.Design.Characters
 
         [JsonPropertyName("Appearance")]
         public string Appearance { get; set; } = string.Empty;
+
+        [JsonPropertyName("Personality")]
+        public string Personality { get; set; } = string.Empty;
 
         #endregion
 
@@ -56,6 +65,9 @@ namespace TM.Services.Modules.ProjectData.Models.Design.Characters
 
         [JsonPropertyName("EmotionDynamic")]
         public string EmotionDynamic { get; set; } = string.Empty;
+
+        [JsonPropertyName("Relationships")]
+        public string Relationships { get; set; } = string.Empty;
 
         #endregion
 
@@ -96,6 +108,7 @@ namespace TM.Services.Modules.ProjectData.Models.Design.Characters
             if (!string.IsNullOrWhiteSpace(Identity)) parts.Add($"身份: {Identity}");
             if (!string.IsNullOrWhiteSpace(Race)) parts.Add($"种族: {Race}");
             if (!string.IsNullOrWhiteSpace(Want)) parts.Add($"目标: {Want}");
+            if (!string.IsNullOrWhiteSpace(Personality)) parts.Add($"性格: {Personality}");
             return string.Join("; ", parts);
         }
 
@@ -148,6 +161,10 @@ namespace TM.Services.Modules.ProjectData.Models.Design.Characters
                 sb.AppendLine($"内在需求：{Need}");
             if (!string.IsNullOrWhiteSpace(FlawBelief))
                 sb.AppendLine($"缺点：{FlawBelief}");
+            if (!string.IsNullOrWhiteSpace(Personality))
+                sb.AppendLine($"性格：{Personality}");
+            if (!string.IsNullOrWhiteSpace(Relationships))
+                sb.AppendLine($"关系：{Relationships}");
             sb.AppendLine("</item>");
             return sb.ToString();
         }

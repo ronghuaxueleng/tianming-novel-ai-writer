@@ -4,6 +4,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Thinking
     {
         public string? ThinkingContent { get; init; }
 
+        public string? ThinkingKind { get; init; }
+
         public string? AnswerContent { get; init; }
     }
 }

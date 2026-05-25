@@ -7,8 +7,6 @@ using System.Net.Http;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using Microsoft.Win32;
 using TM.Framework.SystemSettings.Proxy.ProxyChain;
 
@@ -42,9 +40,9 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
         private readonly string _configFile;
         private readonly string _chainSettingsFile;
-        private readonly IWebProxy _fallbackSystemProxy;
         private ProxyConfig _config = new();
         private ProxyChainSettings _chainSettings = new();
+        private readonly System.Threading.SemaphoreSlim _saveLock = new(1, 1);
 
         private static readonly object _debugLogLock = new();
         private static readonly HashSet<string> _debugLoggedKeys = new();
@@ -76,10 +74,12 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             _ruleService = ruleService;
             _configFile = StoragePathHelper.GetFilePath("Framework", "Network/Proxy", "proxy_config.json");
             _chainSettingsFile = StoragePathHelper.GetFilePath("Framework", "Network/Proxy/ProxyChain", "chain_settings.json");
-            _fallbackSystemProxy = WebRequest.GetSystemWebProxy();
-            LoadConfig();
-            LoadChainSettings();
-            ApplyApplicationProxy();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                await LoadConfigAsync().ConfigureAwait(false);
+                await LoadChainSettingsAsync().ConfigureAwait(false);
+                ApplyApplicationProxy();
+            });
         }
 
         public ProxyConfig GetConfig() => _config;
@@ -92,28 +92,37 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
                 var configToSave = CloneConfig(config);
                 if (!string.IsNullOrEmpty(configToSave.Password))
-                {
                     configToSave.Password = EncryptPassword(configToSave.Password);
-                }
 
                 var json = JsonSerializer.Serialize(configToSave, JsonHelper.CnDefault);
-                var tmp = _configFile + ".tmp";
-                File.WriteAllText(tmp, json);
-                File.Move(tmp, _configFile, overwrite: true);
+                var configFile = _configFile;
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    await _saveLock.WaitAsync().ConfigureAwait(false);
+                    try
+                    {
+                        var tmp = configFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                        File.Move(tmp, configFile, overwrite: true);
+                        TM.App.Log($"[ProxyService] 代理配置已保存");
+                    }
+                    catch (Exception ex2)
+                    {
+                        TM.App.Log($"[ProxyService] 写盘失败: {ex2.Message}");
+                    }
+                    finally
+                    {
+                        _saveLock.Release();
+                    }
+                });
 
                 if (_config.EnableSystemProxy)
-                {
                     EnableSystemProxy();
-                }
                 else
-                {
                     DisableSystemProxy();
-                }
 
                 ApplyApplicationProxy();
                 ConfigChanged?.Invoke(this, EventArgs.Empty);
-
-                TM.App.Log($"[ProxyService] 代理配置已保存");
             }
             catch (Exception ex)
             {
@@ -134,10 +143,20 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                     configToSave.Password = EncryptPassword(configToSave.Password);
                 }
 
-                var json = JsonSerializer.Serialize(configToSave, JsonHelper.CnDefault);
-                var tmp = _configFile + ".tmp";
-                await File.WriteAllTextAsync(tmp, json);
-                File.Move(tmp, _configFile, overwrite: true);
+                await _saveLock.WaitAsync().ConfigureAwait(false);
+                try
+                {
+                    var tmp = _configFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await using (var stream = File.Create(tmp))
+                    {
+                        await JsonSerializer.SerializeAsync(stream, configToSave, JsonHelper.CnDefault);
+                    }
+                    File.Move(tmp, _configFile, overwrite: true);
+                }
+                finally
+                {
+                    _saveLock.Release();
+                }
 
                 if (_config.EnableSystemProxy)
                 {
@@ -160,11 +179,14 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        public void RefreshProxy()
+        public async System.Threading.Tasks.Task RefreshProxyAsync(ProxyChainSettings? settings = null)
         {
             try
             {
-                LoadChainSettings();
+                if (settings != null)
+                    _chainSettings = settings;
+                else
+                    await LoadChainSettingsAsync().ConfigureAwait(false);
                 ApplyApplicationProxy();
                 ConfigChanged?.Invoke(this, EventArgs.Empty);
                 TM.App.Log("[ProxyService] 已刷新应用内代理");
@@ -182,7 +204,19 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 var proxy = CreateRoutingProxy();
                 HttpClient.DefaultProxy = proxy;
                 WebRequest.DefaultWebProxy = proxy;
-                TM.App.Log("[ProxyService] 已应用应用内代理（支持规则/代理链）");
+
+                var source = "直连";
+                var chainConfig = TryGetActiveChainProxyConfig();
+                if (chainConfig != null && !string.IsNullOrWhiteSpace(chainConfig.Server))
+                {
+                    source = $"代理链({chainConfig.Server}:{chainConfig.Port})";
+                }
+                else if (!string.IsNullOrWhiteSpace(_config.Server))
+                {
+                    source = $"自定义代理({_config.Server}:{_config.Port})";
+                }
+
+                TM.App.Log($"[ProxyService] 已应用应用内代理（支持规则/代理链），实际来源: {source}");
             }
             catch (Exception ex)
             {
@@ -190,13 +224,13 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        private void LoadChainSettings()
+        private async System.Threading.Tasks.Task LoadChainSettingsAsync()
         {
             try
             {
                 if (File.Exists(_chainSettingsFile))
                 {
-                    var json = File.ReadAllText(_chainSettingsFile);
+                    var json = await File.ReadAllTextAsync(_chainSettingsFile).ConfigureAwait(false);
                     var settings = JsonSerializer.Deserialize<ProxyChainSettings>(json);
                     if (settings != null)
                     {
@@ -206,7 +240,7 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProxyService] 加载代理链设置失败: {ex.Message}");
+                TM.App.Log($"[ProxyService] 异步加载代理链设置失败: {ex.Message}");
                 _chainSettings = new ProxyChainSettings();
             }
         }
@@ -233,11 +267,11 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             TM.Framework.SystemSettings.Proxy.ProxyChain.ProxyNode? node;
             if (chain.Strategy == ChainStrategy.LoadBalance)
             {
-                node = candidates.OrderBy(n => n.Latency).ThenBy(n => n.Order).FirstOrDefault();
+                node = candidates.MinBy(n => (n.Latency, n.Order));
             }
             else
             {
-                node = candidates.OrderBy(n => n.Order).FirstOrDefault();
+                node = candidates.MinBy(n => n.Order);
             }
 
             return node?.Config;
@@ -248,7 +282,7 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             return new RoutingWebProxy(this);
         }
 
-        private IWebProxy ResolveBaseProxyForProxyAction()
+        private IWebProxy? ResolveBaseProxyForProxyAction()
         {
             var chainConfig = TryGetActiveChainProxyConfig();
             var chainProxy = chainConfig != null ? CreateWebProxy(chainConfig) : null;
@@ -263,7 +297,7 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 return configProxy;
             }
 
-            return _fallbackSystemProxy;
+            return null;
         }
 
         private sealed class RoutingWebProxy : IWebProxy
@@ -294,27 +328,27 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 _resolveDepth++;
                 try
                 {
-                var host = destination.Host;
-                var rule = _service._ruleService.MatchRuleDetail(host);
+                    var host = destination.Host;
+                    var rule = _service._ruleService.MatchRuleDetail(host);
 
-                if (rule != null && rule.Action == ProxyAction.Block)
-                {
-                    TM.App.Log($"[ProxyRules] 已屏蔽请求: {host} (type={rule.Type}, pattern={rule.Pattern}, priority={rule.Priority})");
-                    throw new HttpRequestException($"请求被代理规则屏蔽: {host}");
-                }
+                    if (rule != null && rule.Action == ProxyAction.Block)
+                    {
+                        TM.App.Log($"[ProxyRules] 已屏蔽请求: {host} (type={rule.Type}, pattern={rule.Pattern}, priority={rule.Priority})");
+                        throw new HttpRequestException($"请求被代理规则屏蔽: {host}");
+                    }
 
-                if (rule != null && rule.Action == ProxyAction.Direct)
-                {
-                    return destination;
-                }
+                    if (rule != null && rule.Action == ProxyAction.Direct)
+                    {
+                        return destination;
+                    }
 
-                var proxy = _service.ResolveBaseProxyForProxyAction();
-                if (ReferenceEquals(proxy, this))
-                {
-                    return destination;
-                }
-                _credentials = proxy.Credentials;
-                return proxy.GetProxy(destination) ?? destination;
+                    var proxy = _service.ResolveBaseProxyForProxyAction();
+                    if (proxy == null || ReferenceEquals(proxy, this))
+                    {
+                        return destination;
+                    }
+                    _credentials = proxy.Credentials;
+                    return proxy.GetProxy(destination) ?? destination;
                 }
                 finally
                 {
@@ -332,26 +366,26 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 _resolveDepth++;
                 try
                 {
-                var target = host.Host;
-                var rule = _service._ruleService.MatchRuleDetail(target);
+                    var target = host.Host;
+                    var rule = _service._ruleService.MatchRuleDetail(target);
 
-                if (rule != null && rule.Action == ProxyAction.Direct)
-                {
-                    return true;
-                }
+                    if (rule != null && rule.Action == ProxyAction.Direct)
+                    {
+                        return true;
+                    }
 
-                if (rule != null && rule.Action == ProxyAction.Block)
-                {
-                    return false;
-                }
+                    if (rule != null && rule.Action == ProxyAction.Block)
+                    {
+                        return false;
+                    }
 
-                var proxy = _service.ResolveBaseProxyForProxyAction();
-                if (ReferenceEquals(proxy, this))
-                {
-                    return false;
-                }
-                _credentials = proxy.Credentials;
-                return proxy.IsBypassed(host);
+                    var proxy = _service.ResolveBaseProxyForProxyAction();
+                    if (proxy == null || ReferenceEquals(proxy, this))
+                    {
+                        return true;
+                    }
+                    _credentials = proxy.Credentials;
+                    return proxy.IsBypassed(host);
                 }
                 finally
                 {
@@ -493,13 +527,13 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        private void LoadConfig()
+        private async System.Threading.Tasks.Task LoadConfigAsync()
         {
             try
             {
                 if (File.Exists(_configFile))
                 {
-                    var json = File.ReadAllText(_configFile);
+                    var json = await File.ReadAllTextAsync(_configFile).ConfigureAwait(false);
                     var config = JsonSerializer.Deserialize<ProxyConfig>(json);
                     if (config != null)
                     {
@@ -514,7 +548,7 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProxyService] 加载配置失败: {ex.Message}");
+                TM.App.Log($"[ProxyService] 异步加载配置失败: {ex.Message}");
             }
         }
 

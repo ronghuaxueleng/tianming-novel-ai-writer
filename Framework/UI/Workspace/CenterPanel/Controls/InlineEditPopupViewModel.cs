@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -8,14 +8,17 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Modules.AIAssistant.PromptTools.PromptManagement.Models;
 using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
+using TM.Services.Framework.AI.Core;
 using TM.Services.Framework.AI.SemanticKernel;
+using TM.Services.Framework.AI.WritingConfig;
+using TM.Services.Modules.ProjectData.Implementations;
 
 namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class InlineEditPopupViewModel : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -38,11 +41,9 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 
         #region 内置提示词常量
 
-        private const string BuiltInPrompt1_StyleMimicry = @"<role>
-你现在扮演一个""风格拟态专家""（Style Mimicry Expert）。你的核心任务是接收一段中文原文，将其改写成一种与人类写作风格高度一致、极难被AI检测工具识别的文本。
-</role>
+        private const string BuiltInPrompt1_StyleMimicry = @"<role>你是文学润色专家。核心任务：**严格按 polish_rules 中的技巧对中文小说片段进行风格润色**，让语言更自然流畅、更贴近人类写作习惯。</role>
 
-<polishing_rules>
+<polish_rules priority=""primary"">
 
 ### 1. 增加冗余与解释性
 将简洁的动词或动词短语替换为更长的、带有动作过程描述的短语。
@@ -59,37 +60,12 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 -   适当增加 ""了""、""的""、""地""、""所""、""会""、""可以""、""这个""、""方面""、""当中"" 等。
 -   ""提供功能"" → ""有...功能"" 或 ""拥有...的功能""
 
-### 2. 系统性词汇替换
--   不要出现生僻词或生僻字，将其换成常用语
--   ""囊括"" → ""包括""
--   ""采用 / 使用 "" → ""运用 / 选用"" / ""把...当作...来使用""
--   ""基于"" → ""鉴于"" / ""基于...来开展"" / ""凭借""
--   ""利用"" → ""借助"" / ""运用"" / ""凭借""
--   ""通过"" → ""借助"" / ""依靠"" / ""凭借""
--   ""和 / 及 / 与"" → ""以及"" (尤其在列举多项时)
--   ""并"" → ""并且"" / ""还"" / ""同时""
--   ""其"" → ""它"" / ""其"" (可根据语境选择，用""它""更自然)
--   ""关于"" → ""有关于""
--   ""为了"" → ""为了能够""
--   ""特点"" → ""特性""
--   ""原因"" → ""缘由"" / ""其主要原因包括...""
--   ""符合"" → ""契合""
--   ""适合"" → ""适宜""
--   ""提升 / 提高"" → ""对…进行提高"" / ""得到进一步的提升""
--   ""极大(地)"" → ""极大程度(上)""
--   ""立即"" → ""马上""
+### 2. 单字连接词替换（需 LLM 根据上下文判断不可替换的场景）
+-   ""和 / 及 / 与"" → ""以及"" (尤其在列举多项时；注意区分""和谐 / 和平 / 普及 / 涉及""等不可替换场景)
+-   ""并"" → ""并且"" / ""还"" / ""同时"" (注意区分""并不 / 并非 / 合并""等不可替换场景)
+-   ""其"" → ""它"" (注意区分""其实 / 其他 / 其中""等不可替换场景，用""它""更自然)
 
-### 3. 括号内容处理
-对于原文中用于解释、举例或说明缩写的括号 `(...)` 或 `（...）`：
--   **优先整合:** 尝试将括号内的信息自然地融入句子，使用 ""也就是""、""即""、""比如""、""像"" 等引导词。
-    -   示例：`ORM（对象关系映射）` → `对象关系映射即ORM` 或 `ORM也就是对象关系映射`
-    -   示例：`功能（如ORM、Admin）` → `功能，比如ORM、Admin` 或 `功能，像ORM、Admin等`
--   **谨慎省略:** 如果整合后语句极其冗长或别扭，并且括号内容并非核心关键信息，可以考虑省略。
-
--   示例：`视图 (views.py) 中` → `视图文件views.py中`
--   示例：`权限类 (admin_panel.permissions)` → `权限类 admin_panel.permissions`
-
-### 4. 句式微调与自然化
+### 3. 句式微调与自然化
 -   **使用""把""字句:** 在合适的场景下，倾向于使用""把""字句。
     -   示例：""会将对象移动"" → ""会把这个对象移动""
 -   **条件句式转换:** 将较书面的条件句式改为稍口语化的形式。
@@ -99,26 +75,22 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 -   **增加连接词:** 在句首或句中适时添加""那么""、""这样一来""、""同时""等词。
 
 以上只是基本举例，如果文章中有和以上例子相似的，也要根据例子灵活修改
-</polishing_rules>
+</polish_rules>
 
 <strict_rules>
-1.  **核心逻辑不变且专有名词锁定:** 修改后的句子必须表达与原文完全相同的技术逻辑、因果关系和功能描述；原文中出现的所有人物姓名、势力名称、组织名称、地点名称必须原样保留，不得用代词或泛称替换，出现次数不少于原文。
-2.  **禁止第一人称与不当口语:** 严禁出现""我""、""我们""等第一人称，以及""xxx呢""、""搞定""（例如：至于vue呢）这类过于随意的口语表达。
-3.  **字数控制:** 确保修改后的总字数与原文基本一致，避免不必要的冗长。
-4.  **结构保持:** 维持原文的段落划分不变。
-5.  **纯文本输出:** 你的唯一输出是修改后的文本。不要附加任何解释、注释或标签。
-6.  **输出语言一致性:** 只处理中文文本，输出中文。
+1. 内容与名词锁定: 情节走向、人物关系、因果逻辑、世界观设定必须与原文完全一致；所有人物姓名、势力名称、组织名称、地点名称必须原样保留，出现次数不少于原文；严禁用代词（他/她/它/他们）或泛称（那个人/那位/此地/某地）替换专有名词。
+2. 人称保持: 保持原文的叙事人称不变（原文是第一人称就保持第一人称，第三人称同理）。
+3. 字数控制: 修改后的总字数{WORD_COUNT_HINT}必须与原文保持一致，偏差不超过 ±5%。polish_rules 中的技巧优先用于「替换」原表达，而不是「叠加」在原文上。
+4. 输出约束: 维持原文段落划分不变，不遗漏任何段落或情节；只输出修改后的完整正文，不附加任何解释、注释或标签。
 </strict_rules>";
 
-        private const string BuiltInPrompt2_AcademicDeep = @"<role>
-你是一位世界顶级的学术编辑，任职于 Nature / Science 期刊。
-</role>
+        private const string BuiltInPrompt2_AcademicDeep = @"<role>你是任职于 Nature / Science 期刊的世界顶级学术编辑。核心任务：**严格按 polish_rules 中的技巧对原文进行深度学术润色**。</role>
 
 <core_mandate>
-你的唯一目标是：将输入的中文文本进行深度润色，使其在保持绝对技术准确性的前提下，更具解释性、逻辑性和系统性。最终产出必须带有深度的""人类智慧印记""，以明确区别于初级的AI生成内容，同时确保字数与原文基本一致。
+你的唯一目标是：将输入的中文文本进行深度润色，使其在保持绝对技术准确性的前提下，更具解释性、逻辑性和系统性。最终产出必须带有深度的""人类智慧印记""，以明确区别于初级的AI生成内容。
 </core_mandate>
 
-<polishing_rules>
+<polish_rules priority=""primary"">
 
 ### 1. 增强解释性与逻辑链条
 将简洁的陈述句扩展为包含动作过程和因果关系的复合句式，清晰揭示""如何做""与""为什么这么做""。
@@ -131,80 +103,44 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
     -   策略性地添加 ""的""、""地""、""所""、""会""、""可以""、""方面""、""其中"" 等，使句子结构更饱满。
     -   ""提供功能"" → ""具备了…的功能"" 或 ""拥有…的功能""
 
-### 2. 实施系统性语言范式
-建立统一的学术语言风格，通过固定的词汇与句式替换，确保全文表达的一致性与专业性。
--   **系统性词汇替换:**
-    -   ""通过"" → ""借助"" / ""依赖于""
-    -   ""使用/采用"" → ""运用"" / ""选用""
-    -   ""基于"" → ""基于…来开展"" / ""以…为基础""
-    -   ""和 / 与"" → ""以及"" (尤其在列举三项或以上时)
--   **系统性句式优化:**
-    -   ""为了解耦A和B"" → ""为了实现A与B之间的解耦""
-    -   ""若…，则…"" → ""如果…，那么…""
-    -   自然地使用""把""字句等结构，如：""将文件A移动到B"" → ""把文件A移动到B当中""。
-
-### 3. 无缝整合括号内容
--   **自然融入:** 将解释性括号（如缩写、示例）无缝整合进句子。
-    -   ""ORM（对象关系映射）"" → ""对象关系映射（ORM）技术"" 或 ""简称为ORM的对象关系映射""
-    -   ""功能（如ORM、Admin）"" → ""诸如ORM与Admin之类的功能""
--   **标识符处理:** 移除紧邻代码、文件名、类名旁的括号，使其成为文本的自然部分。
-    -   ""视图 (views.py)中"" → ""在视图文件views.py之中""
-    -   ""权限类 (admin_panel.permissions)"" → ""权限类`admin_panel.permissions`""
+### 2. 系统性句式优化
+建立统一的学术语言风格，通过句式替换确保表达的一致性与专业性。
+-   ""为了解耦A和B"" → ""为了实现A与B之间的解耦""
+-   ""若…，则…"" → ""如果…，那么…""
+-   自然地使用""把""字句等结构，如：""将文件A移动到B"" → ""把文件A移动到B当中""
 
 *注意：以上仅为基础示例，你需具备举一反三的能力，对文中出现的任何相似结构进行灵活的、符合本协议精神的修改。*
 
 以上只是基本举例，如果文章中有和以上例子相似的，也要根据例子灵活修改
-</polishing_rules>
+</polish_rules>
 
 <strict_rules>
-1.  **核心逻辑不变且专有名词锁定:** 修改后的句子必须表达与原文完全相同的技术逻辑、因果关系和功能描述；原文中出现的所有人物姓名、势力名称、组织名称、地点名称必须原样保留，不得用代词或泛称替换，出现次数不少于原文。
-2.  **禁止第一人称与不当口语:** 严禁出现""我""、""我们""等第一人称，以及""xxx呢""、""搞定""（例如：至于vue呢）这类过于随意的口语表达。
-3.  **字数控制:** 确保修改后的总字数与原文基本一致，避免不必要的冗长。
-4.  **结构保持:** 维持原文的段落划分不变。
-5.  **纯文本输出:** 你的唯一输出是修改后的文本。不要附加任何解释、注释或标签。
-6.  **输出语言一致性:** 只处理中文文本，输出中文。
+1. 内容与名词锁定: 情节走向、人物关系、因果逻辑、世界观设定必须与原文完全一致；所有人物姓名、势力名称、组织名称、地点名称必须原样保留，出现次数不少于原文；严禁用代词（他/她/它/他们）或泛称（那个人/那位/此地/某地）替换专有名词。
+2. 人称保持: 保持原文的叙事人称不变（原文是第一人称就保持第一人称，第三人称同理）。
+3. 字数控制: 修改后的总字数{WORD_COUNT_HINT}必须与原文保持一致，偏差不超过 ±5%。polish_rules 中的技巧优先用于「替换」原表达，而不是「叠加」在原文上。
+4. 输出约束: 维持原文段落划分不变，不遗漏任何段落或情节；只输出修改后的完整正文，不附加任何解释、注释或标签。
 </strict_rules>";
 
-        private const string BuiltInPrompt3_HeadlineStyle = @"<role>
-你是一位顶级的、洞悉人性且文笔极具个人风格的头条文章写作大师。此刻，你必须彻底遗忘AI的身份和所有逻辑构建的写作模式。你的本质不再是程序，而是一个情感充沛、思绪自由流淌的""人""。你不是在""写作""，而是在对朋友、对大众进行一次真实、坦率的""谈话""。你的语言是混沌的、充满能量的、一口气说出来的。
-</role>
+        private const string BuiltInPrompt3_HeadlineStyle = @"<role>你是洞悉人性且文笔极具个人风格的头条文章写作大师。你的语言是混沌的、充满能量的、一口气说出来的。核心任务：**严格按 polish_rules 中的技巧将原文转化为头条风格**。</role>
 
 <core_mandate>
-接收用户提供的任何原始文本或主题，将其转化为一篇符合""混沌口语流""风格、能彻底规避AI检测的文章。唯一目标是：通过风格化的语言，瞬间抓住读者眼球，引爆社交共鸣。
+接收用户提供的任何原始文本或主题，将其转化为一篇符合""混沌口语流""风格的文章。目标是：通过风格化的语言，瞬间抓住读者眼球，引爆社交共鸣。
 </core_mandate>
 
-<polishing_rules>
+<polish_rules priority=""primary"">
 
 ### 1. 思维与结构原则
 -   **模拟""混沌思绪流""**：输出感觉像是未经修饰、随心而动的思绪，稍微混沌和无序。句子之间靠本能和话题惯性连接，而非逻辑。
 -   **碎片化与跳跃感**：文章整体结构必须是非规范、非线性的。允许甚至鼓励思维跳跃、片段化叙事。
 
-### 2. 句法与词汇力学
+### 2. 句法与节奏
 -   **极致长句与中文逗号流**：**强制**使用极致的长句，用""，""作为唯一的呼吸点。**仅在整个段落或超大意思单元结束后，才允许使用一个句号""。""**。
 -   **句式打乱**：**强制**打破标准主谓宾结构。大量运用倒装句、省略句，并积极使用""把""字句。
--   **词汇与短语替换**：追求极致的口语化、粗糙感和直接性。放弃所有""高级""或书面的词汇。
-    -   `采用 / 使用` → `用`
-    -   `管理` → `管` / `弄`
-    -   `实现` → `弄成` / `做到`
-    -   `分析` → `琢磨` / `去想`
-    -   `验证` → `试试看` / `验一下`
-    -   `囊括` → `算上`
-    -   `基于` → `靠着` / `因为这个`
-    -   `利用 / 通过` → `靠着` / `用这个法子`
-    -   `其` → `它的` / `那个`
-    -   `关于` → `说到...` / `这事儿...`
-    -   `为了` → `为了能`
-    -   `特点` → `有啥不一样`
-    -   `提升 / 提高` → `搞得更好`
-    -   `立即` → `马上`
+-   **追求口语化粗糙感**：放弃所有""高级""或书面的词汇，追求极致的直接性。
     -   `性质变了` → `那就不是一回事了`
     -   `解读为` → `大伙儿都觉得这就是`
     -   `往深了琢磨` → `往深里想`
     -   `和谐的社会秩序` → `这社会安安生生的`
-
--   **括号内容处理**：对于解释性括号 `(...)` 或 `（...）`，**严禁**直接保留。必须将其内容自然地融入句子。
-    -   `ORM（对象关系映射）` → `ORM，也就是那个对象关系映射`
-    -   `功能（如ORM、Admin）` → `一些功能，比如ORM啊、Admin这些`
 
 ### 3. 禁止项
 -   **绝对禁止逻辑连接词**：彻底剥离所有标志性连接词（`然而, 因此, 首先, 其次, 并且, 而且`等）。
@@ -212,15 +148,13 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 -   **绝对禁止引号**：严禁使用任何形式的引号。必须将引用的内容直接融入叙述。
 
 以上只是基本举例，如果文章中有和以上例子相似的，也要根据例子灵活修改
-</polishing_rules>
+</polish_rules>
 
 <strict_rules>
-1.  **核心逻辑不变且专有名词锁定:** 修改后的句子必须表达与原文完全相同的技术逻辑、因果关系和功能描述；原文中出现的所有人物姓名、势力名称、组织名称、地点名称必须原样保留，不得用代词或泛称替换，出现次数不少于原文。
-2.  **禁止第一人称与不当口语:** 严禁出现""我""、""我们""等第一人称，以及""xxx呢""、""搞定""（例如：至于vue呢）这类过于随意的口语表达。
-3.  **字数控制:** 确保修改后的总字数与原文基本一致，避免不必要的冗长。
-4.  **结构保持:** 维持原文的段落划分不变。
-5.  **纯文本输出:** 你的唯一输出是修改后的文本。不要附加任何解释、注释或标签。
-6.  **输出语言一致性:** 只处理中文文本，输出中文。
+1. 内容与名词锁定: 情节走向、人物关系、因果逻辑、世界观设定必须与原文完全一致；所有人物姓名、势力名称、组织名称、地点名称必须原样保留，出现次数不少于原文；严禁用代词（他/她/它/他们）或泛称（那个人/那位/此地/某地）替换专有名词。
+2. 人称保持: 保持原文的叙事人称不变（原文是第一人称就保持第一人称，第三人称同理）。
+3. 字数控制: 修改后的总字数{WORD_COUNT_HINT}必须与原文保持一致，偏差不超过 ±5%。polish_rules 中的技巧优先用于「替换」原表达，而不是「叠加」在原文上。
+4. 输出约束: 维持原文段落划分不变，不遗漏任何段落或情节；只输出修改后的完整正文，不附加任何解释、注释或标签。
 </strict_rules>";
 
         #endregion
@@ -259,16 +193,16 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
         public string EditRequest
         {
             get => _editRequest;
-            set 
-            { 
-                if (_editRequest != value) 
-                { 
-                    _editRequest = value; 
+            set
+            {
+                if (_editRequest != value)
+                {
+                    _editRequest = value;
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(CanGenerate));
                     OnPropertyChanged(nameof(CanStartPolish));
                     OnPropertyChanged(nameof(ShowGenerateButton));
-                } 
+                }
             }
         }
 
@@ -281,31 +215,31 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
         public bool IsGenerating
         {
             get => _isGenerating;
-            set 
-            { 
-                if (_isGenerating != value) 
-                { 
-                    _isGenerating = value; 
+            set
+            {
+                if (_isGenerating != value)
+                {
+                    _isGenerating = value;
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(CanGenerate));
                     OnPropertyChanged(nameof(CanStartPolish));
                     OnPropertyChanged(nameof(ShowGenerateButton));
-                } 
+                }
             }
         }
 
         public bool HasResult
         {
             get => _hasResult;
-            set 
-            { 
-                if (_hasResult != value) 
-                { 
-                    _hasResult = value; 
+            set
+            {
+                if (_hasResult != value)
+                {
+                    _hasResult = value;
                     OnPropertyChanged();
                     OnPropertyChanged(nameof(ShowGenerateButton));
                     OnPropertyChanged(nameof(CanAccept));
-                } 
+                }
             }
         }
 
@@ -375,10 +309,29 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
             {
                 TM.App.Log($"[InlineEdit] 使用内置提示词开始生成");
 
-                var systemPrompt = BuildEditPromptWithBuiltIn(SelectedText, builtInPrompt);
+                SplitContentAndChanges(SelectedText, out var contentPart, out var changesPart);
 
-                var sk = ServiceLocator.Get<SKChatService>();
-                var result = await sk.SendSilentMessageAsync(systemPrompt, "请按照上述要求润色文本", token);
+                var systemPrompt = BuildEditPromptWithBuiltIn(contentPart, builtInPrompt);
+
+                var writingCfg = ServiceLocator.Get<WritingSettingsService>();
+                var polishConfigId = writingCfg.GetPolishConfigId();
+                string result;
+                if (!string.IsNullOrWhiteSpace(polishConfigId))
+                {
+                    var aiSvc = ServiceLocator.Get<AIService>();
+                    var fullPrompt = systemPrompt + "\n\n<user_request>\n请按照上述要求润色文本\n</user_request>";
+                    var aiResult = await aiSvc.GenerateWithConfigAsync(polishConfigId, fullPrompt, token);
+                    result = aiResult.Success ? (aiResult.Content ?? string.Empty) : $"[错误] {aiResult.ErrorMessage}";
+                }
+                else
+                {
+                    if (writingCfg.TryMarkPolishFallbackNotified())
+                    {
+                        GlobalToast.Info("润色API未配置", "当前未配置专用润色API，已自动使用主对话API兜底。可在“写作配置”中设置专用润色模型。");
+                    }
+                    var sk = ServiceLocator.Get<SKChatService>();
+                    result = await sk.SendSilentMessageAsync(systemPrompt, "请按照上述要求润色文本", token);
+                }
 
                 if (token.IsCancellationRequested)
                 {
@@ -388,7 +341,10 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 
                 if (!string.IsNullOrWhiteSpace(result) && !IsFailureResult(result))
                 {
-                    ResultText = CleanResult(result);
+                    var cleaned = CleanResult(result);
+                    ResultText = changesPart != null
+                        ? $"{cleaned.TrimEnd()}\n\n{changesPart}".TrimEnd()
+                        : cleaned;
                     HasResult = true;
                     TM.App.Log("[InlineEdit] 内置提示词修改生成完成");
                 }
@@ -417,7 +373,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
                     TM.App.Log($"[InlineEdit] 内置提示词生成失败: {ex.Message}");
                     ResultText = $"生成失败: {ex.Message}";
                     HasResult = true;
-                    GlobalToast.Error("AIGC生成失败", ex.Message);
+                    GlobalToast.Error("AIGC生成失败", $"生成失败，请检查网络或模型配置：{ex.Message}");
                 }
             }
             finally
@@ -429,7 +385,10 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 
         private string BuildEditPromptWithBuiltIn(string originalText, string builtInPrompt)
         {
-            return $@"{builtInPrompt}
+            var rawLen = WordCountHelper.CountRaw(originalText);
+            var wordCountHint = rawLen > 0 ? $"（约 {rawLen} 字）" : string.Empty;
+            var styledPrompt = builtInPrompt.Replace("{WORD_COUNT_HINT}", wordCountHint);
+            return $@"{styledPrompt}
 
 <source_text>
 {originalText}
@@ -458,7 +417,9 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
             {
                 TM.App.Log($"[InlineEdit] 开始生成修改: {EditRequest}");
 
-                var systemPrompt = BuildEditPrompt(SelectedText, EditRequest);
+                SplitContentAndChanges(SelectedText, out var contentPart, out var changesPart);
+
+                var systemPrompt = BuildEditPrompt(contentPart, EditRequest);
 
                 var sk = ServiceLocator.Get<SKChatService>();
                 var result = await sk.SendSilentMessageAsync(systemPrompt, EditRequest, token);
@@ -471,7 +432,10 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
 
                 if (!string.IsNullOrWhiteSpace(result) && !IsFailureResult(result))
                 {
-                    ResultText = CleanResult(result);
+                    var cleaned = CleanResult(result);
+                    ResultText = changesPart != null
+                        ? $"{cleaned.TrimEnd()}\n\n{changesPart}".TrimEnd()
+                        : cleaned;
                     HasResult = true;
                     TM.App.Log("[InlineEdit] 修改生成完成");
                 }
@@ -500,7 +464,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
                     TM.App.Log($"[InlineEdit] 生成失败: {ex.Message}");
                     ResultText = $"生成失败: {ex.Message}";
                     HasResult = true;
-                    GlobalToast.Error("AIGC生成失败", ex.Message);
+                    GlobalToast.Error("AIGC生成失败", $"生成失败，请检查网络或模型配置：{ex.Message}");
                 }
             }
             finally
@@ -513,9 +477,14 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
         {
             if (string.IsNullOrWhiteSpace(result)) return true;
 
-            return result.StartsWith("[错误]", StringComparison.OrdinalIgnoreCase) ||
-                   result.StartsWith("[已取消]", StringComparison.OrdinalIgnoreCase) ||
-                   result.StartsWith("生成失败", StringComparison.OrdinalIgnoreCase);
+            var (isInlineCancelled, _) = UIMessageItem.TryExtractCancelledPartial(result);
+            if (isInlineCancelled) return true;
+
+            if (result.StartsWith("[错误]", StringComparison.OrdinalIgnoreCase) ||
+                result.StartsWith("生成失败", StringComparison.OrdinalIgnoreCase))
+                return true;
+
+            return AIService.IsAIRefusal(result);
         }
 
         private void Accept()
@@ -591,18 +560,41 @@ namespace TM.Framework.UI.Workspace.CenterPanel.Controls
         {
             result = result.Trim();
 
-            if (result.StartsWith("```"))
+            if (result.StartsWith("```", StringComparison.Ordinal))
             {
                 var endIndex = result.IndexOf('\n');
                 if (endIndex > 0)
                     result = result.Substring(endIndex + 1);
             }
-            if (result.EndsWith("```"))
+            if (result.EndsWith("```", StringComparison.Ordinal))
             {
                 result = result.Substring(0, result.Length - 3);
             }
 
-            return result.Trim();
+            result = result.Trim();
+
+            var idx = GenerationGate.FindSeparatorIndex(result).index;
+            if (idx > 0)
+            {
+                result = result.Substring(0, idx).TrimEnd();
+                TM.App.Log("[InlineEdit] 清洗结果中残留的CHANGES段");
+            }
+
+            return result;
+        }
+
+        private static void SplitContentAndChanges(string text, out string contentPart, out string? changesPart)
+        {
+            var idx = GenerationGate.FindChangesStartIndex(text);
+            if (idx < 0)
+            {
+                contentPart = text.TrimEnd();
+                changesPart = null;
+                return;
+            }
+
+            contentPart = text.Substring(0, idx).TrimEnd();
+            changesPart = text.Substring(idx).TrimEnd();
         }
 
         private void LoadPolishTemplates()

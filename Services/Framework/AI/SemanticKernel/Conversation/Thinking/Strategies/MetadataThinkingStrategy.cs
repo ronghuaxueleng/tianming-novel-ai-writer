@@ -24,7 +24,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Thinking.Strategi
                 answer = content;
             }
 
-            return new ThinkingRouteResult { ThinkingContent = thinking, AnswerContent = answer };
+            return new ThinkingRouteResult { ThinkingContent = thinking, ThinkingKind = thinking != null ? "Thinking" : null, AnswerContent = answer };
         }
 
         public ThinkingRouteResult Flush() => default;

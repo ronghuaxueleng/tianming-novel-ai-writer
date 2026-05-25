@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.ComponentModel;
 
 namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationStyleViewModel : INotifyPropertyChanged
     {
         private readonly NotificationStyleSettings _settings;
@@ -216,6 +217,20 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
             try
             {
                 _settings.SaveSettings();
+                App.Log("[NotificationStyleViewModel] 保存设置成功");
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[NotificationStyleViewModel] 保存设置失败: {ex.Message}");
+                throw;
+            }
+        }
+
+        public async System.Threading.Tasks.Task SaveSettingsAsync()
+        {
+            try
+            {
+                await _settings.SaveSettingsAsync();
                 App.Log("[NotificationStyleViewModel] 保存设置成功");
             }
             catch (Exception ex)

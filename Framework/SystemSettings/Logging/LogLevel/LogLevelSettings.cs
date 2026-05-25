@@ -18,10 +18,11 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
 
     public class LogLevelSettings
     {
-        [JsonPropertyName("GlobalLevel")] public LogLevelEnum GlobalLevel { get; set; } = LogLevelEnum.Info;
+        [JsonPropertyName("GlobalLevel")] public LogLevelEnum GlobalLevel { get; set; } = LogLevelEnum.Debug;
         [JsonPropertyName("MinimumLevel")] public LogLevelEnum MinimumLevel { get; set; } = LogLevelEnum.Trace;
         [JsonPropertyName("ModuleLevels")] public Dictionary<string, LogLevelEnum> ModuleLevels { get; set; } = new Dictionary<string, LogLevelEnum>();
-        [JsonPropertyName("LevelColors")] public Dictionary<LogLevelEnum, string> LevelColors { get; set; } = new Dictionary<LogLevelEnum, string>
+        [JsonPropertyName("LevelColors")]
+        public Dictionary<LogLevelEnum, string> LevelColors { get; set; } = new Dictionary<LogLevelEnum, string>
         {
             { LogLevelEnum.Trace, "#808080" },
             { LogLevelEnum.Debug, "#00BFFF" },
@@ -66,7 +67,7 @@ namespace TM.Framework.SystemSettings.Logging.LogLevel
         public double GetLevelPercentage(LogLevelEnum level)
         {
             if (TotalLogs == 0) return 0;
-            return LevelCounts.ContainsKey(level) ? (LevelCounts[level] * 100.0 / TotalLogs) : 0;
+            return LevelCounts.TryGetValue(level, out var cnt) ? (cnt * 100.0 / TotalLogs) : 0;
         }
     }
 

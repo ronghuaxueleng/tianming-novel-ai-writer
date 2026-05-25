@@ -1,8 +1,6 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
-using TM.Framework.Common.Helpers;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
@@ -10,8 +8,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
     public static class PlanStepNormalizer
     {
         public static IReadOnlyList<PlanStep> Normalize(
-            string userInput, 
-            string rawContent, 
+            string userInput,
+            string rawContent,
             IReadOnlyList<PlanStep> parsedSteps)
         {
             if (parsedSteps == null || parsedSteps.Count == 0)
@@ -99,8 +97,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing
         }
 
         private static IReadOnlyList<PlanStep> SplitByChapterRange(
-            int startChapter, 
-            int endChapter, 
+            int startChapter,
+            int endChapter,
             IReadOnlyList<PlanStep> originalSteps)
         {
             var chapterCount = endChapter - startChapter + 1;

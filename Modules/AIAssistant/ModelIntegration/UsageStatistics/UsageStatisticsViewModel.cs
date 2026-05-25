@@ -1,25 +1,24 @@
-using System;
-using System.Collections.Generic;
-using System.Collections.ObjectModel;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.AI.Monitoring;
 using TM.Services.Framework.AI.Interfaces.AI;
 
 namespace TM.Modules.AIAssistant.ModelIntegration.UsageStatistics;
 
 [Obfuscation(Exclude = true, ApplyToMembers = true)]
+[Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
 public class UsageStatisticsViewModel : INotifyPropertyChanged
 {
     private readonly IAIUsageStatisticsService _statisticsService;
     private StatisticsSummary _summary = new();
-    private ObservableCollection<DailyStatistics> _dailyStats = new();
-    private ObservableCollection<ModelStatItem> _modelStats = new();
-    private ObservableCollection<ApiCallRecord> _recentCalls = new();
+    private RangeObservableCollection<DailyStatistics> _dailyStats = new();
+    private RangeObservableCollection<ModelStatItem> _modelStats = new();
+    private RangeObservableCollection<ApiCallRecord> _recentCalls = new();
 
     public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -34,19 +33,19 @@ public class UsageStatisticsViewModel : INotifyPropertyChanged
         set { _summary = value; OnPropertyChanged(); }
     }
 
-    public ObservableCollection<DailyStatistics> DailyStats
+    public RangeObservableCollection<DailyStatistics> DailyStats
     {
         get => _dailyStats;
         set { _dailyStats = value; OnPropertyChanged(); }
     }
 
-    public ObservableCollection<ModelStatItem> ModelStats
+    public RangeObservableCollection<ModelStatItem> ModelStats
     {
         get => _modelStats;
         set { _modelStats = value; OnPropertyChanged(); }
     }
 
-    public ObservableCollection<ApiCallRecord> RecentCalls
+    public RangeObservableCollection<ApiCallRecord> RecentCalls
     {
         get => _recentCalls;
         set { _recentCalls = value; OnPropertyChanged(); }
@@ -59,33 +58,36 @@ public class UsageStatisticsViewModel : INotifyPropertyChanged
     {
         _statisticsService = statisticsService;
 
-        RefreshCommand = new RelayCommand(() => LoadStatistics(showToast: true));
+        RefreshCommand = new RelayCommand(() => _ = LoadStatisticsAsync(showToast: true));
         ClearCommand = new RelayCommand(ClearStatistics);
 
-        LoadStatistics(showToast: false);
+        _ = LoadStatisticsAsync(showToast: false);
     }
 
-    private void LoadStatistics(bool showToast = false)
+    private async System.Threading.Tasks.Task LoadStatisticsAsync(bool showToast = false)
     {
         try
         {
-            Summary = _statisticsService.GetSummary();
-
-            var dailyData = _statisticsService.GetDailyStatistics(7);
-            DailyStats = new ObservableCollection<DailyStatistics>(dailyData);
-
-            var modelData = _statisticsService.GetStatisticsByModel();
-            var modelItems = modelData.Select(kv => new ModelStatItem
+            var (summary, dailyList, modelItems, recentList) = await System.Threading.Tasks.Task.Run(() =>
             {
-                ModelName = kv.Key,
-                TotalCalls = kv.Value.TotalCalls,
-                SuccessRate = kv.Value.SuccessRate,
-                AverageResponseTime = kv.Value.AverageResponseTime
-            }).OrderByDescending(m => m.TotalCalls);
-            ModelStats = new ObservableCollection<ModelStatItem>(modelItems);
+                var s = _statisticsService.GetSummary();
+                var d = _statisticsService.GetDailyStatistics(7).ToList();
+                var m = _statisticsService.GetStatisticsByModel()
+                    .Select(kv => new ModelStatItem
+                    {
+                        ModelName = kv.Key,
+                        TotalCalls = kv.Value.TotalCalls,
+                        SuccessRate = kv.Value.SuccessRate,
+                        AverageResponseTime = kv.Value.AverageResponseTime
+                    }).OrderByDescending(x => x.TotalCalls).ToList();
+                var r = _statisticsService.GetRecentRecords(50).ToList();
+                return (s, d, m, r);
+            });
 
-            var recentData = _statisticsService.GetRecentRecords(50);
-            RecentCalls = new ObservableCollection<ApiCallRecord>(recentData);
+            Summary = summary;
+            _dailyStats.ReplaceAll(dailyList);
+            _modelStats.ReplaceAll(modelItems);
+            _recentCalls.ReplaceAll(recentList);
 
             TM.App.Log("[UsageStatistics] 统计数据已刷新");
             if (showToast) GlobalToast.Success("已刷新", "统计数据已更新");
@@ -93,7 +95,7 @@ public class UsageStatisticsViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             TM.App.Log($"[UsageStatistics] 加载统计失败: {ex.Message}");
-            GlobalToast.Error("加载失败", ex.Message);
+            GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
         }
     }
 
@@ -105,7 +107,7 @@ public class UsageStatisticsViewModel : INotifyPropertyChanged
             if (confirm == true)
             {
                 _statisticsService.ClearStatistics();
-                LoadStatistics();
+                _ = LoadStatisticsAsync();
                 TM.App.Log("[UsageStatistics] 统计数据已清空");
                 GlobalToast.Success("已清空", "统计数据已清空");
             }
@@ -113,7 +115,7 @@ public class UsageStatisticsViewModel : INotifyPropertyChanged
         catch (Exception ex)
         {
             TM.App.Log($"[UsageStatistics] 清空统计失败: {ex.Message}");
-            GlobalToast.Error("操作失败", ex.Message);
+            GlobalToast.Error("操作失败", $"操作失败：{ex.Message}");
         }
     }
 }

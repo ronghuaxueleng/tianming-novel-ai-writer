@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,19 +6,32 @@ using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Media;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Account.PasswordSecurity.Services;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.PasswordSecurity
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class PasswordSecurityViewModel : INotifyPropertyChanged
     {
+        private static readonly System.Collections.Generic.Dictionary<string, SolidColorBrush> _brushCache = new();
+
+        private static SolidColorBrush GetCachedBrush(string colorHex)
+        {
+            if (!_brushCache.TryGetValue(colorHex, out var brush))
+            {
+                brush = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
+                brush.Freeze();
+                _brushCache[colorHex] = brush;
+            }
+            return brush;
+        }
+
         private readonly AccountSecurityService _securityService;
         private readonly AccountLockoutService _lockoutService;
         private readonly ApiService _apiService;
+        private bool _suppressTwoFactorToggle;
 
         public PasswordSecurityViewModel(AccountSecurityService securityService, AccountLockoutService lockoutService, ApiService apiService)
         {
@@ -28,17 +41,19 @@ namespace TM.Framework.User.Account.PasswordSecurity
 
             ChangePasswordCommand = new AsyncRelayCommand(ChangePasswordAsync);
             GenerateQRCodeCommand = new RelayCommand(GenerateQRCode);
-            VerifyCodeCommand = new RelayCommand(VerifyCode);
+            VerifyCodeCommand = new AsyncRelayCommand(VerifyCodeAsync);
             CopySecretCommand = new RelayCommand(CopySecret);
-            UnlockAccountCommand = new RelayCommand(UnlockAccount);
+            UnlockAccountCommand = new AsyncRelayCommand(_ => UnlockAccountAsync());
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var isTwoFactor = _securityService.IsTwoFactorEnabled();
-                var secret = isTwoFactor ? _securityService.GetTwoFactorSecret() ?? string.Empty : string.Empty;
+                var isTwoFactor = await _securityService.IsTwoFactorEnabledAsync().ConfigureAwait(false);
+                var secret = isTwoFactor ? await _securityService.GetTwoFactorSecretAsync().ConfigureAwait(false) ?? string.Empty : string.Empty;
                 return () =>
                 {
+                    _suppressTwoFactorToggle = true;
                     IsTwoFactorEnabled = isTwoFactor;
+                    _suppressTwoFactorToggle = false;
                     if (isTwoFactor) TwoFactorSecret = secret;
                     _ = LoadLockoutStatusAsync();
                 };
@@ -103,7 +118,7 @@ namespace TM.Framework.User.Account.PasswordSecurity
             }
         }
 
-        private SolidColorBrush _passwordStrengthColor = new SolidColorBrush(Colors.Gray);
+        private SolidColorBrush _passwordStrengthColor = GetCachedBrush("#9E9E9E");
         public SolidColorBrush PasswordStrengthColor
         {
             get => _passwordStrengthColor;
@@ -125,10 +140,11 @@ namespace TM.Framework.User.Account.PasswordSecurity
                     _isTwoFactorEnabled = value;
                     OnPropertyChanged();
 
-                    if (value)
-                        EnableTwoFactor();
-                    else
-                        DisableTwoFactor();
+                    if (!_suppressTwoFactorToggle)
+                    {
+                        if (value) EnableTwoFactor();
+                        else DisableTwoFactor();
+                    }
                 }
             }
         }
@@ -229,11 +245,11 @@ namespace TM.Framework.User.Account.PasswordSecurity
         {
             await _lockoutService.SyncLockoutStatusFromServerAsync();
 
-            IsAccountLocked = _lockoutService.IsAccountLocked();
-            FailedLoginAttempts = _lockoutService.GetFailedAttempts();
-            LockoutTimeRemaining = _lockoutService.GetLockoutTimeRemaining();
+            IsAccountLocked = await _lockoutService.IsAccountLockedAsync();
+            FailedLoginAttempts = await _lockoutService.GetFailedAttemptsAsync();
+            LockoutTimeRemaining = await _lockoutService.GetLockoutTimeRemainingAsync();
 
-            var attempts = _lockoutService.GetRecentAttempts(5);
+            var attempts = await _lockoutService.GetRecentAttemptsAsync(5);
             RecentAttempts = new ObservableCollection<LoginAttemptRecord>(attempts);
         }
 
@@ -246,7 +262,7 @@ namespace TM.Framework.User.Account.PasswordSecurity
             PasswordStrengthText = PasswordStrengthValidator.GetStrengthText(strength);
 
             var colorHex = PasswordStrengthValidator.GetStrengthColor(strength);
-            PasswordStrengthColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorHex));
+            PasswordStrengthColor = GetCachedBrush(colorHex);
         }
 
         private async Task ChangePasswordAsync()
@@ -278,15 +294,16 @@ namespace TM.Framework.User.Account.PasswordSecurity
                     return;
                 }
 
-                if (!_securityService.HasPassword())
+                if (!await _securityService.HasPasswordAsync())
                 {
-                    _securityService.SetInitialPassword(NewPassword);
+                    await _securityService.SetInitialPasswordAsync(NewPassword).ConfigureAwait(true);
                     GlobalToast.Success("设置密码", "密码设置成功");
                     ClearPasswordFields();
                     return;
                 }
 
-                if (!_securityService.VerifyPassword(OldPassword))
+                var localVerifyOk = await _securityService.VerifyPasswordAsync(OldPassword).ConfigureAwait(true);
+                if (!localVerifyOk)
                 {
                     GlobalToast.Error("修改密码", "旧密码验证失败");
                     return;
@@ -295,14 +312,15 @@ namespace TM.Framework.User.Account.PasswordSecurity
                 var apiResult = await _apiService.ChangePasswordAsync(OldPassword, NewPassword);
                 if (!apiResult.Success)
                 {
+                    TM.App.Log($"[PasswordSecurity] 修改密码失败: {apiResult.Message}");
                     var errorMsg = apiResult.ErrorCode == ApiErrorCodes.NETWORK_ERROR
                         ? "网络连接失败，请检查网络后重试"
-                        : (apiResult.Message ?? "服务器同步失败");
+                        : $"服务器同步失败：{apiResult.Message}";
                     GlobalToast.Error("修改密码", errorMsg);
                     return;
                 }
 
-                var success = _securityService.ChangePassword(OldPassword, NewPassword);
+                var success = await _securityService.ChangePasswordAsync(OldPassword, NewPassword).ConfigureAwait(true);
                 if (success)
                 {
                     GlobalToast.Success("修改密码", "密码修改成功");
@@ -316,44 +334,48 @@ namespace TM.Framework.User.Account.PasswordSecurity
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] change err: {ex.Message}");
-                GlobalToast.Error("修改密码", $"操作失败: {ex.Message}");
+                GlobalToast.Error("修改密码", $"操作失败：{ex.Message}");
             }
         }
 
-        private void EnableTwoFactor()
+        private void EnableTwoFactor() => _ = EnableTwoFactorAsync();
+
+        private async System.Threading.Tasks.Task EnableTwoFactorAsync()
         {
             try
             {
-                var secret = _securityService.EnableTwoFactorAuth();
+                var secret = await _securityService.EnableTwoFactorAuthAsync().ConfigureAwait(true);
                 TwoFactorSecret = secret;
                 GenerateQRCode();
-
                 TM.App.Log("[PasswordSecurityViewModel] 双因素认证已启用");
                 GlobalToast.Success("双因素认证", "已启用双因素认证，请扫描二维码");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] 启用双因素认证失败: {ex.Message}");
-                GlobalToast.Error("双因素认证", $"启用失败: {ex.Message}");
+                GlobalToast.Error("双因素认证", $"启用失败：{ex.Message}");
+                _suppressTwoFactorToggle = true;
                 IsTwoFactorEnabled = false;
+                _suppressTwoFactorToggle = false;
             }
         }
 
-        private void DisableTwoFactor()
+        private void DisableTwoFactor() => _ = DisableTwoFactorAsync();
+
+        private async System.Threading.Tasks.Task DisableTwoFactorAsync()
         {
             try
             {
-                _securityService.DisableTwoFactorAuth();
+                await _securityService.DisableTwoFactorAuthAsync().ConfigureAwait(true);
                 TwoFactorSecret = string.Empty;
                 QRCodeImage = null;
-
                 TM.App.Log("[PasswordSecurityViewModel] 双因素认证已禁用");
                 GlobalToast.Info("双因素认证", "已禁用双因素认证");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] 禁用双因素认证失败: {ex.Message}");
-                GlobalToast.Error("双因素认证", $"禁用失败: {ex.Message}");
+                GlobalToast.Error("双因素认证", $"禁用失败：{ex.Message}");
             }
         }
 
@@ -369,11 +391,11 @@ namespace TM.Framework.User.Account.PasswordSecurity
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] 生成二维码失败: {ex.Message}");
-                GlobalToast.Error("生成二维码", $"操作失败: {ex.Message}");
+                GlobalToast.Error("生成二维码", $"操作失败：{ex.Message}");
             }
         }
 
-        private void VerifyCode()
+        private async Task VerifyCodeAsync()
         {
             try
             {
@@ -383,7 +405,8 @@ namespace TM.Framework.User.Account.PasswordSecurity
                     return;
                 }
 
-                var isValid = _securityService.VerifyTOTPCode(VerificationCode);
+                var code = VerificationCode;
+                var isValid = await _securityService.VerifyTOTPCodeAsync(code).ConfigureAwait(true);
                 if (isValid)
                 {
                     GlobalToast.Success("验证码验证", "验证成功");
@@ -398,7 +421,7 @@ namespace TM.Framework.User.Account.PasswordSecurity
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] 验证码验证失败: {ex.Message}");
-                GlobalToast.Error("验证码验证", $"操作失败: {ex.Message}");
+                GlobalToast.Error("验证码验证", $"操作失败：{ex.Message}");
             }
         }
 
@@ -416,20 +439,27 @@ namespace TM.Framework.User.Account.PasswordSecurity
             }
         }
 
-        private void UnlockAccount()
+        private async Task UnlockAccountAsync()
         {
             try
             {
-                _lockoutService.UnlockAccount();
-                _ = LoadLockoutStatusAsync();
+                var success = await _lockoutService.UnlockAccountAsync();
+                await LoadLockoutStatusAsync();
 
-                GlobalToast.Success("解锁账户", "账户已成功解锁");
-                TM.App.Log("[PasswordSecurityViewModel] 账户已手动解锁");
+                if (success)
+                {
+                    GlobalToast.Success("解锁账户", "账户已成功解锁");
+                    TM.App.Log("[PasswordSecurityViewModel] 账户已手动解锁");
+                }
+                else
+                {
+                    GlobalToast.Error("解锁账户", "服务器解锁失败，请检查网络后重试");
+                }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[PasswordSecurityViewModel] 解锁账户失败: {ex.Message}");
-                GlobalToast.Error("解锁账户", $"操作失败: {ex.Message}");
+                GlobalToast.Error("解锁账户", $"操作失败：{ex.Message}");
             }
         }
 

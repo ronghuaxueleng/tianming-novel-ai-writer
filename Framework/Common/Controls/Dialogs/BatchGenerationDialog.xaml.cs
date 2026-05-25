@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
@@ -7,6 +7,7 @@ using TM.Framework.Common.Models;
 namespace TM.Framework.Common.Controls.Dialogs
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class BatchGenerationDialog : Window
     {
         public bool? Result { get; private set; }
@@ -14,7 +15,7 @@ namespace TM.Framework.Common.Controls.Dialogs
         public BatchGenerationConfig? Config { get; private set; }
 
         private string _categoryName = string.Empty;
-        private int _totalCount = 10;
+        private int _totalCount = 0;
         private int _batchSize = 10;
         private bool _singleMode = false;
 
@@ -55,16 +56,18 @@ namespace TM.Framework.Common.Controls.Dialogs
 
                 if (TitleText != null) TitleText.Text = $"生成确认 - {_categoryName}";
                 if (ConfirmButton != null) ConfirmButton.Content = "确认生成";
+
+                Height = 210;
             }
         }
 
-        public void SetDefaults(int totalCount = 10, int batchSize = 10)
+        public void SetDefaults(int totalCount = 0, int batchSize = 10)
         {
-            _totalCount = Math.Clamp(totalCount, 1, 9999);
+            _totalCount = totalCount <= 0 ? 0 : Math.Clamp(totalCount, 1, 9999);
             _batchSize = Math.Clamp(batchSize, 1, 100);
             if (TotalCountTextBox != null)
             {
-                TotalCountTextBox.Text = _totalCount.ToString();
+                TotalCountTextBox.Text = totalCount <= 0 ? "" : _totalCount.ToString();
             }
 
             if (BatchSizeTextBox != null)
@@ -207,7 +210,7 @@ namespace TM.Framework.Common.Controls.Dialogs
 
         public static BatchGenerationConfig? Show(
             string categoryName,
-            int defaultTotalCount = 10,
+            int defaultTotalCount = 0,
             int defaultBatchSize = 10,
             Window? owner = null,
             bool singleMode = false)
@@ -231,14 +234,14 @@ namespace TM.Framework.Common.Controls.Dialogs
             catch (Exception ex)
             {
                 TM.App.Log($"[BatchGenerationDialog] Show failed: {ex}");
-                GlobalToast.Error("弹窗错误", $"生成弹窗打开失败：{ex.Message}");
+                GlobalToast.Error("弹窗错误", $"弹窗打开失败：{ex.Message}");
                 return null;
             }
         }
 
         public static System.Threading.Tasks.Task<BatchGenerationConfig?> ShowAsync(
             string categoryName,
-            int defaultTotalCount = 10,
+            int defaultTotalCount = 0,
             int defaultBatchSize = 10,
             Window? owner = null,
             bool singleMode = false)

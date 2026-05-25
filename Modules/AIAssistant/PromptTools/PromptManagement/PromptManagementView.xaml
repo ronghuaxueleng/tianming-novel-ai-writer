@@ -5,7 +5,7 @@
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout">
 
     <dm:TwoColumnEditorLayout
-        LeftIcon="📚"
+        LeftIcon="{DynamicResource Icon.Books}"
         LeftTitle="提示词管理"
         ItemsSource="{Binding TreeData}"
         ShowSearch="True"
@@ -27,7 +27,7 @@
                     <RowDefinition Height="Auto"/>
                 </Grid.RowDefinitions>
 
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="✨" Title="Prompt正文" Margin="0,0,0,10">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Sparkle}" Title="Prompt正文" Margin="0,0,0,10">
                     <TextBox Text="{Binding FormSystemPrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              TextWrapping="Wrap"
                              AcceptsReturn="True"
@@ -37,7 +37,7 @@
                              BorderThickness="0" Background="Transparent"/>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="📝" Title="说明" Margin="0" MinHeight="100">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Edit}" Title="说明" Margin="0" MinHeight="100">
                     <TextBox Text="{Binding FormDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                              TextWrapping="Wrap"
                              AcceptsReturn="True"
@@ -50,12 +50,12 @@
         </dm:TwoColumnEditorLayout.EditAdditionalContent>
 
         <dm:TwoColumnEditorLayout.DetailsContent>
-            <Border Background="{DynamicResource ContentBackground}"
+            <Border Background="{DynamicResource ContentBackgroundGlass}"
                     HorizontalAlignment="Center"
                     VerticalAlignment="Center">
                 <StackPanel HorizontalAlignment="Center"
                             VerticalAlignment="Center">
-                    <TextBlock Text="⚙️"
+                    <TextBlock Text=""
                              FontSize="48"
                              HorizontalAlignment="Center"
                              Margin="0,0,0,15"/>

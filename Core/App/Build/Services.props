@@ -1,17 +1,21 @@
-<!-- Services.props - Services层所有文件注册 -->
 <Project>
 
-  <!-- ========================================
-       Services - 全局公共服务层
-       ======================================== -->
   <ItemGroup>
-    <!-- Services层所有XAML文件 -->
     <Page Include="..\..\Services\**\*.xaml" Link="Services\%(RecursiveDir)%(Filename)%(Extension)">
       <SubType>Designer</SubType>
       <Generator>MSBuild:Compile</Generator>
     </Page>
-    <!-- Services层所有C#文件（递归包含所有子目录） -->
     <Compile Include="..\..\Services\**\*.cs" Link="Services\%(RecursiveDir)%(Filename)%(Extension)" />
+    <EmbeddedResource Include="..\..\Services\**\Resources\**\*.json" Link="Services\%(RecursiveDir)%(Filename)%(Extension)" />
+
+    <Content Include="..\..\Services\**\Resources\**\*.onnx"
+             Link="Services\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
+    <Content Include="..\..\Services\**\Resources\**\vocab.txt"
+             Link="Services\%(RecursiveDir)%(Filename)%(Extension)">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </Content>
   </ItemGroup>
 
 </Project>

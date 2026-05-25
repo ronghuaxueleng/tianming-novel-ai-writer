@@ -1,5 +1,4 @@
-using System.Text.Json;
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace TM.Framework.UI.Workspace.Services.Spec
 {
@@ -56,6 +55,50 @@ namespace TM.Framework.UI.Workspace.Services.Spec
         [JsonPropertyName("polishMode")]
         public int? PolishMode { get; set; }
 
+        [JsonPropertyName("polishModel")]
+        public int? PolishModel { get; set; }
+
+        [JsonPropertyName("wordCountControl")]
+        public int? WordCountControl { get; set; }
+
+        [JsonPropertyName("polishControl")]
+        public int? PolishControl { get; set; }
+
+        public const int DefaultPolishMode = 1;
+        public const int DefaultPolishModel = 0;
+        public const int DefaultWordCountControl = 0;
+        public const int DefaultPolishControl = 1;
+
+        public static int GetEffectivePolishMode(CreativeSpec? spec)
+        {
+            var mode = spec?.PolishMode ?? DefaultPolishMode;
+            if (mode < 0) return 0;
+            if (mode > 2) return 2;
+            return mode;
+        }
+
+        public static int GetEffectivePolishModel(CreativeSpec? spec)
+        {
+            var model = spec?.PolishModel ?? DefaultPolishModel;
+            return model == 1 ? 1 : DefaultPolishModel;
+        }
+
+        public static int GetEffectiveWordCountControl(CreativeSpec? spec)
+        {
+            var v = spec?.WordCountControl ?? DefaultWordCountControl;
+            if (v < 0) return 0;
+            if (v > 2) return 2;
+            return v;
+        }
+
+        public static int GetEffectivePolishControl(CreativeSpec? spec)
+        {
+            var v = spec?.PolishControl ?? DefaultPolishControl;
+            if (v < 0) return 0;
+            if (v > 2) return 2;
+            return v;
+        }
+
         #endregion
 
         #region 章节特定
@@ -99,6 +142,9 @@ namespace TM.Framework.UI.Workspace.Services.Spec
                 CharacterFocus = overrideSpec.CharacterFocus ?? baseSpec.CharacterFocus,
 
                 PolishMode = overrideSpec.PolishMode ?? baseSpec.PolishMode,
+                PolishModel = overrideSpec.PolishModel ?? baseSpec.PolishModel,
+                WordCountControl = overrideSpec.WordCountControl ?? baseSpec.WordCountControl,
+                PolishControl = overrideSpec.PolishControl ?? baseSpec.PolishControl,
 
                 SceneDescription = overrideSpec.SceneDescription ?? baseSpec.SceneDescription,
                 EmotionalArc = overrideSpec.EmotionalArc ?? baseSpec.EmotionalArc,

@@ -11,6 +11,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
         private readonly Action<ExecutionEvent> _eventHandler;
         private bool _isCollecting;
         private bool _disposed;
+        private bool _isPolishFatal;
 
         public ExecutionTraceCollector()
         {
@@ -22,6 +23,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
             if (_isCollecting) return;
 
             _records.Clear();
+            _isPolishFatal = false;
             ExecutionEventHub.Published += _eventHandler;
             _isCollecting = true;
             TM.App.Log("[ExecutionTraceCollector] 开始收集执行轨迹");
@@ -61,7 +63,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
                 CompletedSteps = records.Count(r => r.Status == ToolCallStatus.Completed),
                 FailedSteps = records.Count(r => r.Status == ToolCallStatus.Failed),
                 TotalDurationSeconds = records.Where(r => r.DurationSeconds.HasValue).Sum(r => r.DurationSeconds!.Value),
-                FailedStepSummaries = failedSummaries
+                FailedStepSummaries = failedSummaries,
+                IsPolishFatal = _isPolishFatal
             };
         }
 
@@ -161,6 +164,9 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
 
         private void OnExecutionEvent(ExecutionEvent evt)
         {
+            if (evt.IsPolishFatal)
+                _isPolishFatal = true;
+
             var stepIndex = evt.StepIndex ?? 0;
             if (stepIndex <= 0) return;
 
@@ -210,6 +216,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
             }
 
             _disposed = true;
+            GC.SuppressFinalize(this);
         }
     }
 
@@ -222,29 +229,32 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
 
         public IReadOnlyList<string> FailedStepSummaries { get; init; } = Array.Empty<string>();
 
+        public bool IsPolishFatal { get; init; }
+
         public string ToSummaryText()
         {
-            var text = $"共 {TotalSteps} 步";
-            if (FailedSteps > 0) text += $"（{FailedSteps} 失败）";
-            if (TotalDurationSeconds > 0) text += $"，耗时 {TotalDurationSeconds:F1}s";
+            var sb = new System.Text.StringBuilder();
+            sb.Append($"共 {TotalSteps} 步");
+            if (FailedSteps > 0) sb.Append($"（{FailedSteps} 失败）");
+            if (TotalDurationSeconds > 0) sb.Append($"，耗时 {TotalDurationSeconds:F1}s");
 
             if (FailedSteps > 0 && FailedStepSummaries.Count > 0)
             {
                 var max = 3;
                 var shown = Math.Min(max, FailedStepSummaries.Count);
-                text += "\n失败原因：";
+                sb.Append("\n失败原因：");
                 for (var i = 0; i < shown; i++)
                 {
-                    text += $"\n- {FailedStepSummaries[i]}";
+                    sb.Append($"\n- {FailedStepSummaries[i]}");
                 }
 
                 if (FailedStepSummaries.Count > max)
                 {
-                    text += $"\n- 还有 {FailedStepSummaries.Count - max} 个失败未展开";
+                    sb.Append($"\n- 还有 {FailedStepSummaries.Count - max} 个失败未展开");
                 }
             }
 
-            return text;
+            return sb.ToString();
         }
 
         public bool AllSucceeded => FailedSteps == 0 && CompletedSteps == TotalSteps;

@@ -11,7 +11,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
 
         public static string ForPlanParseFailed()
         {
-            return "⚠️ 计划解析失败，请重新描述您的需求。";
+            return "[提示] 计划解析失败，请重新描述您的需求。";
         }
 
         #endregion

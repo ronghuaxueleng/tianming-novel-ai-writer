@@ -1,4 +1,4 @@
-namespace TM.Services.Framework.AI.Core;
+﻿namespace TM.Services.Framework.AI.Core;
 
 public class AICategory
 {

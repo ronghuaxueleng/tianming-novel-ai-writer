@@ -1,9 +1,12 @@
 using System;
 using System.IO;
 using System.Windows;
+using System.Windows.Markup;
 using System.Diagnostics;
 using System.Linq;
 using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using TM.Services.Framework.Settings;
 using TM.Framework.Appearance.Animation.ThemeTransition;
 using System.Text.Json;
@@ -16,6 +19,9 @@ namespace TM.Framework.Appearance.ThemeManagement
         private readonly ThemeTransitionService _transitionService;
         private ThemeType _currentTheme;
         private string? _currentThemeFileName;
+        private ThemeTransitionSettings? _cachedTransitionSettings;
+        private bool _transitionSettingsCacheLoaded;
+        private int _transitionSettingsVersion;
 
         public event EventHandler<ThemeChangedEventArgs>? ThemeChanged;
 
@@ -40,24 +46,62 @@ namespace TM.Framework.Appearance.ThemeManagement
 
         public string? CurrentThemeFileName => _currentThemeFileName;
 
-        public void Initialize()
+        public async System.Threading.Tasks.Task ReloadTransitionSettingsAsync()
+        {
+            var settings = await LoadTransitionSettingsFromDiskAsync().ConfigureAwait(true);
+            Interlocked.Increment(ref _transitionSettingsVersion);
+            _cachedTransitionSettings = settings;
+            _transitionSettingsCacheLoaded = true;
+        }
+
+        public async System.Threading.Tasks.Task PreloadTransitionSettingsAsync()
+        {
+            Interlocked.Increment(ref _transitionSettingsVersion);
+            _cachedTransitionSettings = await LoadTransitionSettingsFromDiskAsync().ConfigureAwait(false);
+            _transitionSettingsCacheLoaded = true;
+        }
+
+        private ThemeTransitionSettings? GetCachedTransitionSettings()
+        {
+            if (!_transitionSettingsCacheLoaded)
+            {
+                _ = System.Threading.Tasks.Task.Run(async () =>
+                {
+                    var loadVersion = Volatile.Read(ref _transitionSettingsVersion);
+                    try
+                    {
+                        var loaded = await LoadTransitionSettingsFromDiskAsync().ConfigureAwait(false);
+                        if (loadVersion != Volatile.Read(ref _transitionSettingsVersion))
+                            return;
+                        _cachedTransitionSettings = loaded;
+                        _transitionSettingsCacheLoaded = true;
+                    }
+                    catch (Exception ex) { TM.App.Log($"[ThemeManager] 加载过渡设置失败: {ex.Message}"); }
+                });
+                return null;
+            }
+            return _cachedTransitionSettings;
+        }
+
+        public async void Initialize()
         {
             try
             {
+                GetCachedTransitionSettings();
                 if (_currentTheme == ThemeType.Custom && !string.IsNullOrWhiteSpace(_currentThemeFileName))
                 {
-                    ApplyThemeFromFileWithoutAnimation(_currentThemeFileName);
+                    await ApplyThemeFromFileWithoutAnimationAsync(_currentThemeFileName);
                 }
                 else
                 {
-                    ApplyTheme(_currentTheme, false);
+                    await ApplyThemeAsync(_currentTheme, false);
                 }
                 DebugLog($"[ThemeManager] 主题系统初始化成功: {_currentTheme}");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ThemeManager] 主题初始化失败，已回退到浅色主题: {ex.Message}");
-                ApplyTheme(ThemeType.Light, false);
+                await ApplyThemeAsync(ThemeType.Light, false);
                 _currentTheme = ThemeType.Light;
                 _currentThemeFileName = null;
                 SaveThemePreference(ThemeType.Light);
@@ -73,11 +117,11 @@ namespace TM.Framework.Appearance.ThemeManagement
                 return;
             }
 
-            void SwitchThemeCore()
+            async Task SwitchThemeCoreAsync()
             {
                 try
                 {
-                    var transitionSettings = LoadTransitionSettings();
+                    var transitionSettings = GetCachedTransitionSettings();
 
                     if (transitionSettings != null && transitionSettings.Effect != TransitionEffect.None)
                     {
@@ -87,19 +131,23 @@ namespace TM.Framework.Appearance.ThemeManagement
                         int pending = 0;
                         bool applied = false;
 
-                        void CompleteOne()
+                        async void CompleteOne()
                         {
                             pending--;
                             if (pending <= 0 && !applied)
                             {
                                 applied = true;
-                                ApplyTheme(theme, true);
-                                _currentTheme = theme;
-                                _currentThemeFileName = null;
-                                SaveThemePreference(theme);
-                                SaveThemeFilePreference(string.Empty);
-                                ThemeChanged?.Invoke(this, new ThemeChangedEventArgs(theme));
-                                DebugLog($"[ThemeManager] 主题已切换（带动画）: {theme}");
+                                try
+                                {
+                                    await ApplyThemeAsync(theme, true);
+                                    _currentTheme = theme;
+                                    _currentThemeFileName = null;
+                                    SaveThemePreference(theme);
+                                    SaveThemeFilePreference(string.Empty);
+                                    ThemeChanged?.Invoke(this, new ThemeChangedEventArgs(theme));
+                                    DebugLog($"[ThemeManager] 主题已切换（带动画）: {theme}");
+                                }
+                                catch (Exception ex) { TM.App.Log($"[ThemeManager] 过渡动画后主题切换失败: {ex.Message}"); }
                             }
                         }
 
@@ -115,12 +163,12 @@ namespace TM.Framework.Appearance.ThemeManagement
 
                         if (pending == 0)
                         {
-                            ApplyThemeWithoutAnimation(theme);
+                            await ApplyThemeWithoutAnimationAsync(theme);
                         }
                     }
                     else
                     {
-                        ApplyThemeWithoutAnimation(theme);
+                        await ApplyThemeWithoutAnimationAsync(theme);
                     }
                 }
                 catch (Exception ex)
@@ -132,14 +180,14 @@ namespace TM.Framework.Appearance.ThemeManagement
 
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher != null && dispatcher.CheckAccess())
-                SwitchThemeCore();
+                _ = SwitchThemeCoreAsync();
             else
-                dispatcher?.BeginInvoke((Action)SwitchThemeCore);
+                dispatcher?.BeginInvoke(() => _ = SwitchThemeCoreAsync());
         }
 
-        private void ApplyThemeWithoutAnimation(ThemeType theme)
+        private async Task ApplyThemeWithoutAnimationAsync(ThemeType theme)
         {
-            ApplyTheme(theme, true);
+            await ApplyThemeAsync(theme, true);
             _currentTheme = theme;
             _currentThemeFileName = null;
             SaveThemePreference(theme);
@@ -161,11 +209,11 @@ namespace TM.Framework.Appearance.ThemeManagement
                 return;
             }
 
-            void ApplyThemeFromFileCore()
+            async Task ApplyThemeFromFileCoreAsync()
             {
                 try
                 {
-                    var transitionSettings = LoadTransitionSettings();
+                    var transitionSettings = GetCachedTransitionSettings();
 
                     if (transitionSettings != null && transitionSettings.Effect != TransitionEffect.None)
                     {
@@ -176,19 +224,23 @@ namespace TM.Framework.Appearance.ThemeManagement
                         int pending = 0;
                         bool applied = false;
 
-                        void CompleteOne()
+                        async void CompleteOne()
                         {
                             pending--;
                             if (pending <= 0 && !applied)
                             {
                                 applied = true;
-                                ApplyThemeUri(themeUri);
-                                _currentTheme = ThemeType.Custom;
-                                _currentThemeFileName = normalizedFileName;
-                                SaveThemePreference(ThemeType.Custom);
-                                SaveThemeFilePreference(normalizedFileName);
-                                ThemeChanged?.Invoke(this, new ThemeChangedEventArgs(ThemeType.Custom));
-                                DebugLog($"[ThemeManager] 主题已切换（带动画）: {normalizedFileName}");
+                                try
+                                {
+                                    await ApplyThemeUriAsync(themeUri).ConfigureAwait(true);
+                                    _currentTheme = ThemeType.Custom;
+                                    _currentThemeFileName = normalizedFileName;
+                                    SaveThemePreference(ThemeType.Custom);
+                                    SaveThemeFilePreference(normalizedFileName);
+                                    ThemeChanged?.Invoke(this, new ThemeChangedEventArgs(ThemeType.Custom));
+                                    DebugLog($"[ThemeManager] 主题已切换（带动画）: {normalizedFileName}");
+                                }
+                                catch (Exception ex) { TM.App.Log($"[ThemeManager] 过渡动画后主题文件切换失败: {ex.Message}"); }
                             }
                         }
 
@@ -204,12 +256,12 @@ namespace TM.Framework.Appearance.ThemeManagement
 
                         if (pending == 0)
                         {
-                            ApplyThemeFromFileWithoutAnimation(normalizedFileName);
+                            await ApplyThemeFromFileWithoutAnimationAsync(normalizedFileName);
                         }
                     }
                     else
                     {
-                        ApplyThemeFromFileWithoutAnimation(normalizedFileName);
+                        await ApplyThemeFromFileWithoutAnimationAsync(normalizedFileName);
                     }
                 }
                 catch (Exception ex)
@@ -221,34 +273,9 @@ namespace TM.Framework.Appearance.ThemeManagement
 
             var dispatcher = Application.Current?.Dispatcher;
             if (dispatcher != null && dispatcher.CheckAccess())
-                ApplyThemeFromFileCore();
+                _ = ApplyThemeFromFileCoreAsync();
             else
-                dispatcher?.BeginInvoke((Action)ApplyThemeFromFileCore);
-        }
-
-        public System.Collections.Generic.List<string> GetAvailableThemes()
-        {
-            try
-            {
-                var themesPath = StoragePathHelper.GetFrameworkStoragePath("Appearance/ThemeManagement/Themes");
-                if (Directory.Exists(themesPath))
-                {
-                    var themeFiles = Directory.GetFiles(themesPath, "*.xaml");
-                    var themes = themeFiles.Select(f => Path.GetFileNameWithoutExtension(f)).ToList();
-                    TM.App.Log($"[ThemeManager] 找到 {themes.Count} 个可用主题");
-                    return themes;
-                }
-                else
-                {
-                    TM.App.Log($"[ThemeManager] 主题目录不存在: {themesPath}");
-                    return new System.Collections.Generic.List<string>();
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ThemeManager] 获取主题列表失败: {ex.Message}");
-                return new System.Collections.Generic.List<string>();
-            }
+                dispatcher?.BeginInvoke(() => _ = ApplyThemeFromFileCoreAsync());
         }
 
         public void ApplyTheme(string themeName)
@@ -296,13 +323,14 @@ namespace TM.Framework.Appearance.ThemeManagement
                 case "Sunset": themeType = ThemeType.Sunset; return true;
                 case "Morandi": themeType = ThemeType.Morandi; return true;
                 case "HighContrast": themeType = ThemeType.HighContrast; return true;
+                case "Linear": themeType = ThemeType.Linear; return true;
                 default:
                     themeType = default;
                     return false;
             }
         }
 
-        private ThemeTransitionSettings? LoadTransitionSettings()
+        private async System.Threading.Tasks.Task<ThemeTransitionSettings?> LoadTransitionSettingsFromDiskAsync()
         {
             try
             {
@@ -314,7 +342,7 @@ namespace TM.Framework.Appearance.ThemeManagement
 
                 if (System.IO.File.Exists(settingsFile))
                 {
-                    var json = System.IO.File.ReadAllText(settingsFile);
+                    var json = await System.IO.File.ReadAllTextAsync(settingsFile).ConfigureAwait(false);
                     return JsonSerializer.Deserialize<ThemeTransitionSettings>(json);
                 }
             }
@@ -327,19 +355,20 @@ namespace TM.Framework.Appearance.ThemeManagement
 
         private ResourceDictionary? _currentThemeDict;
 
-        private void ApplyTheme(ThemeType theme, bool clearCache)
+        private async Task ApplyThemeAsync(ThemeType theme, bool clearCache)
         {
             if (Application.Current.Dispatcher.CheckAccess())
             {
-                ApplyThemeCore(theme, clearCache);
+                await ApplyThemeCoreAsync(theme, clearCache);
             }
             else
             {
-                Application.Current.Dispatcher.BeginInvoke(() => ApplyThemeCore(theme, clearCache));
+                await Application.Current.Dispatcher.InvokeAsync(
+                    () => ApplyThemeCoreAsync(theme, clearCache)).Task.Unwrap();
             }
         }
 
-        private void ApplyThemeCore(ThemeType theme, bool clearCache)
+        private async Task ApplyThemeCoreAsync(ThemeType theme, bool clearCache)
         {
             try
             {
@@ -351,8 +380,7 @@ namespace TM.Framework.Appearance.ThemeManagement
                 else
                 {
                     var themeUri = GetThemeResourceUri(theme);
-                    var fileDict = new ResourceDictionary { Source = themeUri };
-                    ApplyResourceDictionary(fileDict);
+                    await ApplyThemeUriAsync(themeUri).ConfigureAwait(true);
                 }
 
                 TM.App.Log($"[ThemeManager] 主题切换成功: {theme}");
@@ -368,6 +396,10 @@ namespace TM.Framework.Appearance.ThemeManagement
         {
             var mergedDicts = Application.Current.Resources.MergedDictionaries;
 
+            ThemeGradientGenerator.InjectGradients(newTheme);
+
+            mergedDicts.Insert(0, newTheme);
+
             if (_currentThemeDict != null)
             {
                 mergedDicts.Remove(_currentThemeDict);
@@ -377,10 +409,11 @@ namespace TM.Framework.Appearance.ThemeManagement
                 var oldThemes = new List<ResourceDictionary>();
                 foreach (var dict in mergedDicts)
                 {
-                    if (dict.Source != null &&
+                    if (dict != newTheme &&
+                        dict.Source != null &&
                         (dict.Source.OriginalString.Contains("/Themes/") ||
                          dict.Source.OriginalString.Contains("\\Themes\\")) &&
-                        dict.Source.OriginalString.EndsWith("Theme.xaml"))
+                        dict.Source.OriginalString.EndsWith("Theme.xaml", StringComparison.Ordinal))
                     {
                         oldThemes.Add(dict);
                     }
@@ -391,21 +424,26 @@ namespace TM.Framework.Appearance.ThemeManagement
                 }
             }
 
-            mergedDicts.Insert(0, newTheme);
             _currentThemeDict = newTheme;
+
+            TM.Framework.Common.Controls.TreeNodeItem.InvalidateStaticBrushCache();
+            TM.Framework.UI.Workspace.RightPanel.Conversation.SKConversationViewModel.InvalidateThemeBrushCache();
+            TM.Framework.UI.Windows.UnifiedWindow.InvalidateOverlayBrushCache();
         }
 
-        private void ApplyThemeUri(Uri themeUri)
+        private async Task ApplyThemeUriAsync(Uri themeUri)
         {
-            var fileDict = new ResourceDictionary { Source = themeUri };
+            var bytes = await File.ReadAllBytesAsync(themeUri.LocalPath).ConfigureAwait(true);
+            using var ms = new MemoryStream(bytes);
+            var fileDict = (ResourceDictionary)XamlReader.Load(ms);
             ApplyResourceDictionary(fileDict);
         }
 
-        private void ApplyThemeFromFileWithoutAnimation(string themeFileName)
+        private async Task ApplyThemeFromFileWithoutAnimationAsync(string themeFileName)
         {
             var normalizedFileName = NormalizeThemeFileName(themeFileName);
             var themeUri = GetThemeFileUri(normalizedFileName);
-            ApplyThemeUri(themeUri);
+            await ApplyThemeUriAsync(themeUri).ConfigureAwait(true);
             _currentTheme = ThemeType.Custom;
             _currentThemeFileName = normalizedFileName;
             SaveThemePreference(ThemeType.Custom);
@@ -457,6 +495,7 @@ namespace TM.Framework.Appearance.ThemeManagement
                 ThemeType.Sunset => "SunsetTheme.xaml",
                 ThemeType.Morandi => "MorandiTheme.xaml",
                 ThemeType.HighContrast => "HighContrastTheme.xaml",
+                ThemeType.Linear => "LinearTheme.xaml",
                 ThemeType.Custom => NormalizeThemeFileName(_currentThemeFileName ?? "LightTheme.xaml"),
                 _ => "LightTheme.xaml"
             };
@@ -568,6 +607,7 @@ namespace TM.Framework.Appearance.ThemeManagement
         {
             return theme switch
             {
+                ThemeType.Linear => "Linear 极简",
                 ThemeType.Light => "浅色主题",
                 ThemeType.Dark => "深色主题",
                 ThemeType.Auto => "跟随系统",
@@ -593,6 +633,8 @@ namespace TM.Framework.Appearance.ThemeManagement
     [System.Reflection.Obfuscation(Exclude = true)]
     public enum ThemeType
     {
+        Linear,
+
         Light,
 
         Dark,

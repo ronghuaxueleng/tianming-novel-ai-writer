@@ -4,21 +4,19 @@ using System.Reflection;
 using System.Linq;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Models.Generate.StrategicOutline;
 using TM.Modules.Generate.GlobalSettings.Outline.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Framework.AI.Interfaces.Prompts;
-using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
+using TM.Services.Modules.ProjectData.Metadata;
 using TM.Modules.Design.Elements.PlotRules.Services;
 
 namespace TM.Modules.Generate.GlobalSettings.Outline
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class OutlineViewModel : DataManagementViewModelBase<OutlineData, OutlineCategory, OutlineService>
     {
         private readonly IPromptRepository _promptRepository;
@@ -32,7 +30,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             _plotRulesService = plotRulesService;
         }
         private string _formName = string.Empty;
-        private string _formIcon = "📖";
+        private string _formIcon = "Icon.Book";
         private string _formStatus = "已启用";
         private string _formCategory = string.Empty;
 
@@ -54,8 +52,8 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             }
         }
 
+        private bool _invalidatePending;
         private string _formTotalChapterCount = string.Empty;
-        private string _formEstimatedWordCount = string.Empty;
         private string _formOneLineOutline = string.Empty;
         private string _formEmotionalTone = string.Empty;
         private string _formPhilosophicalMotif = string.Empty;
@@ -72,12 +70,19 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                     var hasEditingContext = IsCreateMode || _currentEditingData != null || _currentEditingCategory != null;
                     var isValidTotalChapters = int.TryParse(_formTotalChapterCount?.Trim(), out var n) && n > 0;
                     IsAIGenerateEnabled = hasEditingContext && isValidTotalChapters;
-                    CommandManager.InvalidateRequerySuggested();
+                    if (!_invalidatePending)
+                    {
+                        _invalidatePending = true;
+                        System.Windows.Application.Current?.Dispatcher.InvokeAsync(() =>
+                        {
+                            _invalidatePending = false;
+                            System.Windows.Input.CommandManager.InvalidateRequerySuggested();
+                        }, System.Windows.Threading.DispatcherPriority.Background);
+                    }
                 }
             }
         }
 
-        public string FormEstimatedWordCount { get => _formEstimatedWordCount; set { _formEstimatedWordCount = value; OnPropertyChanged(); } }
         public string FormOneLineOutline { get => _formOneLineOutline; set { _formOneLineOutline = value; OnPropertyChanged(); } }
         public string FormEmotionalTone { get => _formEmotionalTone; set { _formEmotionalTone = value; OnPropertyChanged(); } }
         public string FormPhilosophicalMotif { get => _formPhilosophicalMotif; set { _formPhilosophicalMotif = value; OnPropertyChanged(); } }
@@ -98,7 +103,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
 
         public List<string> StatusOptions { get; } = new() { "已禁用", "已启用" };
 
-        protected override string DefaultDataIcon => "📖";
+        protected override string DefaultDataIcon => "Icon.Book";
 
         protected override OutlineData? CreateNewData(string? categoryName = null)
         {
@@ -133,20 +138,15 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = "📖",
+                Icon = IconHelper.Get("Icon.Book"),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(OutlineData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(OutlineData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword)) return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.OneLineOutline.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.CoreConflict.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Theme.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.OneLineOutline, data.CoreConflict, data.Theme };
         }
 
         private ICommand? _selectNodeCommand;
@@ -165,26 +165,33 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                 {
                     _currentEditingCategory = category;
                     _currentEditingData = null;
-                    LoadCategoryToForm(category);
-                    EnterEditMode();
+                    if (category.IsBuiltIn)
+                    {
+                        ResetForm();
+                        EnterEditMode();
+                    }
+                    else
+                    {
+                        LoadCategoryToForm(category);
+                        EnterEditMode();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[OutlineViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
         private void LoadDataToForm(OutlineData data)
         {
             FormName = data.Name;
-            FormIcon = "📖";
+            FormIcon = "Icon.Book";
             FormStatus = data.IsEnabled ? "已启用" : "已禁用";
             FormCategory = data.Category;
 
             FormTotalChapterCount = data.TotalChapterCount > 0 ? data.TotalChapterCount.ToString() : string.Empty;
-            FormEstimatedWordCount = data.EstimatedWordCount;
             FormOneLineOutline = data.OneLineOutline;
             FormEmotionalTone = data.EmotionalTone;
             FormPhilosophicalMotif = data.PhilosophicalMotif;
@@ -218,7 +225,6 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
         private void ResetBusinessFields()
         {
             FormTotalChapterCount = string.Empty;
-            FormEstimatedWordCount = string.Empty;
             FormOneLineOutline = string.Empty;
             FormEmotionalTone = string.Empty;
             FormPhilosophicalMotif = string.Empty;
@@ -245,7 +251,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             catch (Exception ex)
             {
                 TM.App.Log($"[OutlineViewModel] 新建失败: {ex.Message}");
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
             }
         });
 
@@ -266,7 +272,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             catch (Exception ex)
             {
                 TM.App.Log($"[OutlineViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         });
 
@@ -373,7 +379,6 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             data.UpdatedAt = DateTime.Now;
 
             data.TotalChapterCount = int.TryParse(FormTotalChapterCount?.Trim(), out var tc) ? tc : 0;
-            data.EstimatedWordCount = FormEstimatedWordCount;
             data.OneLineOutline = FormOneLineOutline;
             data.EmotionalTone = FormEmotionalTone;
             data.PhilosophicalMotif = FormPhilosophicalMotif;
@@ -402,10 +407,15 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
 
                     int totalDataDeleted = 0;
 
+                    var categoryIdLookup = Service.GetAllCategories()
+                        .ToDictionary(c => c.Name, c => c.Id, StringComparer.Ordinal);
                     foreach (var categoryName in allCategoriesToDelete)
                     {
+                        categoryIdLookup.TryGetValue(categoryName, out var cId);
                         var dataInCategory = Service.GetAllOutlines()
-                            .Where(d => d.Category == categoryName)
+                            .Where(d =>
+                                (!string.IsNullOrWhiteSpace(cId) && d.CategoryId == cId) ||
+                                (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName))
                             .ToList();
 
                         foreach (var item in dataInCategory)
@@ -446,7 +456,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             catch (Exception ex)
             {
                 TM.App.Log($"[OutlineViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -457,6 +467,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             return new TM.Framework.Common.ViewModels.AIGenerationConfig
             {
                 Category = "小说创作者",
+                ActiveModuleHint = "战略大纲",
                 ServiceType = TM.Framework.Common.ViewModels.AIServiceType.ChatEngine,
                 ResponseFormat = TM.Framework.Common.ViewModels.ResponseFormat.Json,
                 MessagePrefix = "大纲创作",
@@ -471,7 +482,6 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                 OutputFields = new()
                 {
                     ["总章节数"] = v => { if (string.IsNullOrWhiteSpace(FormTotalChapterCount)) FormTotalChapterCount = v; },
-                    ["预计总字数"] = v => FormEstimatedWordCount = v,
                     ["一句话大纲"] = v => FormOneLineOutline = v,
                     ["情感基调"] = v => FormEmotionalTone = v,
                     ["哲学母题"] = v => FormPhilosophicalMotif = v,
@@ -479,12 +489,11 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                     ["核心冲突"] = v => FormCoreConflict = v,
                     ["结局/目标状态"] = v => FormEndingState = v,
                     ["卷/幕划分"] = v => { if (string.IsNullOrWhiteSpace(FormVolumeDivision)) FormVolumeDivision = v; },
-                    ["大纲总览"] = v => { if (string.IsNullOrWhiteSpace(FormOutlineOverview))  FormOutlineOverview  = v; },
+                    ["大纲总览"] = v => { if (string.IsNullOrWhiteSpace(FormOutlineOverview)) FormOutlineOverview = v; },
                 },
                 OutputFieldGetters = new()
                 {
                     ["总章节数"] = () => FormTotalChapterCount,
-                    ["预计总字数"] = () => FormEstimatedWordCount,
                     ["一句话大纲"] = () => FormOneLineOutline,
                     ["情感基调"] = () => FormEmotionalTone,
                     ["哲学母题"] = () => FormPhilosophicalMotif,
@@ -495,19 +504,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                     ["大纲总览"] = () => FormOutlineOverview,
                 },
                 ContextProvider = async () => await GetEnhancedOutlineContextAsync(),
-                BatchFieldKeyMap = new()
-                {
-                    ["总章节数"] = "TotalChapterCount",
-                    ["预计总字数"] = "EstimatedWordCount",
-                    ["一句话大纲"] = "OneLineOutline",
-                    ["情感基调"] = "EmotionalTone",
-                    ["哲学母题"] = "PhilosophicalMotif",
-                    ["主题思想"] = "Theme",
-                    ["核心冲突"] = "CoreConflict",
-                    ["结局/目标状态"] = "EndingState",
-                    ["卷/幕划分"] = "VolumeDivision",
-                    ["大纲总览"] = "OutlineOverview"
-                },
+                BatchFieldKeyMap = EntityFieldMeta.GetFieldKeyMap("outline"),
                 BatchIndexFields = new() { "Name", "OneLineOutline", "Theme" }
             };
         }
@@ -516,16 +513,19 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
         {
             var sb = new System.Text.StringBuilder();
 
-            var baseContext = await _contextService.GetOutlineContextStringAsync();
+            var baseContext = await _contextService.GetOutlineStructureContextAsync();
             if (!string.IsNullOrWhiteSpace(baseContext))
             {
                 sb.AppendLine(baseContext);
                 sb.AppendLine();
             }
 
+            var volumeTask = _contextService.GetVolumeDesignListAsync();
+            var plotInitTask = _plotRulesService.InitializeAsync();
+
             try
             {
-                var volumeList = await _contextService.GetVolumeDesignListAsync();
+                var volumeList = await volumeTask;
                 if (!string.IsNullOrWhiteSpace(volumeList) && volumeList.Contains("<item"))
                 {
                     sb.AppendLine("<volume_structure_reference mandatory=\"true\">");
@@ -550,7 +550,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
 
             try
             {
-                await _plotRulesService.InitializeAsync();
+                await plotInitTask;
                 var plotRules = _plotRulesService.GetAllPlotRules()
                     .Where(p => p.IsEnabled && !string.IsNullOrWhiteSpace(p.TargetVolume))
                     .ToList();
@@ -580,6 +580,7 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
             sb.AppendLine("3. 若已给出总卷数约束，卷/幕划分必须与总卷数一致，不得多于或少于。");
             sb.AppendLine("4. 避免编造未在上下文中出现的专有名词；如需新增，请在对应字段中先定义其含义。");
             sb.AppendLine("5. 若 volume_structure_reference 中已有各卷章节范围，大纲总览叙述的章节分配必须与之完全一致，不得另行分配章节数量。");
+            sb.AppendLine("6. 「卷/幕划分」必须按可解析格式输出：每行一条，格式为\"第N卷：第X-Y章\"（例如 \"第1卷：第1-80章\"），各卷章节范围之和必须精确等于总章节数，第1卷起始章必须为1，相邻两卷必须连续无间隔。此字段是下游分卷设计自动分配章节的权威来源，必须精确填写。");
             sb.AppendLine("</field_constraints>");
             sb.AppendLine();
 
@@ -602,7 +603,9 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
 
         protected override IEnumerable<string> GetExistingNamesForDedup()
             => Service.GetAllOutlines().Select(r => r.Name);
-        protected override int GetDefaultBatchSize() => 1;
+        protected override int GetBaseBatchSize() => 1;
+        protected override int GetBatchSize64K() => 1;
+        protected override int GetBatchSize128K() => 1;
         protected override int GetDefaultTotalCount() => 3;
 
         protected override async System.Threading.Tasks.Task<List<Dictionary<string, object>>> SaveBatchEntitiesAsync(
@@ -616,71 +619,81 @@ namespace TM.Modules.Generate.GlobalSettings.Outline
                 StringComparer.OrdinalIgnoreCase);
             var batchNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var entity in entities)
+            Service.BeginBatchSave();
+            try
             {
-                try
+                foreach (var entity in entities)
                 {
-                    var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
-                    var name = reader.GetString("Name");
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = $"大纲_{DateTime.Now:HHmmss}_{result.Count + 1}";
-
-                    var baseName = name;
-
-                    if (dbNames.Contains(baseName))
+                    try
                     {
-                        TM.App.Log($"[OutlineViewModel] 跳过已存在大纲: {baseName}");
-                        continue;
+                        var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
+                        var name = reader.GetString("Name");
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = $"大纲_{DateTime.Now:HHmmss}_{result.Count + 1}";
+
+                        var baseName = name;
+
+                        if (dbNames.Contains(baseName))
+                        {
+                            TM.App.Log($"[OutlineViewModel] 跳过已存在大纲: {baseName}");
+                            continue;
+                        }
+
+                        int suffix = 1;
+                        while (batchNames.Contains(name))
+                        {
+                            name = $"{baseName}_{suffix++}";
+                        }
+                        batchNames.Add(name);
+                        dbNames.Add(name);
+
+                        var data = new OutlineData
+                        {
+                            Id = ShortIdGenerator.New("D"),
+                            Name = name,
+                            Category = categoryName,
+                            IsEnabled = true,
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now,
+                            TotalChapterCount = int.TryParse(FormTotalChapterCount?.Trim(), out var userTc) && userTc > 0
+                                ? userTc
+                                : reader.GetInt("TotalChapterCount"),
+                            OneLineOutline = reader.GetString("OneLineOutline"),
+                            EmotionalTone = reader.GetString("EmotionalTone"),
+                            PhilosophicalMotif = reader.GetString("PhilosophicalMotif"),
+                            Theme = reader.GetString("Theme"),
+                            CoreConflict = reader.GetString("CoreConflict"),
+                            EndingState = reader.GetString("EndingState"),
+                            VolumeDivision = reader.GetString("VolumeDivision"),
+                            OutlineOverview = reader.GetString("OutlineOverview"),
+                            DependencyModuleVersions = versionSnapshot ?? new()
+                        };
+
+                        entity["Name"] = name;
+                        await Service.AddOutlineAsync(data);
+                        result.Add(entity);
                     }
-
-                    int suffix = 1;
-                    while (batchNames.Contains(name))
+                    catch (Exception ex)
                     {
-                        name = $"{baseName}_{suffix++}";
+                        TM.App.Log($"[OutlineViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
                     }
-                    batchNames.Add(name);
-                    dbNames.Add(name);
-
-                    var data = new OutlineData
-                    {
-                        Id = ShortIdGenerator.New("D"),
-                        Name = name,
-                        Category = categoryName,
-                        IsEnabled = true,
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        TotalChapterCount = int.TryParse(FormTotalChapterCount?.Trim(), out var userTc) && userTc > 0
-                            ? userTc
-                            : reader.GetInt("TotalChapterCount"),
-                        EstimatedWordCount = string.IsNullOrWhiteSpace(FormEstimatedWordCount)
-                            ? reader.GetString("EstimatedWordCount")
-                            : FormEstimatedWordCount,
-                        OneLineOutline = reader.GetString("OneLineOutline"),
-                        EmotionalTone = reader.GetString("EmotionalTone"),
-                        PhilosophicalMotif = reader.GetString("PhilosophicalMotif"),
-                        Theme = reader.GetString("Theme"),
-                        CoreConflict = reader.GetString("CoreConflict"),
-                        EndingState = reader.GetString("EndingState"),
-                        VolumeDivision = reader.GetString("VolumeDivision"),
-                        OutlineOverview = reader.GetString("OutlineOverview"),
-                        DependencyModuleVersions = versionSnapshot ?? new()
-                    };
-
-                    entity["Name"] = name;
-                    await Service.AddOutlineAsync(data);
-                    result.Add(entity);
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[OutlineViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
-                }
+
+                TM.App.Log($"[OutlineViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
+                return result;
             }
-
-            TM.App.Log($"[OutlineViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
-            return result;
+            finally
+            {
+                Service.EndBatchSave();
+            }
         }
 
         protected override string GetModuleNameForVersionTracking() => "Outline";
+
+        protected override void ApplyPrefilledFields(Dictionary<string, string> fields)
+        {
+            if (fields.TryGetValue("TotalChapterCount", out var count)) FormTotalChapterCount = count;
+        }
 
         protected override void SaveCurrentEditingData()
         {

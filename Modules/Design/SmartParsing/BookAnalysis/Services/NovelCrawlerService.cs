@@ -4,11 +4,8 @@ using System.IO;
 using System.Reflection;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
-using Microsoft.Web.WebView2.Wpf;
 using TM.Modules.Design.SmartParsing.BookAnalysis.Models;
-using TM.Modules.Design.SmartParsing.BookAnalysis.Crawler;
 
 namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
 {
@@ -16,7 +13,6 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
     public class NovelCrawlerService
     {
         private readonly string _crawledBasePath;
-        private readonly Dictionary<string, INovelParser> _parsers = new();
 
         private static readonly object _debugLogLock = new();
         private static readonly HashSet<string> _debugLoggedKeys = new();
@@ -43,10 +39,6 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
         {
             _crawledBasePath = StoragePathHelper.GetModulesStoragePath("Design/SmartParsing/BookAnalysis/CrawledBooks");
             StoragePathHelper.EnsureDirectoryExists(_crawledBasePath);
-
-            RegisterParser(new ShuqutaParser());
-            RegisterParser(new XheiyanParser());
-            RegisterParser(new BqgdeParser());
         }
 
         private static readonly JsonSerializerOptions _bookInfoJsonOptions = new()
@@ -59,206 +51,6 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
         {
             PropertyNameCaseInsensitive = true
         };
-
-        private void RegisterParser(INovelParser parser)
-        {
-            foreach (var domain in parser.SupportedDomains)
-            {
-                _parsers[domain.ToLower()] = parser;
-            }
-        }
-
-        public async Task<string> GetPageHtmlAsync(WebView2 webView)
-        {
-            try
-            {
-                var html = await webView.ExecuteScriptAsync("document.documentElement.outerHTML");
-                return JsonSerializer.Deserialize<string>(html) ?? string.Empty;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[NovelCrawlerService] 获取页面 HTML 失败: {ex.Message}");
-                return string.Empty;
-            }
-        }
-
-        public INovelParser? GetParser(string url)
-        {
-            try
-            {
-                var uri = new Uri(url);
-                var host = uri.Host.ToLower();
-
-                if (_parsers.TryGetValue(host, out var parser))
-                {
-                    return parser;
-                }
-
-                if (host.StartsWith("www."))
-                {
-                    var withoutWww = host.Substring(4);
-                    if (_parsers.TryGetValue(withoutWww, out parser))
-                    {
-                        return parser;
-                    }
-                }
-
-                foreach (var (domain, p) in _parsers)
-                {
-                    if (host.Contains(domain) || domain.Contains(host))
-                    {
-                        return p;
-                    }
-                }
-
-                return null;
-            }
-            catch (Exception ex)
-            {
-                DebugLogOnce(nameof(GetParser), ex);
-                return null;
-            }
-        }
-
-        public NovelInfo? ParseNovelPage(string html, string url)
-        {
-            var parser = GetParser(url);
-            if (parser == null)
-            {
-                TM.App.Log($"[NovelCrawlerService] 找不到适配 {url} 的解析器");
-                return null;
-            }
-
-            try
-            {
-                return parser.ParseNovelInfo(html);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[NovelCrawlerService] 解析页面失败: {ex.Message}");
-                return null;
-            }
-        }
-
-        public async Task<CrawledContent?> CrawlWholeBookAsync(
-            WebView2 webView, 
-            string catalogUrl, 
-            string bookId,
-            IProgress<CrawlProgress>? progress = null)
-        {
-            var parser = GetParser(catalogUrl);
-            if (parser == null)
-            {
-                TM.App.Log($"[NovelCrawlerService] 找不到适配 {catalogUrl} 的解析器");
-                return null;
-            }
-
-            try
-            {
-                progress?.Report(new CrawlProgress { Message = "正在获取目录页...", Percentage = 0 });
-                var catalogHtml = await GetPageHtmlAsync(webView);
-
-                var catalog = parser.ParseCatalog(catalogHtml);
-                if (catalog == null || catalog.Chapters.Count == 0)
-                {
-                    TM.App.Log("[NovelCrawlerService] 解析目录失败或章节为空");
-                    return null;
-                }
-
-                var result = new CrawledContent
-                {
-                    BookId = bookId,
-                    SourceUrl = catalogUrl,
-                    SourceSite = parser.SiteName,
-                    TotalChapters = catalog.Chapters.Count,
-                    CrawledAt = DateTime.Now
-                };
-
-                int totalChapters = catalog.Chapters.Count;
-                int totalWords = 0;
-                var crawlerService = new WebCrawlerService(webView);
-
-                for (int i = 0; i < totalChapters; i++)
-                {
-                    var chapterInfo = catalog.Chapters[i];
-                    progress?.Report(new CrawlProgress
-                    {
-                        Message = $"正在抓取: {chapterInfo.Title}",
-                        Percentage = (int)((i + 1) * 100.0 / totalChapters),
-                        CurrentChapter = i + 1,
-                        TotalChapters = totalChapters
-                    });
-
-                    try
-                    {
-                        webView.Source = new Uri(chapterInfo.Url);
-                        await Task.Delay(2000);
-
-                        var contentScript = ContentExtractor.GetContentScript();
-                        var scriptResult = await webView.ExecuteScriptAsync(contentScript);
-                        var jsonResult = JsonSerializer.Deserialize<string>(scriptResult);
-
-                        if (!string.IsNullOrEmpty(jsonResult))
-                        {
-                            using var doc = JsonDocument.Parse(jsonResult);
-                            var root = doc.RootElement;
-                            var success = root.TryGetProperty("success", out var s) && s.GetBoolean();
-
-                            if (success)
-                            {
-                                var titleRaw = root.TryGetProperty("title", out var t) ? t.GetString() : null;
-                                var title = string.IsNullOrWhiteSpace(titleRaw) ? chapterInfo.Title : titleRaw;
-                                var content = root.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-                                var wordCount = root.TryGetProperty("wordCount", out var w) ? w.GetInt32() : content.Length;
-
-                                var chapter = new CrawledChapter
-                                {
-                                    Index = i + 1,
-                                    Title = title,
-                                    Url = chapterInfo.Url,
-                                    Content = content,
-                                    WordCount = wordCount
-                                };
-
-                                result.Chapters.Add(chapter);
-                                totalWords += chapter.WordCount;
-
-                                TM.App.Log($"[NovelCrawlerService] 抓取成功: {title} ({wordCount} 字)");
-                            }
-                            else
-                            {
-                                TM.App.Log($"[NovelCrawlerService] 章节内容提取失败: {chapterInfo.Title}");
-                            }
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[NovelCrawlerService] 抓取章节异常: {chapterInfo.Title} - {ex.Message}");
-                    }
-
-                    await Task.Delay(500);
-                }
-
-                result.TotalWords = totalWords;
-
-                await SaveCrawledContentAsync(bookId, result);
-
-                progress?.Report(new CrawlProgress
-                {
-                    Message = "抓取完成",
-                    Percentage = 100,
-                    CurrentChapter = totalChapters,
-                    TotalChapters = totalChapters
-                });
-
-                return result;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[NovelCrawlerService] 抓取失败: {ex.Message}");
-                return null;
-            }
-        }
 
         public async Task SaveCrawledContentAsync(string bookId, CrawledContent content)
         {
@@ -314,8 +106,10 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
                 };
 
                 var bookInfoPath = Path.Combine(tempDir, "book_info.json");
-                var json = JsonSerializer.Serialize(info, _bookInfoJsonOptions);
-                await File.WriteAllTextAsync(bookInfoPath, json);
+                await using (var infoStream = File.Create(bookInfoPath))
+                {
+                    await JsonSerializer.SerializeAsync(infoStream, info, _bookInfoJsonOptions);
+                }
 
                 if (Directory.Exists(bookDir))
                 {
@@ -407,10 +201,12 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
                 };
 
                 var filePath = Path.Combine(bookDir, "essence_chapters.json");
-                var tempPath = filePath + ".tmp";
+                var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
-                var json = JsonSerializer.Serialize(file, _bookInfoJsonOptions);
-                await File.WriteAllTextAsync(tempPath, json);
+                await using (var writeStream = File.Create(tempPath))
+                {
+                    await JsonSerializer.SerializeAsync(writeStream, file, _bookInfoJsonOptions);
+                }
 
                 if (File.Exists(filePath))
                 {
@@ -439,8 +235,8 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
 
             try
             {
-                var json = await File.ReadAllTextAsync(filePath);
-                return JsonSerializer.Deserialize<EssenceChapterSelectionFile>(json, _bookInfoJsonReadOptions);
+                await using var stream = File.OpenRead(filePath);
+                return await JsonSerializer.DeserializeAsync<EssenceChapterSelectionFile>(stream, _bookInfoJsonReadOptions);
             }
             catch (Exception ex)
             {
@@ -462,8 +258,8 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
 
             try
             {
-                var json = await File.ReadAllTextAsync(bookInfoPath);
-                var info = JsonSerializer.Deserialize<BookInfoFile>(json, _bookInfoJsonReadOptions);
+                await using var stream = File.OpenRead(bookInfoPath);
+                var info = await JsonSerializer.DeserializeAsync<BookInfoFile>(stream, _bookInfoJsonReadOptions);
                 if (info == null)
                 {
                     return null;
@@ -518,7 +314,7 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
 
             try
             {
-                return await File.ReadAllTextAsync(chapterPath);
+                return await File.ReadAllTextAsync(chapterPath).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -528,19 +324,23 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
         }
 
         public async Task<string> LoadCrawledExcerptAsync(
-            string bookId, 
-            int maxChapters = 5, 
+            string bookId,
+            int maxChapters = 10,
             int maxCharsPerChapter = 2000,
-            int maxTotalChars = 8000)
+            int maxTotalChars = 12000)
         {
-            var content = await LoadCrawledContentAsync(bookId);
+            var contentTask = LoadCrawledContentAsync(bookId);
+            var essenceTask = LoadEssenceChapterSelectionFileAsync(bookId);
+            await Task.WhenAll(contentTask, essenceTask);
+
+            var content = await contentTask;
             if (content == null || content.Chapters.Count == 0)
             {
                 return string.Empty;
             }
 
             IEnumerable<CrawledChapter> chapters = content.Chapters.OrderBy(c => c.Index).Take(maxChapters);
-            var essence = await LoadEssenceChapterSelectionFileAsync(bookId);
+            var essence = await essenceTask;
             if (essence?.SelectedIndexes != null && essence.SelectedIndexes.Count > 0)
             {
                 var selected = new List<CrawledChapter>();
@@ -576,6 +376,40 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
                     TM.App.Log($"[NovelCrawlerService] 使用精华章生成AI上下文: {Math.Min(selected.Count, maxChapters)}/{maxChapters}");
                 }
             }
+            var chapterLabels = new Dictionary<int, string>();
+            if (essence != null)
+            {
+                var goldenSet = new HashSet<int>(essence.GoldenIndexes ?? new List<int>());
+                var anchorFriendly = new Dictionary<string, string>
+                {
+                    ["p10"] = "结构锚点·开篇10%",
+                    ["p50"] = "结构锚点·中段50%",
+                    ["p80"] = "结构锚点·高潮80%",
+                    ["ending"] = "结构锚点·结尾"
+                };
+                var anchorByIndex = new Dictionary<int, string>();
+                foreach (var kv in (essence.AnchorIndexes ?? new Dictionary<string, int>()))
+                {
+                    if (kv.Value > 0)
+                        anchorByIndex[kv.Value] = anchorFriendly.TryGetValue(kv.Key, out var fn) ? fn : $"结构锚点·{kv.Key}";
+                }
+
+                var selectedSet = new HashSet<int>(essence.SelectedIndexes ?? new List<int>());
+                foreach (var idx in selectedSet)
+                {
+                    if (goldenSet.Contains(idx))
+                        chapterLabels[idx] = "黄金章";
+                    else if (anchorByIndex.TryGetValue(idx, out var anchorLabel))
+                        chapterLabels[idx] = anchorLabel;
+                    else
+                    {
+                        var reason = (essence.ReasonsByIndex != null && essence.ReasonsByIndex.TryGetValue(idx, out var r))
+                            ? $"·{r}" : string.Empty;
+                        chapterLabels[idx] = $"AI精华章{reason}";
+                    }
+                }
+            }
+
             var excerpts = new List<string>();
             var totalChars = 0;
 
@@ -598,7 +432,8 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
                     text = text.Substring(0, maxCharsPerChapter) + "\n\n...[内容截断]...";
                 }
 
-                var chapterText = $"### {chapter.Title}\n\n{text}";
+                var label = chapterLabels.TryGetValue(chapter.Index, out var lbl) ? $" [{lbl}]" : string.Empty;
+                var chapterText = $"### {chapter.Title}{label}\n\n{text}";
                 if (totalChars + chapterText.Length > maxTotalChars)
                 {
                     var remaining = maxTotalChars - totalChars;
@@ -704,10 +539,12 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
                 StoragePathHelper.EnsureDirectoryExists(bookDir);
 
                 var filePath = Path.Combine(bookDir, "structure_blueprint.json");
-                var tempPath = filePath + ".tmp";
+                var tempPath = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
-                var json = JsonSerializer.Serialize(blueprint, _bookInfoJsonOptions);
-                await File.WriteAllTextAsync(tempPath, json);
+                await using (var writeStream = File.Create(tempPath))
+                {
+                    await JsonSerializer.SerializeAsync(writeStream, blueprint, _bookInfoJsonOptions);
+                }
 
                 if (File.Exists(filePath))
                 {
@@ -733,33 +570,4 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
         }
     }
 
-    public class CrawlProgress
-    {
-        public string Message { get; set; } = string.Empty;
-        public int Percentage { get; set; }
-        public int CurrentChapter { get; set; }
-        public int TotalChapters { get; set; }
-    }
-
-    public class NovelInfo
-    {
-        public string Title { get; set; } = string.Empty;
-        public string Author { get; set; } = string.Empty;
-        public string Genre { get; set; } = string.Empty;
-        public string Description { get; set; } = string.Empty;
-        public string CoverUrl { get; set; } = string.Empty;
-        public List<string> Tags { get; set; } = new();
-    }
-
-    public class NovelCatalog
-    {
-        public string Title { get; set; } = string.Empty;
-        public List<ChapterLink> Chapters { get; set; } = new();
-    }
-
-    public class ChapterLink
-    {
-        public string Title { get; set; } = string.Empty;
-        public string Url { get; set; } = string.Empty;
-    }
 }

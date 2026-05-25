@@ -87,23 +87,23 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
         public HolidayInfo? GetHolidayInfo(DateTime date)
         {
-            if (!_holidaysByYear.ContainsKey(date.Year))
+            if (!_holidaysByYear.TryGetValue(date.Year, out var holidays))
                 return null;
 
-            return _holidaysByYear[date.Year].FirstOrDefault(h => h.Date.Date == date.Date);
+            return holidays.FirstOrDefault(h => h.Date.Date == date.Date);
         }
 
         public List<HolidayInfo> GetHolidaysByYear(int year)
         {
-            return _holidaysByYear.ContainsKey(year) ? _holidaysByYear[year] : new List<HolidayInfo>();
+            return _holidaysByYear.TryGetValue(year, out var list) ? list : new List<HolidayInfo>();
         }
 
         public List<HolidayInfo> GetHolidaysByMonth(int year, int month)
         {
-            if (!_holidaysByYear.ContainsKey(year))
+            if (!_holidaysByYear.TryGetValue(year, out var holidays))
                 return new List<HolidayInfo>();
 
-            return _holidaysByYear[year].Where(h => h.Date.Month == month).ToList();
+            return holidays.Where(h => h.Date.Month == month).ToList();
         }
 
         public List<int> GetSupportedYears()

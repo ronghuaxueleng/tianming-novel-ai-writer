@@ -28,7 +28,6 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
         [JsonPropertyName("FirstUsedTime")] public DateTime FirstUsedTime { get; set; }
         [JsonPropertyName("LastUsedTime")] public DateTime LastUsedTime { get; set; }
         [JsonPropertyName("TypeUsageCount")] public Dictionary<string, int> TypeUsageCount { get; set; } = new();
-        [JsonPropertyName("DailyStats")] public List<DailyUsage> DailyStats { get; set; } = new();
 
         private string FormatBytes(long bytes)
         {
@@ -44,21 +43,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
         }
     }
 
-    public class DailyUsage
-    {
-        [JsonPropertyName("Date")] public DateTime Date { get; set; }
-        [JsonPropertyName("ConnectionCount")] public int ConnectionCount { get; set; }
-        [JsonPropertyName("SuccessCount")] public int SuccessCount { get; set; }
-        [JsonPropertyName("AverageLatency")] public double AverageLatency { get; set; }
-        [JsonPropertyName("TrafficBytes")] public long TrafficBytes { get; set; }
-    }
-
     public class ProxyConfigPreset
     {
         [JsonPropertyName("Id")] public string Id { get; set; } = ShortIdGenerator.New("D");
         [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
         [JsonPropertyName("Description")] public string Description { get; set; } = string.Empty;
-        [JsonPropertyName("Icon")] public string Icon { get; set; } = "🌐";
+        [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.Globe";
         [JsonPropertyName("Config")] public Services.ProxyConfig Config { get; set; } = new();
         [JsonPropertyName("CreatedTime")] public DateTime CreatedTime { get; set; } = DateTime.Now;
         [JsonPropertyName("LastUsedTime")] public DateTime LastUsedTime { get; set; }

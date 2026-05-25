@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
@@ -14,6 +14,7 @@ namespace TM.Framework.SystemSettings.DataCleanup.Models
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class CleanupModule : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;
@@ -68,6 +69,7 @@ namespace TM.Framework.SystemSettings.DataCleanup.Models
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class CleanupItem : INotifyPropertyChanged
     {
         public event PropertyChangedEventHandler? PropertyChanged;

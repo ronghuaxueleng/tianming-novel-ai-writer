@@ -1,18 +1,21 @@
-using System;
+﻿using System;
 using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
+using System.Windows.Threading;
+using TM.Framework.Appearance.Animation.UIResolution;
 
 namespace TM.Framework.User.Preferences.Display
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class DisplayViewModel : INotifyPropertyChanged
     {
         private readonly DisplayService _service;
         private readonly DisplaySettings _settings;
+        private readonly DispatcherTimer _scaleDebounceTimer;
+        private readonly UIResolutionService? _resService;
 
         #region 属性
 
@@ -25,7 +28,9 @@ namespace TM.Framework.User.Preferences.Display
                 _uiScale = Math.Max(0.8, Math.Min(2.0, value));
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(UiScalePercent));
-                _service.UpdateUiScale(_uiScale);
+                _resService?.ApplyUIScale((int)Math.Round(_uiScale * 100.0));
+                _scaleDebounceTimer.Stop();
+                _scaleDebounceTimer.Start();
             }
         }
 
@@ -39,7 +44,7 @@ namespace TM.Framework.User.Preferences.Display
             {
                 _showFunctionBar = value;
                 OnPropertyChanged();
-                _service.UpdateShowFunctionBar(value);
+                _ = _service.UpdateShowFunctionBarAsync(value);
             }
         }
 
@@ -52,7 +57,7 @@ namespace TM.Framework.User.Preferences.Display
                 _selectedDensity = value;
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(DensityDescription));
-                _service.UpdateListDensity(value);
+                _ = _service.UpdateListDensityAsync(value);
             }
         }
 
@@ -81,17 +86,25 @@ namespace TM.Framework.User.Preferences.Display
         {
             _service = service;
             _settings = settings;
+            _resService = ServiceLocator.TryGet<UIResolutionService>();
+
+            _scaleDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(100) };
+            _scaleDebounceTimer.Tick += (_, _) =>
+            {
+                _scaleDebounceTimer.Stop();
+                _service.UpdateUiScale(_uiScale);
+            };
 
             ResetCommand = new RelayCommand(ResetToDefaults);
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                var s = _settings.LoadSettings();
+                var s = await _settings.LoadSettingsAsync().ConfigureAwait(false);
                 double scale = 1.0;
                 try
                 {
                     var resService = ServiceLocator.TryGet<Framework.Appearance.Animation.UIResolution.UIResolutionService>();
-                    if (resService != null) scale = resService.LoadSettings().ScalePercent / 100.0;
+                    if (resService != null) scale = (await resService.LoadSettingsAsync().ConfigureAwait(false)).ScalePercent / 100.0;
                 }
                 catch { }
                 return () =>
@@ -119,7 +132,7 @@ namespace TM.Framework.User.Preferences.Display
                     var resService = ServiceLocator.TryGet<Framework.Appearance.Animation.UIResolution.UIResolutionService>();
                     if (resService != null)
                     {
-                        var resCfg = resService.LoadSettings();
+                        var resCfg = resService.GetCurrentSettings();
                         _uiScale = resCfg.ScalePercent / 100.0;
                     }
                     else
@@ -167,7 +180,7 @@ namespace TM.Framework.User.Preferences.Display
             catch (Exception ex)
             {
                 TM.App.Log($"[DisplayViewModel] 重置失败: {ex.Message}");
-                GlobalToast.Error("重置失败", ex.Message);
+                GlobalToast.Error("重置失败", $"重置失败：{ex.Message}");
             }
         }
 

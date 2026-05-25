@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
@@ -15,6 +15,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class EditorTab : INotifyPropertyChanged
     {
         private string _id = string.Empty;
@@ -91,6 +92,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class EditorTabManager : INotifyPropertyChanged
     {
         private const int MaxTabs = 6;
@@ -309,7 +311,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                 if (tab.IsNew)
                 {
                     var firstLine = savedContent.Split('\n').FirstOrDefault()?.Trim() ?? "";
-                    if (firstLine.StartsWith("#"))
+                    if (firstLine.StartsWith('#'))
                     {
                         tab.Title = firstLine.TrimStart('#').Trim();
                     }

@@ -1,5 +1,4 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Publishing;
 
@@ -11,13 +10,13 @@ namespace TM.Services.Modules.ProjectData.Interfaces
 
         Task<bool> SaveCurrentToHistoryAsync();
 
-        List<PackageHistoryEntry> GetAllHistory();
+        Task<List<PackageHistoryEntry>> GetAllHistoryAsync();
 
         Task<bool> RestoreVersionAsync(int version);
 
         void CleanupOldHistory();
 
-        PackageVersionDiff GetVersionDiff(int historyVersion);
+        System.Threading.Tasks.Task<PackageVersionDiff> GetVersionDiffAsync(int historyVersion);
 
         Task<bool> ClearAllAsync();
     }

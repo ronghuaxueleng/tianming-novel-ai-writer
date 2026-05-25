@@ -25,10 +25,22 @@ public class AIProviderCategory : ICategory, ILogoPathHost
     [JsonIgnore]
     public string? ApiKey
     {
-        get => ApiKeys?.Find(k => k.IsEnabled && !string.IsNullOrWhiteSpace(k.Key))?.Key;
+        get
+        {
+            var raw = ApiKeys?.Find(k => k.IsEnabled && !string.IsNullOrWhiteSpace(k.Key))?.Key;
+            return raw == null ? null : LocalKeyProtector.TryUnprotect(raw);
+        }
         set
         {
-            if (string.IsNullOrWhiteSpace(value)) return;
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                if (ApiKeys != null && ApiKeys.Count == 1)
+                {
+                    ApiKeys[0].Key = string.Empty;
+                    ApiKeys[0].IsEnabled = false;
+                }
+                return;
+            }
             if (ApiKeys == null || ApiKeys.Count == 0)
             {
                 ApiKeys = new List<ApiKeyEntry>
@@ -39,6 +51,7 @@ public class AIProviderCategory : ICategory, ILogoPathHost
             else
             {
                 ApiKeys[0].Key = value;
+                ApiKeys[0].IsEnabled = true;
             }
         }
     }
@@ -49,5 +62,21 @@ public class AIProviderCategory : ICategory, ILogoPathHost
     [JsonPropertyName("RequiresApiKey")] public bool RequiresApiKey { get; set; }
     [JsonPropertyName("SupportsStreaming")] public bool SupportsStreaming { get; set; }
     [JsonPropertyName("Description")] public string? Description { get; set; }
+    [JsonPropertyName("IsKeyExhausted")] public bool IsKeyExhausted { get; set; }
 
+}
+
+public static class AIProviderCategoryLogHelper
+{
+    public static bool IsTianmingPrivate(this AIProviderCategory? category)
+        => IsTianmingPrivateId(category?.Id);
+
+    public static bool IsTianmingPrivateId(string? id)
+        => TianmingProviderIdentity.IsTianmingPrivate(id);
+
+    public static void LogIfPublic(this AIProviderCategory? category, string message)
+    {
+        if (category.IsTianmingPrivate()) return;
+        TM.App.Log(message);
+    }
 }

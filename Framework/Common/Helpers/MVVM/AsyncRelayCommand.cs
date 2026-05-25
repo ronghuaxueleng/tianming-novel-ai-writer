@@ -82,7 +82,7 @@ namespace TM.Framework.Common.Helpers.MVVM
             }
         }
 
-        private static volatile bool _invalidatePending;
+        private volatile bool _invalidatePending;
 
         public void RaiseCanExecuteChanged()
         {

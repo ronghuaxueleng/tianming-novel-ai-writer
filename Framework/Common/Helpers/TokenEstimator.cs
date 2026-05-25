@@ -1,40 +1,10 @@
-using System;
-using Microsoft.ML.Tokenizers;
-
 namespace TM.Framework.Common.Helpers
 {
     public static class TokenEstimator
     {
-        private static readonly Tokenizer _tokenizer;
-
-        static TokenEstimator()
-        {
-            try
-            {
-                _tokenizer = TiktokenTokenizer.CreateForModel("gpt-4");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[TokenEstimator] init err, fallback: {ex.Message}");
-                _tokenizer = null!;
-            }
-        }
-
         public static int CountTokens(string? text)
         {
             if (string.IsNullOrEmpty(text)) return 0;
-
-            if (_tokenizer != null)
-            {
-                try
-                {
-                    return _tokenizer.CountTokens(text);
-                }
-                catch
-                {
-                }
-            }
-
             return FallbackEstimate(text);
         }
 

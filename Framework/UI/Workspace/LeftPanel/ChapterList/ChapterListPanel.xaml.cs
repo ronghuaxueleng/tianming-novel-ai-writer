@@ -1,35 +1,33 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
-using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
+using TM.Modules.Generate.Elements.Chapter.Services;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Framework.AI.SemanticKernel.Plugins;
-using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Generated;
+using TM.Services.Modules.ProjectData.Models.Generate.ChapterPlanning;
 using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
 using TM.Framework.UI.Workspace.Services;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 {
     public partial class ChapterListPanel : UserControl
     {
         private readonly IGeneratedContentService _contentService;
+        private readonly ChapterService _chapterService;
         private readonly VolumeDesignService _volumeDesignService;
         private readonly ChapterListViewModel _viewModel;
+        private bool _hasLoggedFirstLoad;
 
         private UIStateCache? _uiStateCache;
         private UIStateCache UiStateCache => _uiStateCache ??= ServiceLocator.Get<UIStateCache>();
@@ -40,17 +38,15 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
         public event EventHandler<string>? ChapterDeleted;
 
-        public event EventHandler<NewChapterEventArgs>? NewChapterRequested;
-
         public ChapterListPanel()
         {
             InitializeComponent();
             _contentService = ServiceLocator.Get<IGeneratedContentService>();
+            _chapterService = ServiceLocator.Get<ChapterService>();
             _volumeDesignService = ServiceLocator.Get<VolumeDesignService>();
             _viewModel = new ChapterListViewModel(PanelComm);
             _viewModel.ChapterSelected += (s, chapter) => ChapterSelected?.Invoke(this, chapter);
             _viewModel.ChapterDeleted += (s, chapterId) => ChapterDeleted?.Invoke(this, chapterId);
-            _viewModel.NewChapterRequested += (s, args) => NewChapterRequested?.Invoke(this, args);
             _viewModel.SetRefreshCallback(LoadChaptersAsync);
             DataContext = _viewModel;
 
@@ -63,6 +59,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             PanelComm.NewChapterFromHomepageRequested += OnNewChapterFromHomepage;
 
             _volumeDesignService.DataChanged += OnVolumeDesignDataChanged;
+            _chapterService.DataChanged += OnVolumeDesignDataChanged;
             Unloaded += OnUnloaded;
 
             _ = LoadChaptersAsync();
@@ -71,11 +68,23 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
         private void OnUnloaded(object sender, RoutedEventArgs e)
         {
             _volumeDesignService.DataChanged -= OnVolumeDesignDataChanged;
+            _chapterService.DataChanged -= OnVolumeDesignDataChanged;
+            PanelComm.NewChapterFromHomepageRequested -= OnNewChapterFromHomepage;
             Unloaded -= OnUnloaded;
         }
 
+        private TM.Services.Framework.AI.SemanticKernel.SKChatService? _skChatService;
+
         private void OnVolumeDesignDataChanged(object? sender, EventArgs e)
         {
+            try
+            {
+                _skChatService ??= ServiceLocator.Get<TM.Services.Framework.AI.SemanticKernel.SKChatService>();
+                if (_skChatService.IsWorkspaceBatchGenerating)
+                    return;
+            }
+            catch { }
+
             if (!Dispatcher.CheckAccess())
             {
                 Dispatcher.BeginInvoke(new Action(() => _ = LoadChaptersAsync()));
@@ -100,25 +109,39 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
         {
             try
             {
-                await _volumeDesignService.InitializeAsync();
+                await System.Threading.Tasks.Task.WhenAll(
+                    _volumeDesignService.InitializeAsync(),
+                    _chapterService.InitializeAsync());
 
                 var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns()
                     .Where(v => v.VolumeNumber > 0)
                     .OrderBy(v => v.VolumeNumber)
                     .ToList();
 
-                var volumes = volumeDesigns.Select(MapToVolumeInfo).ToList();
+                var subscribedVolumes = volumeDesigns.Select(MapToVolumeInfo).ToList();
+                var subscribedVolumeNumbers = subscribedVolumes.Select(v => v.Number).ToHashSet();
+                var rewriteVolumes = _chapterService.GetRewriteCategories()
+                    .Select(MapToRewriteVolumeInfo)
+                    .Where(v => v.Number > 0)
+                    .Where(v => !subscribedVolumeNumbers.Contains(v.Number))
+                    .OrderBy(v => v.Order)
+                    .ToList();
+                var volumes = subscribedVolumes.Concat(rewriteVolumes).ToList();
 
                 var chapters = await _contentService.GetGeneratedChaptersAsync();
 
                 _viewModel.ShowEmptyGuide = volumes.Count == 0 && chapters.Count == 0;
-
                 _viewModel.BuildChapterTree(volumes, chapters);
+                UiStateCache.SetChapterState(volumes.Count, chapters.Count());
 
                 var totalWords = chapters.Sum(c => c.WordCount);
                 StatsText.Text = $"共 {chapters.Count()} 章 / {totalWords:N0} 字";
 
-                TM.App.Log($"[ChapterListPanel] 加载了 {volumes.Count} 个分类, {chapters.Count()} 个章节");
+                if (!_hasLoggedFirstLoad)
+                {
+                    _hasLoggedFirstLoad = true;
+                    TM.App.Log($"[ChapterListPanel] 加载了 {volumes.Count} 个分类, {chapters.Count()} 个章节");
+                }
             }
             catch (Exception ex)
             {
@@ -133,18 +156,51 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
                 : data.Name;
 
             if (string.IsNullOrWhiteSpace(name) && data.VolumeNumber > 0)
-            {
                 name = $"第{data.VolumeNumber}卷";
-            }
+
+            var isAutoCreated = string.IsNullOrEmpty(data.VolumeTitle)
+                             && data.StartChapter == 0
+                             && data.EndChapter == 0;
 
             return new VolumeInfo
             {
-                Id = $"vol{data.VolumeNumber}",
+                Id = isAutoCreated ? data.Id : $"vol{data.VolumeNumber}",
                 Name = name,
-                Icon = "📚",
+                Icon = isAutoCreated ? "Icon.Document" : "Icon.Books",
                 Number = data.VolumeNumber,
-                Order = data.VolumeNumber
+                Order = data.VolumeNumber,
+                Source = isAutoCreated ? "rewrite_vds" : "volume_design",
+                IsReadOnly = !isAutoCreated
             };
+        }
+
+        private static VolumeInfo MapToRewriteVolumeInfo(ChapterCategory category)
+        {
+            var volumeNumber = TryExtractVolumeNumber(category.Name);
+            return new VolumeInfo
+            {
+                Id = category.Id,
+                Name = category.Name,
+                Icon = string.IsNullOrWhiteSpace(category.Icon) ? "Icon.Document" : category.Icon,
+                Number = volumeNumber,
+                Order = volumeNumber > 0 ? volumeNumber : category.Order,
+                Source = "rewrite",
+                IsReadOnly = false
+            };
+        }
+
+        private static readonly System.Text.RegularExpressions.Regex _volNumRegex =
+            new(@"第\s*(\d+)\s*卷", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static int TryExtractVolumeNumber(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return 0;
+
+            var match = _volNumRegex.Match(name);
+            return match.Success && int.TryParse(match.Groups[1].Value, out var volumeNumber)
+                ? volumeNumber
+                : 0;
         }
 
         public void SelectChapter(string chapterId)
@@ -162,24 +218,15 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
         private void OnQuickAction_NewCategory(object sender, System.Windows.Input.MouseButtonEventArgs e)
         {
-            try
-            {
-                GlobalToast.Info("提示", "卷分类来自分卷设计（只读），请在分卷设计中管理卷分类");
-            }
-            catch (Exception ex)
-            {
-                GlobalToast.Error("操作失败", ex.Message);
-                TM.App.Log($"[ChapterListPanel] 提示跳转分卷设计失败: {ex.Message}");
-            }
-        }
+            var confirmed = StandardDialog.ShowConfirm(
+                "当前创建的分类仅用于润色测试使用。\n\n正式创作时会在生成章节时自动同步分卷结构，无需手动构建分类。\n\n是否继续创建？",
+                "创建分类提示",
+                Window.GetWindow(this));
+            if (!confirmed)
+                return;
 
-        private void OnOpenChapterFolder_Click(object sender, RoutedEventArgs e)
-        {
-            var path = TM.Framework.Common.Helpers.Storage.StoragePathHelper.GetProjectChaptersPath();
-            if (System.IO.Directory.Exists(path))
-                System.Diagnostics.Process.Start("explorer.exe", path);
-            else
-                GlobalToast.Warning("目录不存在", "章节目录尚未创建，请先生成章节内容");
+            if (_viewModel.AddCategoryCommand.CanExecute(null))
+                _viewModel.AddCategoryCommand.Execute(null);
         }
 
         private void OnQuickAction_Refresh(object sender, System.Windows.Input.MouseButtonEventArgs e)
@@ -202,22 +249,31 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("操作失败", ex.Message);
+                GlobalToast.Error("操作失败", $"操作失败：{ex.Message}");
                 TM.App.Log($"[ChapterListPanel] 开始创作跳转失败: {ex.Message}");
             }
         }
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ChapterListViewModel : INotifyPropertyChanged
     {
         private readonly IGeneratedContentService _contentService;
+        private readonly ChapterService _chapterService;
         private readonly VolumeDesignService _volumeDesignService;
         private readonly PanelCommunicationService _panelComm;
         private Func<Task>? _refreshCallback;
         private bool _showEmptyGuide;
 
-        public ObservableCollection<TreeNodeItem> ChapterTree { get; } = new();
+        private const int LazyLoadThreshold = 200;
+        private IList<ChapterInfo> _allChapters = Array.Empty<ChapterInfo>();
+        private readonly Dictionary<TreeNodeItem, (IList<ChapterInfo> Chapters, string OriginalName)> _lazyVolumeChapters = new();
+        private static readonly object _placeholderTag = new();
+        private static readonly System.Text.RegularExpressions.Regex _volNumRegex =
+            new(@"第\s*(\d+)\s*卷", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        public RangeObservableCollection<TreeNodeItem> ChapterTree { get; } = new();
 
         public ICommand SelectChapterCommand { get; }
         public ICommand AddCategoryCommand { get; }
@@ -225,6 +281,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
         public ICommand DeleteAllCommand { get; }
         public ICommand RefreshCommand { get; }
         public ICommand AddChapterCommand { get; }
+        public ICommand AddChapterWithConfirmCommand { get; }
 
         public bool ShowEmptyGuide
         {
@@ -243,14 +300,11 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
         public event EventHandler<string>? ChapterDeleted;
 
-        #pragma warning disable CS0067
-        public event EventHandler<NewChapterEventArgs>? NewChapterRequested;
-        #pragma warning restore CS0067
-
         public ChapterListViewModel(PanelCommunicationService panelComm)
         {
             _panelComm = panelComm;
             _contentService = ServiceLocator.Get<IGeneratedContentService>();
+            _chapterService = ServiceLocator.Get<ChapterService>();
             _volumeDesignService = ServiceLocator.Get<VolumeDesignService>();
             SelectChapterCommand = new RelayCommand(OnSelectChapter);
             AddCategoryCommand = new AsyncRelayCommand(OnAddCategoryAsync);
@@ -258,6 +312,18 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             DeleteAllCommand = new AsyncRelayCommand(OnDeleteAllAsync);
             RefreshCommand = new AsyncRelayCommand(OnRefreshAsync);
             AddChapterCommand = new AsyncRelayCommand(OnAddChapterAsync);
+            AddChapterWithConfirmCommand = new AsyncRelayCommand(OnAddChapterWithConfirmAsync);
+        }
+
+        private async Task OnAddChapterWithConfirmAsync()
+        {
+            var confirmed = StandardDialog.ShowConfirm(
+                "当前新建的章节仅用于润色测试使用。\n\n正式创作时会在生成章节时自动创建，无需手动新建。\n\n是否继续新建？",
+                "新建章节提示");
+            if (!confirmed)
+                return;
+
+            await OnAddChapterAsync();
         }
 
         public void SetRefreshCallback(Func<Task> callback)
@@ -278,15 +344,43 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
         {
             try
             {
-                GlobalToast.Info("提示", "卷分类来自分卷设计（只读），请在分卷设计中管理卷分类");
+                await _chapterService.InitializeAsync();
+
+                const string categoryName = "第1卷";
+                var existing = _chapterService.GetRewriteCategories();
+                if (existing.Any(c => string.Equals(c.Name, categoryName, StringComparison.Ordinal)))
+                {
+                    GlobalToast.Warning("分类已存在", "第1卷仿写分类已存在，可直接新建章节");
+                    return;
+                }
+
+                var category = new ChapterCategory
+                {
+                    Name = categoryName,
+                    Icon = "Icon.Document",
+                    Order = 1,
+                    IsEnabled = true
+                };
+
+                var added = await _chapterService.AddRewriteCategoryAsync(category);
+                if (!added)
+                {
+                    GlobalToast.Warning("分类已存在", "第1卷已在订阅分卷中存在，可直接新建章节");
+                    return;
+                }
+
+                TM.App.Log($"[ChapterListPanel] 仿写路径新建第1卷分类（ChapterService）");
+
+                if (_refreshCallback != null)
+                    await _refreshCallback();
+
+                GlobalToast.Success("分类已创建", "第1卷已添加，可开始新建章节");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("操作失败", ex.Message);
-                TM.App.Log($"[ChapterListPanel] 提示跳转分卷设计失败: {ex.Message}");
+                GlobalToast.Error("创建失败", $"创建失败：{ex.Message}");
+                TM.App.Log($"[ChapterListPanel] 新建仿写分类失败: {ex.Message}");
             }
-
-            await Task.CompletedTask;
         }
 
         private async Task OnDeleteCategoryAsync(object? param)
@@ -299,7 +393,56 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
             if (node.Tag is VolumeInfo volume)
             {
-                GlobalToast.Info("提示", "卷分类来自分卷设计（只读），请在分卷设计中管理卷分类");
+                if (volume.IsReadOnly)
+                {
+                    GlobalToast.Info("提示", "该卷来自分卷设计（只读），请在分卷设计中管理");
+                    return;
+                }
+
+                if (!StandardDialog.ShowConfirm($"确定要删除仿写分类「{volume.Name}」吗？\n\n该分类下的章节内容将一并删除。", "确认删除"))
+                    return;
+
+                try
+                {
+                    var chapters = await _contentService.GetGeneratedChaptersAsync();
+                    var volumeChapters = chapters.Where(c => c.VolumeNumber == volume.Number).ToList();
+                    var deletedCount = 0;
+                    foreach (var ch in volumeChapters)
+                    {
+                        var ok = await _contentService.DeleteChapterAsync(ch.Id);
+                        if (ok || !_contentService.ChapterExists(ch.Id))
+                        {
+                            ChapterDeleted?.Invoke(this, ch.Id);
+                            deletedCount++;
+                        }
+                    }
+                    if (deletedCount > 0)
+                        TM.App.Log($"[ChapterListPanel] 级联删除: {volume.Name} 下 {deletedCount} 个章节已删除");
+
+                    if (volume.Source == "rewrite_vds")
+                    {
+                        _volumeDesignService.DeleteVolumeDesign(volume.Id);
+                        TM.App.Log($"[ChapterListPanel] 仿写自动分卷已从 VolumeDesignService 删除: {volume.Name} ({volume.Id})");
+                    }
+                    else
+                    {
+                        await _chapterService.DeleteRewriteCategoryAsync(volume.Name);
+                        TM.App.Log($"[ChapterListPanel] 仿写分类已删除: {volume.Name}");
+                    }
+
+                    CurrentChapterTracker.Clear();
+
+                    if (_refreshCallback != null)
+                        await _refreshCallback();
+
+                    _panelComm.PublishRefreshChapterList();
+                    GlobalToast.Success("分类已删除", $"「{volume.Name}」及 {deletedCount} 个章节已删除");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[ChapterListPanel] 删除失败: {ex.Message}");
+                    GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
+                }
                 return;
             }
             else if (node.Tag is ChapterInfo chapter)
@@ -349,14 +492,22 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
                     return;
                 }
 
+                var rewriteCategories = _chapterService.GetRewriteCategories().ToList();
+                var subscribedVolumes = _volumeDesignService.GetAllVolumeDesigns()
+                    .Where(v => v.VolumeNumber > 0)
+                    .ToList();
+
                 var chapterCount = chapters.Count;
+                var subscribedNote = subscribedVolumes.Count > 0
+                    ? $"\n\n注意：{subscribedVolumes.Count} 个订阅分卷（来自「分卷设计」）不会被删除，如需删除请前往【分卷设计】管理。"
+                    : string.Empty;
                 if (!StandardDialog.ShowConfirm(
-                    $"确定要删除所有章节内容吗？\n\n将删除：{chapterCount} 个章节\n\n此操作不可撤销！", 
-                    "⚠️ 全部删除"))
+                    $"确定要删除所有章节内容吗？\n\n将删除：{chapterCount} 个章节{(rewriteCategories.Count > 0 ? $"、{rewriteCategories.Count} 个手动分类" : "")}{subscribedNote}\n\n此操作不可撤销！",
+                    "全部删除"))
                     return;
 
                 if (!StandardDialog.ShowConfirm(
-                    "⚠️ 最终确认 ⚠️\n\n这将永久删除所有章节内容！\n\n请再次确认是否继续？",
+                    "最终确认\n\n这将永久删除所有章节内容！\n\n请再次确认是否继续？",
                     "危险操作"))
                     return;
 
@@ -379,6 +530,19 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
                     deletedChapters++;
                 }
 
+                foreach (var cat in rewriteCategories)
+                {
+                    try
+                    {
+                        await _chapterService.DeleteRewriteCategoryAsync(cat.Name);
+                        TM.App.Log($"[ChapterListPanel] 全部删除：已清理仿写分类 {cat.Name}");
+                    }
+                    catch (Exception catEx)
+                    {
+                        TM.App.Log($"[ChapterListPanel] 清理仿写分类失败: {cat.Name} - {catEx.Message}");
+                    }
+                }
+
                 if (_refreshCallback != null)
                     await _refreshCallback();
 
@@ -390,90 +554,133 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
                 }
                 else
                 {
-                    GlobalToast.Success("清空成功", $"已删除 {deletedChapters} 个章节");
+                    GlobalToast.Success("清空成功", $"已删除 {deletedChapters} 个章节" + (rewriteCategories.Count > 0 ? $"、{rewriteCategories.Count} 个分类" : ""));
                 }
-                TM.App.Log($"[ChapterListPanel] 全部删除完成: 成功={deletedChapters}, 失败={failedChapters}");
+                TM.App.Log($"[ChapterListPanel] 全部删除完成: 章节成功={deletedChapters}, 失败={failedChapters}, 分类={rewriteCategories.Count}");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
                 TM.App.Log($"[ChapterListPanel] 全部删除失败: {ex.Message}");
             }
         }
 
         public void BuildChapterTree(IList<VolumeInfo> volumes, IList<ChapterInfo> chapters)
         {
-            ChapterTree.Clear();
+            foreach (var kv in _lazyVolumeChapters)
+                kv.Key.PropertyChanged -= OnVolumeNodePropertyChanged;
+            _lazyVolumeChapters.Clear();
+
+            _allChapters = chapters;
+
+            var useLazyLoad = chapters.Count > LazyLoadThreshold;
+            var nodes = new List<TreeNodeItem>();
 
             foreach (var volume in volumes.OrderBy(v => v.Order))
             {
+                var volumeChapters = ((volume.Source == "rewrite" || volume.Source == "rewrite_vds")
+                    ? chapters.Where(c => c.VolumeNumber == volume.Number).OrderBy(c => c.ChapterNumber)
+                    : chapters.Where(c => c.Id.StartsWith(volume.Id + "_")).OrderBy(c => c.ChapterNumber))
+                    .ToList();
+
                 var volumeNode = new TreeNodeItem
                 {
-                    Name = volume.Name,
-                    Icon = volume.Icon,
+                    Name = useLazyLoad && volumeChapters.Count > 0
+                        ? $"{volume.Name} ({volumeChapters.Count})"
+                        : volume.Name,
+                    Icon = IconHelper.TryGet(volume.Icon),
                     Tag = volume,
                     Level = 1,
-                    IsExpanded = true,
-                    ShowChildCount = true
+                    IsExpanded = !useLazyLoad,
+                    ShowChildCount = !useLazyLoad
                 };
 
-                var volumeChapters = chapters
-                    .Where(c => c.Id.StartsWith(volume.Id + "_"))
-                    .OrderBy(c => c.ChapterNumber);
-
-                foreach (var chapter in volumeChapters)
+                if (useLazyLoad && volumeChapters.Count > 0)
                 {
-                    volumeNode.Children.Add(new TreeNodeItem
-                    {
-                        Name = "    " + chapter.Title,
-                        Icon = "📄",
-                        Tag = chapter,
-                        Level = 2,
-                        ShowChildCount = false,
-                        ShowLevelIndicator = false,
-                        ShowIcon = false
-                    });
+                    volumeNode.Children.Add(new TreeNodeItem { Tag = _placeholderTag });
+                    _lazyVolumeChapters[volumeNode] = (volumeChapters, volume.Name);
+                    volumeNode.PropertyChanged += OnVolumeNodePropertyChanged;
+                }
+                else
+                {
+                    foreach (var chapter in volumeChapters)
+                        volumeNode.Children.Add(CreateChapterNode(chapter));
                 }
 
-                ChapterTree.Add(volumeNode);
+                nodes.Add(volumeNode);
             }
 
             var categorizedChapterIds = volumes
-                .SelectMany(v => chapters.Where(c => c.Id.StartsWith(v.Id + "_")).Select(c => c.Id))
+                .SelectMany(v => (v.Source == "rewrite" || v.Source == "rewrite_vds")
+                    ? chapters.Where(c => c.VolumeNumber == v.Number).Select(c => c.Id)
+                    : chapters.Where(c => c.Id.StartsWith(v.Id + "_")).Select(c => c.Id))
                 .ToHashSet();
 
             var uncategorizedChapters = chapters
                 .Where(c => !categorizedChapterIds.Contains(c.Id))
                 .OrderBy(c => c.VolumeNumber)
-                .ThenBy(c => c.ChapterNumber);
+                .ThenBy(c => c.ChapterNumber)
+                .ToList();
 
-            if (uncategorizedChapters.Any())
+            if (uncategorizedChapters.Count > 0)
             {
                 var uncategorizedNode = new TreeNodeItem
                 {
-                    Name = "未归类",
-                    Icon = "📄",
+                    Name = useLazyLoad
+                        ? $"未归类 ({uncategorizedChapters.Count})"
+                        : "未归类",
+                    Icon = IconHelper.Get("Icon.Document"),
                     Level = 1,
-                    IsExpanded = true,
-                    ShowChildCount = true
+                    IsExpanded = !useLazyLoad,
+                    ShowChildCount = !useLazyLoad
                 };
 
-                foreach (var chapter in uncategorizedChapters)
+                if (useLazyLoad)
                 {
-                    uncategorizedNode.Children.Add(new TreeNodeItem
-                    {
-                        Name = "    " + chapter.Title,
-                        Icon = "📄",
-                        Tag = chapter,
-                        Level = 2,
-                        ShowChildCount = false,
-                        ShowLevelIndicator = false,
-                        ShowIcon = false
-                    });
+                    uncategorizedNode.Children.Add(new TreeNodeItem { Tag = _placeholderTag });
+                    _lazyVolumeChapters[uncategorizedNode] = (uncategorizedChapters, "未归类");
+                    uncategorizedNode.PropertyChanged += OnVolumeNodePropertyChanged;
+                }
+                else
+                {
+                    foreach (var chapter in uncategorizedChapters)
+                        uncategorizedNode.Children.Add(CreateChapterNode(chapter));
                 }
 
-                ChapterTree.Add(uncategorizedNode);
+                nodes.Add(uncategorizedNode);
             }
+
+            ChapterTree.ReplaceAll(nodes);
+        }
+
+        private static TreeNodeItem CreateChapterNode(ChapterInfo chapter)
+        {
+            return new TreeNodeItem
+            {
+                Name = "    " + chapter.Title,
+                Icon = IconHelper.Get("Icon.Document"),
+                Tag = chapter,
+                Level = 2,
+                ShowChildCount = false,
+                ShowLevelIndicator = false,
+                ShowIcon = false
+            };
+        }
+
+        private void OnVolumeNodePropertyChanged(object? sender, PropertyChangedEventArgs e)
+        {
+            if (e.PropertyName != nameof(TreeNodeItem.IsExpanded)) return;
+            if (sender is not TreeNodeItem volumeNode || !volumeNode.IsExpanded) return;
+            if (!_lazyVolumeChapters.TryGetValue(volumeNode, out var entry)) return;
+
+            volumeNode.PropertyChanged -= OnVolumeNodePropertyChanged;
+            _lazyVolumeChapters.Remove(volumeNode);
+
+            var chapterNodes = entry.Chapters.Select(CreateChapterNode).ToList();
+            volumeNode.Children.ReplaceAll(chapterNodes);
+
+            volumeNode.Name = entry.OriginalName;
+            volumeNode.ShowChildCount = true;
         }
 
         private void OnSelectChapter(object? param)
@@ -490,28 +697,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
         public ChapterInfo? FindChapterById(string chapterId)
         {
-            foreach (var root in ChapterTree)
-            {
-                var chapter = FindChapterInNode(root, chapterId);
-                if (chapter != null)
-                    return chapter;
-            }
-            return null;
-        }
-
-        private ChapterInfo? FindChapterInNode(TreeNodeItem node, string chapterId)
-        {
-            if (node.Tag is ChapterInfo chapter && chapter.Id == chapterId)
-                return chapter;
-
-            foreach (var child in node.Children)
-            {
-                var found = FindChapterInNode(child, chapterId);
-                if (found != null)
-                    return found;
-            }
-
-            return null;
+            return _allChapters.FirstOrDefault(c => c.Id == chapterId);
         }
 
         #region 新建章级
@@ -549,7 +735,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
                 TM.App.Log($"[ChapterListPanel] 新建章节（仿写路径）: {chapterId}, 标题: {chapterTitle}");
 
-                var writer = new WriterPlugin();
+                var writer = ServiceLocator.Get<WriterPlugin>();
                 var saved = await writer.SaveExternalChapterAsync(
                     System.Threading.CancellationToken.None,
                     chapterTitle,
@@ -565,7 +751,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
                 TM.App.Log($"[ChapterListPanel] 新建章节失败: {ex.Message}");
             }
         }
@@ -580,7 +766,7 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             }
 
             var input = StandardDialog.ShowInput(
-                $"无法根据分卷范围推导第{suggestedChapterNumber}章所属卷，请输入目标章节（如：第2卷第3章 或 vol2_ch3）：",
+                "请输入目标章节",
                 "新建章节",
                 $"第{suggestedChapterNumber}章");
 
@@ -630,7 +816,8 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             }
 
             await _volumeDesignService.InitializeAsync();
-            var designs = _volumeDesignService.GetAllVolumeDesigns();
+            var designs = _volumeDesignService.GetAllVolumeDesigns()
+                .ToList();
 
             var matches = designs
                 .Where(v => v.VolumeNumber > 0)
@@ -645,11 +832,30 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
 
             if (matches.Count == 0)
             {
+                var allVolumes = designs.Where(v => v.VolumeNumber > 0).ToList();
+                if (allVolumes.Count == 1)
+                    return (true, allVolumes[0].VolumeNumber, null);
+
+                var rewriteCategories = _chapterService.GetRewriteCategories();
+                if (rewriteCategories.Count == 1)
+                {
+                    var rewriteVol = TryExtractVolumeNumberFromName(rewriteCategories[0].Name);
+                    if (rewriteVol > 0)
+                        return (true, rewriteVol, null);
+                }
+
                 return (false, 0, $"未找到包含第{chapterNumber}章的分卷范围，请在分卷设计中配置章节范围或明确卷号。 ");
             }
 
             var hint = string.Join("，", matches.Select(m => $"第{m.VolumeNumber}卷"));
             return (false, 0, $"多个分卷范围命中第{chapterNumber}章：{hint}，请明确卷号。 ");
+        }
+
+        private static int TryExtractVolumeNumberFromName(string name)
+        {
+            if (string.IsNullOrWhiteSpace(name)) return 0;
+            var m = _volNumRegex.Match(name);
+            return m.Success && int.TryParse(m.Groups[1].Value, out var n) ? n : 0;
         }
 
         #endregion
@@ -659,12 +865,4 @@ namespace TM.Framework.UI.Workspace.LeftPanel.ChapterList
             => PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(name));
     }
 
-    public class NewChapterEventArgs : EventArgs
-    {
-        public int VolumeNumber { get; set; }
-        public int ChapterNumber { get; set; }
-        public string ChapterId { get; set; } = string.Empty;
-        public string ChapterTitle { get; set; } = string.Empty;
-        public string InitialContent { get; set; } = string.Empty;
-    }
 }

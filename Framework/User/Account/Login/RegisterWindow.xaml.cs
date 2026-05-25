@@ -1,13 +1,13 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Account.Login
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class RegisterWindow : Window
     {
         public string? RegisteredUsername { get; private set; }
@@ -84,6 +84,13 @@ namespace TM.Framework.User.Account.Login
                 return;
             }
 
+            if (System.Text.RegularExpressions.Regex.IsMatch(username, @"^\d+$"))
+            {
+                ShowError("账号不能为纯数字");
+                UsernameTextBox.Focus();
+                return;
+            }
+
             if (string.IsNullOrWhiteSpace(password))
             {
                 ShowError("请输入密码");
@@ -94,6 +101,20 @@ namespace TM.Framework.User.Account.Login
             if (password.Length < 6)
             {
                 ShowError("密码至少6位");
+                PasswordBox.Focus();
+                return;
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(password, "[a-zA-Z]"))
+            {
+                ShowError("密码必须包含字母");
+                PasswordBox.Focus();
+                return;
+            }
+
+            if (!System.Text.RegularExpressions.Regex.IsMatch(password, "[0-9]"))
+            {
+                ShowError("密码必须包含数字");
                 PasswordBox.Focus();
                 return;
             }
@@ -118,9 +139,10 @@ namespace TM.Framework.User.Account.Login
             try
             {
                 var result = await _loginService.CreateAccountAsync(
-                    username, 
+                    username,
                     password,
-                    string.IsNullOrWhiteSpace(licenseKey) ? null : licenseKey);
+                    string.IsNullOrWhiteSpace(licenseKey) ? null : licenseKey,
+                    string.IsNullOrWhiteSpace(inviteCode) ? null : inviteCode);
 
                 if (!result.Success)
                 {
@@ -130,6 +152,11 @@ namespace TM.Framework.User.Account.Login
 
                 RegisteredUsername = username;
                 RegisteredPassword = password;
+
+                if (!string.IsNullOrEmpty(result.InviteCode))
+                {
+                    GlobalToast.Success("注册成功", $"你的专属邀请码：{result.InviteCode}\n分享给好友，双方各得3天时长");
+                }
 
                 DialogResult = true;
                 Close();

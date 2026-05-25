@@ -1,11 +1,11 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Encodings.Web;
 using System.Text.RegularExpressions;
-using System.Text.Unicode;
+using System.Threading;
 using TM.Framework.Common.Helpers.Id;
 
 namespace TM.Framework.SystemSettings.Proxy.Services
@@ -43,6 +43,16 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
         private readonly string _rulesFile;
         private List<ProxyRule> _rules = new();
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
+        private int _rulesVersion;
+        private IReadOnlyList<ProxyRule>? _cachedEnabledRules;
+
+        private void InvalidateRuleCache() => _cachedEnabledRules = null;
+
+        private static readonly ConcurrentDictionary<string, Lazy<Regex>> _regexCache = new();
+
+        private static Regex GetOrAddRegex(string pattern)
+            => _regexCache.GetOrAdd(pattern, p => new Lazy<Regex>(() => new Regex(p, RegexOptions.IgnoreCase | RegexOptions.Compiled))).Value;
 
         private static readonly object _debugLogLock = new();
         private static readonly HashSet<string> _debugLoggedKeys = new();
@@ -65,50 +75,120 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             System.Diagnostics.Debug.WriteLine($"[ProxyRuleService] {key}: {ex.Message}");
         }
 
+        private static readonly string BuiltInIdPrefix = "BUILTIN_";
+
+        private static readonly List<ProxyRule> _builtInRules = new()
+        {
+            new ProxyRule
+            {
+                Id = "BUILTIN_SELF_SERVER",
+                Type = RuleType.Domain,
+                Pattern = "zyzmczmc.xyz",
+                Action = ProxyAction.Direct,
+                Priority = -1000,
+                Enabled = true,
+                Description = "[内置] 程序服务器直连"
+            },
+            new ProxyRule
+            {
+                Id = "BUILTIN_ALIYUN",
+                Type = RuleType.Wildcard,
+                Pattern = "*.aliyuncs.com",
+                Action = ProxyAction.Direct,
+                Priority = -999,
+                Enabled = true,
+                Description = "[内置] 阿里云服务直连"
+            },
+            new ProxyRule
+            {
+                Id = "BUILTIN_LOCALHOST",
+                Type = RuleType.Domain,
+                Pattern = "localhost",
+                Action = ProxyAction.Direct,
+                Priority = -998,
+                Enabled = true,
+                Description = "[内置] 本地服务直连"
+            },
+            new ProxyRule
+            {
+                Id = "BUILTIN_LOCAL_IP",
+                Type = RuleType.Wildcard,
+                Pattern = "127.*",
+                Action = ProxyAction.Direct,
+                Priority = -997,
+                Enabled = true,
+                Description = "[内置] 本地IP直连"
+            },
+        };
+
         public ProxyRuleService()
         {
             _rulesFile = StoragePathHelper.GetFilePath("Framework", "Network/Proxy", "proxy_rules.json");
-            LoadRules();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    await LoadRulesAsync().ConfigureAwait(false);
+                    EnsureBuiltInRules();
+                }
+                catch (Exception ex) { TM.App.Log($"[ProxyRuleService] 初始化失败: {ex.Message}"); }
+            });
         }
 
+        public static bool IsBuiltInRule(string ruleId) => ruleId.StartsWith(BuiltInIdPrefix);
+
         public List<ProxyRule> GetRules() => new List<ProxyRule>(_rules.OrderBy(r => r.Priority));
+
+        public List<ProxyRule> GetBuiltInRules() => new List<ProxyRule>(_builtInRules);
 
         public void AddRule(ProxyRule rule)
         {
             rule.Priority = _rules.Any() ? _rules.Max(r => r.Priority) + 1 : 1;
             _rules.Add(rule);
-            SaveRules();
+            System.Threading.Interlocked.Increment(ref _rulesVersion);
+            InvalidateRuleCache();
+            _ = SaveRulesAsync();
         }
 
         public void UpdateRule(ProxyRule rule)
         {
+            if (IsBuiltInRule(rule.Id)) return;
             var index = _rules.FindIndex(r => r.Id == rule.Id);
             if (index >= 0)
             {
                 _rules[index] = rule;
-                SaveRules();
+                System.Threading.Interlocked.Increment(ref _rulesVersion);
+                InvalidateRuleCache();
+                _ = SaveRulesAsync();
             }
         }
 
         public void DeleteRule(string ruleId)
         {
+            if (IsBuiltInRule(ruleId)) return;
             _rules.RemoveAll(r => r.Id == ruleId);
+            System.Threading.Interlocked.Increment(ref _rulesVersion);
+            InvalidateRuleCache();
             ReorderPriorities();
-            SaveRules();
+            _ = SaveRulesAsync();
         }
 
         public void ToggleRule(string ruleId, bool enabled)
         {
+            if (IsBuiltInRule(ruleId)) return;
             var rule = _rules.FirstOrDefault(r => r.Id == ruleId);
             if (rule != null)
             {
                 rule.Enabled = enabled;
-                SaveRules();
+                System.Threading.Interlocked.Increment(ref _rulesVersion);
+                InvalidateRuleCache();
+                _ = SaveRulesAsync();
             }
         }
 
         public void MovePriority(string ruleId, bool moveUp)
         {
+            if (IsBuiltInRule(ruleId)) return;
             var rule = _rules.FirstOrDefault(r => r.Id == ruleId);
             if (rule == null) return;
 
@@ -117,18 +197,23 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
             if (moveUp && index > 0)
             {
-                var temp = sortedRules[index - 1].Priority;
-                sortedRules[index - 1].Priority = rule.Priority;
+                var neighbor = sortedRules[index - 1];
+                if (IsBuiltInRule(neighbor.Id)) return;
+                var temp = neighbor.Priority;
+                neighbor.Priority = rule.Priority;
                 rule.Priority = temp;
             }
             else if (!moveUp && index < sortedRules.Count - 1)
             {
-                var temp = sortedRules[index + 1].Priority;
-                sortedRules[index + 1].Priority = rule.Priority;
+                var neighbor = sortedRules[index + 1];
+                if (IsBuiltInRule(neighbor.Id)) return;
+                var temp = neighbor.Priority;
+                neighbor.Priority = rule.Priority;
                 rule.Priority = temp;
             }
 
-            SaveRules();
+            InvalidateRuleCache();
+            _ = SaveRulesAsync();
         }
 
         public ProxyAction? MatchRule(string target)
@@ -138,7 +223,8 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
         public ProxyRule? MatchRuleDetail(string target)
         {
-            var enabledRules = _rules.Where(r => r.Enabled).OrderBy(r => r.Priority);
+            var enabledRules = _cachedEnabledRules ??=
+                _rules.Where(r => r.Enabled).OrderBy(r => r.Priority).ToList();
 
             foreach (var rule in enabledRules)
             {
@@ -166,10 +252,10 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
                     case RuleType.Wildcard:
                         var regexPattern = "^" + Regex.Escape(rule.Pattern).Replace("\\*", ".*").Replace("\\?", ".") + "$";
-                        return Regex.IsMatch(target, regexPattern, RegexOptions.IgnoreCase);
+                        return GetOrAddRegex(regexPattern).IsMatch(target);
 
                     case RuleType.Regex:
-                        return Regex.IsMatch(target, rule.Pattern, RegexOptions.IgnoreCase);
+                        return GetOrAddRegex(rule.Pattern).IsMatch(target);
 
                     default:
                         return false;
@@ -182,28 +268,23 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        public void ImportRules(string filePath, bool append = false)
+        public async System.Threading.Tasks.Task ImportRulesAsync(string filePath, bool append = false)
         {
             try
             {
-                var json = File.ReadAllText(filePath);
+                var json = await System.IO.File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                 var importedRules = JsonSerializer.Deserialize<List<ProxyRule>>(json);
 
                 if (importedRules != null)
                 {
-                    if (!append)
-                    {
-                        _rules.Clear();
-                    }
-
+                    if (!append) _rules.Clear();
                     foreach (var rule in importedRules)
-                    {
                         rule.Id = ShortIdGenerator.New("D");
-                    }
-
                     _rules.AddRange(importedRules);
                     ReorderPriorities();
-                    SaveRules();
+                    EnsureBuiltInRules();
+                    InvalidateRuleCache();
+                    await SaveRulesAsync().ConfigureAwait(false);
                 }
             }
             catch (Exception ex)
@@ -213,13 +294,13 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        public void ExportRules(string filePath)
+        public async System.Threading.Tasks.Task ExportRulesAsync(string filePath)
         {
             try
             {
                 var json = JsonSerializer.Serialize(_rules, JsonHelper.CnDefault);
-                var tmpEx = filePath + ".tmp";
-                File.WriteAllText(tmpEx, json);
+                var tmpEx = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmpEx, json).ConfigureAwait(false);
                 File.Move(tmpEx, filePath, overwrite: true);
             }
             catch (Exception ex)
@@ -248,7 +329,9 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
             _rules.AddRange(presetRules);
             ReorderPriorities();
-            SaveRules();
+            EnsureBuiltInRules();
+            InvalidateRuleCache();
+            _ = SaveRulesAsync();
         }
 
         private List<ProxyRule> GetAdBlockRules()
@@ -290,59 +373,104 @@ namespace TM.Framework.SystemSettings.Proxy.Services
         private void ReorderPriorities()
         {
             var sortedRules = _rules.OrderBy(r => r.Priority).ToList();
-            for (int i = 0; i < sortedRules.Count; i++)
+            int userIndex = 1;
+            foreach (var r in sortedRules)
             {
-                sortedRules[i].Priority = i + 1;
+                if (!IsBuiltInRule(r.Id))
+                {
+                    r.Priority = userIndex++;
+                }
             }
         }
 
-        private void LoadRules()
+        private async System.Threading.Tasks.Task LoadRulesAsync()
         {
+            var loadVersion = System.Threading.Volatile.Read(ref _rulesVersion);
             try
             {
                 if (File.Exists(_rulesFile))
                 {
-                    var json = File.ReadAllText(_rulesFile);
+                    var json = await File.ReadAllTextAsync(_rulesFile).ConfigureAwait(false);
                     var rules = JsonSerializer.Deserialize<List<ProxyRule>>(json);
                     if (rules != null)
                     {
+                        if (loadVersion != System.Threading.Volatile.Read(ref _rulesVersion))
+                            return;
                         _rules = rules;
+                        InvalidateRuleCache();
                     }
                 }
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProxyRuleService] 加载规则失败: {ex.Message}");
+                TM.App.Log($"[ProxyRuleService] 异步加载规则失败: {ex.Message}");
             }
         }
 
-        private void SaveRules()
+        private void EnsureBuiltInRules()
         {
-            try
+            var existingBuiltInIds = new HashSet<string>(_rules.Where(r => IsBuiltInRule(r.Id)).Select(r => r.Id));
+            bool changed = false;
+
+            foreach (var builtIn in _builtInRules)
             {
-                var json = JsonSerializer.Serialize(_rules, JsonHelper.CnDefault);
-                var tmpR = _rulesFile + ".tmp";
-                File.WriteAllText(tmpR, json);
-                File.Move(tmpR, _rulesFile, overwrite: true);
+                if (!existingBuiltInIds.Contains(builtIn.Id))
+                {
+                    _rules.Add(new ProxyRule
+                    {
+                        Id = builtIn.Id,
+                        Type = builtIn.Type,
+                        Pattern = builtIn.Pattern,
+                        Action = builtIn.Action,
+                        Priority = builtIn.Priority,
+                        Enabled = builtIn.Enabled,
+                        Description = builtIn.Description
+                    });
+                    changed = true;
+                }
+                else
+                {
+                    var existing = _rules.First(r => r.Id == builtIn.Id);
+                    if (existing.Pattern != builtIn.Pattern || existing.Action != builtIn.Action ||
+                        existing.Type != builtIn.Type || !existing.Enabled || existing.Priority != builtIn.Priority)
+                    {
+                        existing.Pattern = builtIn.Pattern;
+                        existing.Action = builtIn.Action;
+                        existing.Type = builtIn.Type;
+                        existing.Description = builtIn.Description;
+                        existing.Priority = builtIn.Priority;
+                        existing.Enabled = true;
+                        changed = true;
+                    }
+                }
             }
-            catch (Exception ex)
+
+            _rules.RemoveAll(r => IsBuiltInRule(r.Id) && !_builtInRules.Any(b => b.Id == r.Id));
+
+            if (changed)
             {
-                TM.App.Log($"[ProxyRuleService] 保存规则失败: {ex.Message}");
+                InvalidateRuleCache();
+                _ = SaveRulesAsync();
             }
         }
 
         private async System.Threading.Tasks.Task SaveRulesAsync()
         {
+            var json = JsonSerializer.Serialize(_rules, JsonHelper.CnDefault);
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var json = JsonSerializer.Serialize(_rules, JsonHelper.CnDefault);
-                var tmpRa = _rulesFile + ".tmp";
-                await File.WriteAllTextAsync(tmpRa, json);
+                var tmpRa = _rulesFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmpRa, json).ConfigureAwait(false);
                 File.Move(tmpRa, _rulesFile, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ProxyRuleService] 异步保存规则失败: {ex.Message}");
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
     }

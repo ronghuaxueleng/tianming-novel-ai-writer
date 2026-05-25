@@ -1,14 +1,13 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using System.Reflection;
-using System.Linq;
 using System.Windows;
-using TM.Framework.Common.Controls.Dialogs;
 using TM.Modules.Design.SmartParsing.BookAnalysis.Crawler;
 using ChapterInfo = TM.Modules.Design.SmartParsing.BookAnalysis.Crawler.ChapterInfo;
 
 namespace TM.Modules.Design.SmartParsing.BookAnalysis.Dialogs
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class CrawlOptionsDialog : Window
     {
         public CrawlOptions? Options { get; private set; }

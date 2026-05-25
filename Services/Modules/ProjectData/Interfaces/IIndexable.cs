@@ -1,4 +1,4 @@
-namespace TM.Services.Modules.ProjectData.Interfaces
+﻿namespace TM.Services.Modules.ProjectData.Interfaces
 {
     public interface IIndexable
     {

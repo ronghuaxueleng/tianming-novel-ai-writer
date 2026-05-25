@@ -11,15 +11,15 @@ namespace TM.Framework.UI.Workspace.Services
 
         public event Action<string>? ChapterDeleted;
 
-        public event Action<string, string, string, bool>? NewChapterRequested;
-
         public event Action? RefreshChapterListRequested;
 
         public event Action<string, string, string>? ContentGenerated;
 
         public event Action<bool>? ShowPlanViewChanged;
 
-        public event Action<string, string, string>? ShowDiffRequested;
+        public event Action<string, string, string, bool>? ShowDiffRequested;
+
+        public event Action<string, string, string, string>? ShowFileDiffRequested;
 
         public event Action<Guid, Guid?>? HighlightExecutionRequested;
 
@@ -45,9 +45,6 @@ namespace TM.Framework.UI.Workspace.Services
         public void PublishChapterDeleted(string id)
             => ChapterDeleted?.Invoke(id);
 
-        public void PublishNewChapterRequested(string chapterId, string chapterTitle, string initialContent, bool isNew)
-            => NewChapterRequested?.Invoke(chapterId, chapterTitle, initialContent, isNew);
-
         public void PublishRefreshChapterList()
             => RefreshChapterListRequested?.Invoke();
 
@@ -57,8 +54,11 @@ namespace TM.Framework.UI.Workspace.Services
         public void PublishShowPlanViewChanged(bool show)
             => ShowPlanViewChanged?.Invoke(show);
 
-        public void PublishShowDiff(string id, string original, string modified)
-            => ShowDiffRequested?.Invoke(id, original, modified);
+        public void PublishShowDiff(string id, string original, string modified, bool isPolishMode = false)
+            => ShowDiffRequested?.Invoke(id, original, modified, isPolishMode);
+
+        public void PublishShowFileDiff(string previewId, string filePath, string original, string modified)
+            => ShowFileDiffRequested?.Invoke(previewId, filePath, original, modified);
 
         public void PublishHighlightExecution(Guid runId, Guid? eventId)
             => HighlightExecutionRequested?.Invoke(runId, eventId);
@@ -91,11 +91,11 @@ namespace TM.Framework.UI.Workspace.Services
         {
             ChapterSelected = null;
             ChapterDeleted = null;
-            NewChapterRequested = null;
             RefreshChapterListRequested = null;
             ContentGenerated = null;
             ShowPlanViewChanged = null;
             ShowDiffRequested = null;
+            ShowFileDiffRequested = null;
             HighlightExecutionRequested = null;
             SendMessageRequested = null;
             StartPlanExecutionRequested = null;

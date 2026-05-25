@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -8,10 +8,13 @@ using System.Windows.Media.Animation;
 namespace TM.Framework.Common.Controls.Animations;
 
 [Obfuscation(Exclude = true, ApplyToMembers = true)]
+[Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
 public partial class AnimatedGradientStripe : UserControl
 {
     private LinearGradientBrush? _stripeBrush;
     private TranslateTransform? _transform;
+
+    private static T FreezeAndReturn<T>(T f) where T : Freezable { f.Freeze(); return f; }
 
     public AnimatedGradientStripe()
     {
@@ -53,7 +56,7 @@ public partial class AnimatedGradientStripe : UserControl
             nameof(BaseBrush),
             typeof(SolidColorBrush),
             typeof(AnimatedGradientStripe),
-            new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0xE2)), OnVisualPropertyChanged));
+            new PropertyMetadata(FreezeAndReturn(new SolidColorBrush(Color.FromRgb(0x3B, 0x7D, 0xE2))), OnVisualPropertyChanged));
 
     public SolidColorBrush BaseBrush
     {
@@ -66,7 +69,7 @@ public partial class AnimatedGradientStripe : UserControl
             nameof(PulseBrush),
             typeof(SolidColorBrush),
             typeof(AnimatedGradientStripe),
-            new PropertyMetadata(new SolidColorBrush(Color.FromRgb(0x8C, 0xF8, 0xBC)), OnVisualPropertyChanged));
+            new PropertyMetadata(FreezeAndReturn(new SolidColorBrush(Color.FromRgb(0x8C, 0xF8, 0xBC))), OnVisualPropertyChanged));
 
     public SolidColorBrush PulseBrush
     {
@@ -118,7 +121,10 @@ public partial class AnimatedGradientStripe : UserControl
     private void OnLoaded(object sender, RoutedEventArgs e)
     {
         ApplyThickness();
-        RefreshVisual();
+        if (IsActive)
+        {
+            RefreshVisual();
+        }
     }
 
     private void OnUnloaded(object? sender, RoutedEventArgs e)
@@ -188,6 +194,11 @@ public partial class AnimatedGradientStripe : UserControl
 
     private void EnsureBrush()
     {
+        if (_stripeBrush != null && _transform != null)
+        {
+            return;
+        }
+
         StopAnimation();
 
         _transform = new TranslateTransform();
@@ -230,17 +241,39 @@ public partial class AnimatedGradientStripe : UserControl
 
         if (_stripeBrush.GradientStops.Count >= 7)
         {
-            _stripeBrush.GradientStops[0].Color = baseColor;
-            _stripeBrush.GradientStops[1].Color = baseColor;
-            _stripeBrush.GradientStops[2].Color = pulseColor;
-            _stripeBrush.GradientStops[3].Color = brighterPulseColor;
-            _stripeBrush.GradientStops[4].Color = pulseColor;
-            _stripeBrush.GradientStops[5].Color = baseColor;
-            _stripeBrush.GradientStops[6].Color = baseColor;
+            var stops = _stripeBrush.GradientStops;
+            if (stops[0].Color != baseColor) stops[0].Color = baseColor;
+            if (stops[1].Color != baseColor) stops[1].Color = baseColor;
+            if (stops[2].Color != pulseColor) stops[2].Color = pulseColor;
+            if (stops[3].Color != brighterPulseColor) stops[3].Color = brighterPulseColor;
+            if (stops[4].Color != pulseColor) stops[4].Color = pulseColor;
+            if (stops[5].Color != baseColor) stops[5].Color = baseColor;
+            if (stops[6].Color != baseColor) stops[6].Color = baseColor;
         }
 
         _stripeBrush.StartPoint = Orientation == Orientation.Vertical ? new Point(0, 0) : new Point(0, 0);
         _stripeBrush.EndPoint = Orientation == Orientation.Vertical ? new Point(0, 1) : new Point(1, 0);
+    }
+
+    private DoubleAnimation? _cachedAnimation;
+    private TimeSpan _cachedAnimationDuration = TimeSpan.MinValue;
+
+    private DoubleAnimation GetOrCreateAnimation(TimeSpan duration)
+    {
+        if (_cachedAnimation == null || _cachedAnimationDuration != duration)
+        {
+            _cachedAnimationDuration = duration;
+            var a = new DoubleAnimation
+            {
+                From = 0,
+                To = 1,
+                Duration = new Duration(duration),
+                RepeatBehavior = RepeatBehavior.Forever
+            };
+            a.Freeze();
+            _cachedAnimation = a;
+        }
+        return _cachedAnimation;
     }
 
     private void StartAnimation()
@@ -258,15 +291,7 @@ public partial class AnimatedGradientStripe : UserControl
             ? TranslateTransform.YProperty
             : TranslateTransform.XProperty;
 
-        var animation = new DoubleAnimation
-        {
-            From = 0,
-            To = 1,
-            Duration = new Duration(duration),
-            RepeatBehavior = RepeatBehavior.Forever
-        };
-
-        _transform.BeginAnimation(property, animation);
+        _transform.BeginAnimation(property, GetOrCreateAnimation(duration));
     }
 
     private void StopAnimation()
@@ -285,15 +310,9 @@ public partial class AnimatedGradientStripe : UserControl
         _transform.Y = 0;
     }
 
-    private Color GetBaseColor()
-    {
-        return (BaseBrush ?? new SolidColorBrush(Colors.Transparent)).Color;
-    }
+    private Color GetBaseColor() => BaseBrush?.Color ?? Colors.Transparent;
 
-    private Color GetPulseColor()
-    {
-        return (PulseBrush ?? new SolidColorBrush(GetBaseColor())).Color;
-    }
+    private Color GetPulseColor() => PulseBrush?.Color ?? GetBaseColor();
 
     private Color GetBrighterPulseColor()
     {

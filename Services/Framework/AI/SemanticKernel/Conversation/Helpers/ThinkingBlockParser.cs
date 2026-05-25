@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 
@@ -51,10 +51,10 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
             if (string.IsNullOrEmpty(trimmed))
                 return false;
 
-            if (trimmed.StartsWith("#"))
+            if (trimmed.StartsWith('#'))
                 return true;
 
-            if (trimmed.Length <= 20 && (trimmed.EndsWith("：") || trimmed.EndsWith(":")))
+            if (trimmed.Length <= 20 && (trimmed.EndsWith('：') || trimmed.EndsWith(':')))
                 return true;
 
             if (trimmed.Length >= 3 && char.IsDigit(trimmed[0]) && trimmed[1] == '.')
@@ -67,7 +67,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers
         {
             var trimmed = line.TrimStart();
 
-            while (trimmed.StartsWith("#"))
+            while (trimmed.StartsWith('#'))
             {
                 trimmed = trimmed.Substring(1);
             }

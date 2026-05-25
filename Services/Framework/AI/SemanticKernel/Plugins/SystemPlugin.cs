@@ -1,5 +1,4 @@
-using System;
-using System.Collections.Generic;
+﻿using System;
 using System.ComponentModel;
 using System.IO;
 using System.Reflection;
@@ -9,65 +8,13 @@ using TM.Framework.UI.Workspace.Services;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Plugins
 {
-    [Obfuscation(Exclude = true)]
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class SystemPlugin
     {
         private readonly PanelCommunicationService _comm = ServiceLocator.Get<PanelCommunicationService>();
 
-        private static readonly object _debugLogLock = new();
-        private static readonly HashSet<string> _debugLoggedKeys = new();
-
         private static void DebugLogOnce(string key, Exception ex)
-        {
-            if (!TM.App.IsDebugMode)
-            {
-                return;
-            }
-
-            lock (_debugLogLock)
-            {
-                if (_debugLoggedKeys.Count >= 500 || !_debugLoggedKeys.Add(key))
-                {
-                    return;
-                }
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[SystemPlugin] {key}: {ex.Message}");
-        }
-
-        private static bool TryResolveSafePath(string relativePath, out string fullPath, out string error)
-        {
-            fullPath = string.Empty;
-            error = string.Empty;
-
-            if (string.IsNullOrWhiteSpace(relativePath))
-            {
-                error = "路径为空";
-                return false;
-            }
-
-            if (Path.IsPathRooted(relativePath))
-            {
-                error = "不允许绝对路径";
-                return false;
-            }
-
-            var projectRoot = Path.GetFullPath(StoragePathHelper.GetProjectRoot());
-            var combined = Path.GetFullPath(Path.Combine(projectRoot, relativePath));
-
-            var rootWithSep = projectRoot.EndsWith(Path.DirectorySeparatorChar)
-                ? projectRoot
-                : projectRoot + Path.DirectorySeparatorChar;
-
-            if (!combined.StartsWith(rootWithSep, StringComparison.OrdinalIgnoreCase))
-            {
-                error = "路径越界";
-                return false;
-            }
-
-            fullPath = combined;
-            return true;
-        }
+            => TM.Framework.Common.Helpers.InfoLogDedup.DebugLogOnce(key, ex, "SystemPlugin");
 
         [KernelFunction("GetCurrentTime")]
         [Description("获取当前系统时间")]
@@ -95,69 +42,6 @@ namespace TM.Services.Framework.AI.SemanticKernel.Plugins
             catch (Exception ex)
             {
                 return Task.FromResult($"[获取失败] {ex.Message}");
-            }
-        }
-
-        [KernelFunction("SaveToFile")]
-        [Description("将内容保存到指定文件")]
-        public async Task<string> SaveToFileAsync(
-            [Description("文件相对路径")] string relativePath,
-            [Description("文件内容")] string content)
-        {
-            TM.App.Log($"[SystemPlugin] SaveToFile: {relativePath}");
-
-            try
-            {
-                if (!TryResolveSafePath(relativePath, out var fullPath, out var error))
-                {
-                    return $"[保存失败] {error}";
-                }
-
-                var dir = Path.GetDirectoryName(fullPath);
-                if (!string.IsNullOrEmpty(dir))
-                {
-                    Directory.CreateDirectory(dir);
-                }
-
-                var tmp = fullPath + ".tmp";
-                await File.WriteAllTextAsync(tmp, content).ConfigureAwait(false);
-                File.Move(tmp, fullPath, overwrite: true);
-
-                TM.App.Log($"[SystemPlugin] 文件已保存: {fullPath}");
-                return $"[已保存] {relativePath}";
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SystemPlugin] 保存失败: {ex.Message}");
-                return $"[保存失败] {ex.Message}";
-            }
-        }
-
-        [KernelFunction("ReadFile")]
-        [Description("读取指定文件的内容")]
-        public async Task<string> ReadFileAsync(
-            [Description("文件相对路径")] string relativePath)
-        {
-            TM.App.Log($"[SystemPlugin] ReadFile: {relativePath}");
-
-            try
-            {
-                if (!TryResolveSafePath(relativePath, out var fullPath, out var error))
-                {
-                    return $"[读取失败] {error}";
-                }
-
-                if (!File.Exists(fullPath))
-                {
-                    return $"[文件不存在] {relativePath}";
-                }
-
-                var content = await File.ReadAllTextAsync(fullPath).ConfigureAwait(false);
-                return content;
-            }
-            catch (Exception ex)
-            {
-                return $"[读取失败] {ex.Message}";
             }
         }
 

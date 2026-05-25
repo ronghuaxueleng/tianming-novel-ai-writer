@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media.Animation;
@@ -7,12 +7,31 @@ using TM.Framework.Appearance.Animation.LoadingAnimation;
 namespace TM.Framework.Common.Controls.Feedback
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class LoadingIndicator : UserControl
     {
         public LoadingIndicator()
         {
             InitializeComponent();
             Loaded += LoadingIndicator_Loaded;
+            IsVisibleChanged += (_, e) =>
+            {
+                if ((bool)e.NewValue == false)
+                {
+                    (Resources["SpinnerAnimation"] as Storyboard)?.Stop();
+                    (Resources["DotsAnimation"] as Storyboard)?.Stop();
+                    (Resources["PulseAnimation"] as Storyboard)?.Stop();
+                }
+                else
+                {
+                    if (SpinnerEllipse.Visibility == Visibility.Visible)
+                        (Resources["SpinnerAnimation"] as Storyboard)?.Begin();
+                    else if (DotsPanel.Visibility == Visibility.Visible)
+                        (Resources["DotsAnimation"] as Storyboard)?.Begin();
+                    else if (PulseEllipse.Visibility == Visibility.Visible)
+                        (Resources["PulseAnimation"] as Storyboard)?.Begin();
+                }
+            };
         }
 
         private void LoadingIndicator_Loaded(object sender, RoutedEventArgs e)

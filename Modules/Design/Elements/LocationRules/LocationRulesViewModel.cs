@@ -2,30 +2,30 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Models.Design.Location;
+using TM.Services.Modules.ProjectData.Models.Design.Factions;
 using TM.Modules.Design.Elements.LocationRules.Services;
+using TM.Services.Modules.ProjectData.Metadata;
 using TM.Modules.Design.Elements.FactionRules.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Framework.AI.Interfaces.Prompts;
-using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
 
 namespace TM.Modules.Design.Elements.LocationRules
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LocationRulesViewModel : DataManagementViewModelBase<LocationRulesData, LocationRulesCategory, LocationRulesService>
     {
         private readonly IPromptRepository _promptRepository;
         private readonly ContextService _contextService;
         private readonly FactionRulesService _factionRulesService;
         private string _formName = string.Empty;
-        private string _formIcon = "📍";
+        private string _formIcon = "Icon.MapPin";
         private string _formStatus = "已启用";
         private string _formCategory = string.Empty;
 
@@ -74,12 +74,13 @@ namespace TM.Modules.Design.Elements.LocationRules
         public string FormFactionId { get => _formFactionId; set { _formFactionId = value; OnPropertyChanged(); } }
 
         public List<string> StatusOptions { get; } = new() { "已禁用", "已启用" };
-        public List<string> LocationTypeOptions { get; } = new() { "", "区域/大陆", "城市", "地点/秘境" };
+        public List<string> LocationTypeOptions { get; } = new() { "", "区域/大陆", "城市/聚落", "自然地貌", "建筑/设施", "地点/场所", "特殊空间" };
 
         private List<string> _availableFactionNames = new();
 
         private Dictionary<string, string> _factionIdToName = new();
         private Dictionary<string, string> _factionNameToId = new(StringComparer.OrdinalIgnoreCase);
+        private readonly TM.Framework.Common.Services.LazyListCache<FactionRulesData> _allFactionsCache = new();
 
         public List<string> AvailableFactions
         {
@@ -92,8 +93,14 @@ namespace TM.Modules.Design.Elements.LocationRules
             _promptRepository = promptRepository;
             _contextService = contextService;
             _factionRulesService = factionRulesService;
+        }
+
+        protected override void OnAfterInitializeRefresh()
+        {
             RefreshRelationshipOptions();
         }
+
+        private void InvalidateFactionCache() => _allFactionsCache.Invalidate();
 
         private void RefreshRelationshipOptions()
         {
@@ -102,12 +109,12 @@ namespace TM.Modules.Design.Elements.LocationRules
 
             try
             {
-                var factionList = _factionRulesService.GetAllFactionRules()
+                var allFactions = _allFactionsCache.Get(() => _factionRulesService.GetAllFactionRules()
                     .Where(f => f.IsEnabled)
-                    .ToList();
+                    .ToList());
 
                 var names = new List<string>();
-                foreach (var f in factionList)
+                foreach (var f in allFactions)
                 {
                     names.Add(f.Name);
                     _factionIdToName[f.Id] = f.Name;
@@ -173,7 +180,15 @@ namespace TM.Modules.Design.Elements.LocationRules
             return string.Empty;
         }
 
-        protected override string DefaultDataIcon => "📍";
+        private string ResolveFactionReferenceId(
+            string? rawValue,
+            Dictionary<string, string> factionNameToId,
+            Dictionary<string, string> factionIdToName)
+        {
+            return EntityReferenceResolver.NameToId(rawValue ?? string.Empty, factionNameToId, factionIdToName);
+        }
+
+        protected override string DefaultDataIcon => "Icon.MapPin";
 
         protected override LocationRulesData? CreateNewData(string? categoryName = null)
         {
@@ -190,34 +205,33 @@ namespace TM.Modules.Design.Elements.LocationRules
 
         protected override System.Threading.Tasks.Task ResolveEntityReferencesBeforeSaveAsync()
         {
-            if (string.IsNullOrWhiteSpace(FormFactionId)) return System.Threading.Tasks.Task.CompletedTask;
-
-            var displayName = FormFactionId.Trim();
-            if (ShortIdGenerator.IsLikelyId(displayName)) return System.Threading.Tasks.Task.CompletedTask;
-
-            var nullWords = new[] { "无", "暂无", "空", "无所属", "不适用", "N/A", "NA", "None", "-", "/", "null" };
-            if (nullWords.Any(w => string.Equals(displayName, w, StringComparison.OrdinalIgnoreCase)))
+            if (string.IsNullOrWhiteSpace(FormFactionId))
             {
                 FormFactionId = string.Empty;
                 return System.Threading.Tasks.Task.CompletedTask;
             }
 
-            var existing = _factionRulesService.GetAllFactionRules()
-                .FirstOrDefault(f => f.IsEnabled &&
-                    string.Equals(f.Name, displayName, StringComparison.OrdinalIgnoreCase));
-            if (existing != null)
-            {
-                if (!_factionNameToId.ContainsKey(existing.Name))
-                {
-                    _factionIdToName[existing.Id] = existing.Name;
-                    _factionNameToId[existing.Name] = existing.Id;
-                }
-                FormFactionId = existing.Name;
-                return System.Threading.Tasks.Task.CompletedTask;
-            }
+            var factions = _factionRulesService.GetAllFactionRules()
+                .Where(f => f.IsEnabled)
+                .ToList();
+            _factionNameToId = factions
+                .GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+            _factionIdToName = factions
+                .Where(f => !string.IsNullOrWhiteSpace(f.Id))
+                .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
 
-            TM.App.Log($"[LocationRulesViewModel] 实体引用：势力 '{displayName}' 在上游不存在，已忽略");
-            FormFactionId = string.Empty;
+            var raw = FormFactionId;
+            var factionId = ResolveFactionReferenceId(raw, _factionNameToId, _factionIdToName);
+            if (!string.IsNullOrWhiteSpace(factionId) && _factionIdToName.TryGetValue(factionId, out var factionName))
+                FormFactionId = factionName;
+            else
+            {
+                if (!EntityNameNormalizeHelper.IsIgnoredValue(raw.Trim()))
+                    TM.App.Log($"[LocationRulesViewModel] 实体引用：势力 '{raw.Trim()}' 在上游不存在，已忽略");
+                FormFactionId = string.Empty;
+            }
             return System.Threading.Tasks.Task.CompletedTask;
         }
 
@@ -229,11 +243,13 @@ namespace TM.Modules.Design.Elements.LocationRules
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            await EnsureServiceInitializedAsync(Service);
-            await EnsureServiceInitializedAsync(_factionRulesService);
+            await Task.WhenAll(
+                EnsureServiceInitializedAsync(Service),
+                EnsureServiceInitializedAsync(_factionRulesService));
 
             try
             {
+                InvalidateFactionCache();
                 var dispatcher = System.Windows.Application.Current?.Dispatcher;
                 if (dispatcher != null)
                 {
@@ -249,6 +265,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             }
             catch
             {
+                InvalidateFactionCache();
                 RefreshRelationshipOptions();
             }
         }
@@ -261,6 +278,8 @@ namespace TM.Modules.Design.Elements.LocationRules
         }
 
         protected override int ClearAllDataItems() => Service.ClearAllLocationRules();
+
+        protected override string GetModuleNameForVersionTracking() => "LocationRules";
 
         protected override void SaveCurrentEditingData()
         {
@@ -279,19 +298,15 @@ namespace TM.Modules.Design.Elements.LocationRules
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = "📍",
+                Icon = IconHelper.Get("Icon.MapPin"),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(LocationRulesData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(LocationRulesData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword)) return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.LocationType.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Description.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.LocationType, data.Description };
         }
 
         private ICommand? _selectNodeCommand;
@@ -312,21 +327,29 @@ namespace TM.Modules.Design.Elements.LocationRules
                     _currentEditingCategory = category;
                     _currentEditingData = null;
                     RefreshRelationshipOptions();
-                    LoadCategoryToForm(category);
-                    EnterEditMode();
+                    if (category.IsBuiltIn)
+                    {
+                        ResetForm();
+                        EnterEditMode();
+                    }
+                    else
+                    {
+                        LoadCategoryToForm(category);
+                        EnterEditMode();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[LocationRulesViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
         private void LoadDataToForm(LocationRulesData data)
         {
             FormName = data.Name;
-            FormIcon = "📍";
+            FormIcon = "Icon.MapPin";
             FormStatus = data.IsEnabled ? "已启用" : "已禁用";
             FormCategory = data.Category;
 
@@ -392,7 +415,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             catch (Exception ex)
             {
                 TM.App.Log($"[LocationRulesViewModel] 新建失败: {ex.Message}");
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
             }
         });
 
@@ -413,7 +436,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             catch (Exception ex)
             {
                 TM.App.Log($"[LocationRulesViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         });
 
@@ -484,6 +507,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             UpdateDataFromForm(newData);
             await Service.AddLocationRuleAsync(newData);
             _currentEditingData = newData;
+            InvalidateFactionCache();
             GlobalToast.Success("保存成功", $"位置规则『{newData.Name}』已创建");
         }
 
@@ -509,6 +533,7 @@ namespace TM.Modules.Design.Elements.LocationRules
 
             UpdateDataFromForm(_currentEditingData);
             await Service.UpdateLocationRuleAsync(_currentEditingData);
+            InvalidateFactionCache();
             GlobalToast.Success("保存成功", $"位置规则『{_currentEditingData.Name}』已更新");
         }
 
@@ -517,7 +542,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             var newIsEnabled = (FormStatus == "已启用");
             if (newIsEnabled && !data.IsEnabled)
             {
-                if (!CheckScopeBeforeEnable(data.SourceBookId, data.Name))
+                if (!CheckBeforeEnable(null, data.Name))
                 {
                     FormStatus = "已禁用";
                     return;
@@ -560,10 +585,15 @@ namespace TM.Modules.Design.Elements.LocationRules
 
                     int totalDataDeleted = 0;
 
+                    var categoryIdLookup = Service.GetAllCategories()
+                        .ToDictionary(c => c.Name, c => c.Id, StringComparer.Ordinal);
                     foreach (var categoryName in allCategoriesToDelete)
                     {
+                        categoryIdLookup.TryGetValue(categoryName, out var cId);
                         var dataInCategory = Service.GetAllLocationRules()
-                            .Where(d => d.Category == categoryName)
+                            .Where(d =>
+                                (!string.IsNullOrWhiteSpace(cId) && d.CategoryId == cId) ||
+                                (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName))
                             .ToList();
 
                         foreach (var item in dataInCategory)
@@ -590,6 +620,7 @@ namespace TM.Modules.Design.Elements.LocationRules
                     if (!result) return;
 
                     Service.DeleteLocationRule(_currentEditingData.Id);
+                    InvalidateFactionCache();
                     GlobalToast.Success("删除成功", $"位置规则『{_currentEditingData.Name}』已删除");
 
                     _currentEditingData = null;
@@ -604,7 +635,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             catch (Exception ex)
             {
                 TM.App.Log($"[LocationRulesViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -615,6 +646,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             return new TM.Framework.Common.ViewModels.AIGenerationConfig
             {
                 Category = "小说设计师",
+                ActiveModuleHint = "位置规则",
                 ServiceType = TM.Framework.Common.ViewModels.AIServiceType.ChatEngine,
                 ResponseFormat = TM.Framework.Common.ViewModels.ResponseFormat.Json,
                 MessagePrefix = "位置设计",
@@ -651,22 +683,13 @@ namespace TM.Modules.Design.Elements.LocationRules
                     ["所属势力"] = () => FormFactionId,
                 },
                 ContextProvider = async () => await GetLocationContextAsync(),
-                BatchFieldKeyMap = new()
-                {
-                    ["位置类型"] = "LocationType",
-                    ["位置描述"] = "Description",
-                    ["规模范围"] = "Scale",
-                    ["地形环境"] = "Terrain",
-                    ["气候特征"] = "Climate",
-                    ["标志地标"] = "Landmarks",
-                    ["特产资源"] = "Resources",
-                    ["历史意义"] = "HistoricalSignificance",
-                    ["危险禁忌"] = "Dangers",
-                    ["所属势力"] = "FactionId"
-                },
+                BatchFieldKeyMap = CreateBatchFieldKeyMap(),
                 BatchIndexFields = new() { "Name", "LocationType", "Description" }
             };
         }
+
+        public static Dictionary<string, string> CreateBatchFieldKeyMap()
+            => EntityFieldMeta.GetFieldKeyMap("locations");
 
         protected override ModuleNormalizationConfig? GetNormalizationConfig()
         {
@@ -680,7 +703,7 @@ namespace TM.Modules.Design.Elements.LocationRules
                         FieldName = "LocationType",
                         Type = NormalizationType.StaticOptions,
                         StaticOptions = LocationTypeOptions.Where(o => !string.IsNullOrWhiteSpace(o)).ToList(),
-                        DefaultValue = LocationTypeOptions.FirstOrDefault(o => string.Equals(o, "地点/秘境", StringComparison.Ordinal))
+                        DefaultValue = LocationTypeOptions.FirstOrDefault(o => string.Equals(o, "地点/场所", StringComparison.Ordinal))
                                        ?? LocationTypeOptions.FirstOrDefault(o => !string.IsNullOrWhiteSpace(o))
                                        ?? string.Empty,
                         AllowEmpty = true
@@ -701,7 +724,7 @@ namespace TM.Modules.Design.Elements.LocationRules
             }
 
             var availableFacs = AvailableFactions.Where(f => !string.IsNullOrEmpty(f)).ToList();
-            if (availableFacs.Any())
+            if (availableFacs.Count > 0)
             {
                 sb.AppendLine("<section name=\"available_factions\">");
                 sb.AppendLine("所属势力必须从以下列表中选择");
@@ -726,7 +749,7 @@ namespace TM.Modules.Design.Elements.LocationRules
                 .Where(l => l.Id != _currentEditingData?.Id && l.IsEnabled)
                 .ToList();
 
-            if (otherLocations.Any())
+            if (otherLocations.Count > 0)
             {
                 sb.AppendLine("<section name=\"other_locations\">");
                 foreach (var location in otherLocations)
@@ -744,7 +767,9 @@ namespace TM.Modules.Design.Elements.LocationRules
 
         protected override IEnumerable<string> GetExistingNamesForDedup()
             => Service.GetAllLocationRules().Select(r => r.Name);
-        protected override int GetDefaultBatchSize() => 15;
+        protected override int GetBaseBatchSize() => 10;
+        protected override int GetBatchSize64K() => 12;
+        protected override int GetBatchSize128K() => 15;
 
         protected override async System.Threading.Tasks.Task<List<Dictionary<string, object>>> SaveBatchEntitiesAsync(
             List<Dictionary<string, object>> entities,
@@ -756,76 +781,92 @@ namespace TM.Modules.Design.Elements.LocationRules
                 Service.GetAllLocationRules().Select(r => r.Name),
                 StringComparer.OrdinalIgnoreCase);
             var batchNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var freshFactions = _factionRulesService.GetAllFactionRules()
+                .Where(f => f.IsEnabled)
+                .ToList();
+            var freshFactionNameToId = freshFactions
+                .GroupBy(f => f.Name, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Id, StringComparer.OrdinalIgnoreCase);
+            var freshFactionIdToName = freshFactions
+                .Where(f => !string.IsNullOrWhiteSpace(f.Id))
+                .GroupBy(f => f.Id, StringComparer.OrdinalIgnoreCase)
+                .ToDictionary(g => g.Key, g => g.First().Name, StringComparer.OrdinalIgnoreCase);
 
-            foreach (var entity in entities)
+            Service.BeginBatchSave();
+            try
             {
-                try
+                foreach (var entity in entities)
                 {
-                    var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
-                    var name = reader.GetString("Name");
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = $"位置_{DateTime.Now:HHmmss}_{result.Count + 1}";
-
-                    var baseName = name;
-
-                    if (dbNames.Contains(baseName))
+                    try
                     {
-                        TM.App.Log($"[LocationRulesViewModel] 跳过已存在地点: {baseName}");
-                        continue;
+                        var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
+                        var name = reader.GetString("Name");
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = $"位置_{DateTime.Now:HHmmss}_{result.Count + 1}";
+
+                        var baseName = name;
+
+                        if (dbNames.Contains(baseName))
+                        {
+                            TM.App.Log($"[LocationRulesViewModel] 跳过已存在地点: {baseName}");
+                            continue;
+                        }
+
+                        int suffix = 1;
+                        while (batchNames.Contains(name))
+                        {
+                            name = $"{baseName}_{suffix++}";
+                        }
+                        batchNames.Add(name);
+                        dbNames.Add(name);
+
+                        var locationType = NormalizeFieldValue("LocationType", reader.GetString("LocationType"));
+                        var factionRaw = reader.GetString("FactionId")?.Trim() ?? string.Empty;
+                        var factionId = ResolveFactionReferenceId(factionRaw, freshFactionNameToId, freshFactionIdToName);
+                        if (!string.IsNullOrWhiteSpace(factionRaw)
+                            && string.IsNullOrWhiteSpace(factionId)
+                            && !EntityNameNormalizeHelper.IsIgnoredValue(factionRaw))
+                            TM.App.Log($"[LocationRulesViewModel] 实体引用（批量）：势力 '{factionRaw}' 在上游不存在，已忽略");
+
+                        var data = new LocationRulesData
+                        {
+                            Id = ShortIdGenerator.New("D"),
+                            Name = name,
+                            Category = categoryName,
+                            IsEnabled = true,
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now,
+                            LocationType = locationType,
+                            Description = reader.GetString("Description"),
+                            Scale = reader.GetString("Scale"),
+                            Terrain = reader.GetString("Terrain"),
+                            Climate = reader.GetString("Climate"),
+                            Landmarks = reader.GetStringList("Landmarks"),
+                            Resources = reader.GetStringList("Resources"),
+                            HistoricalSignificance = reader.GetString("HistoricalSignificance"),
+                            Dangers = reader.GetStringList("Dangers"),
+                            FactionId = factionId,
+                            DependencyModuleVersions = versionSnapshot ?? new()
+                        };
+
+                        entity["Name"] = name;
+                        entity["LocationType"] = locationType;
+                        await Service.AddLocationRuleAsync(data);
+                        result.Add(entity);
                     }
-
-                    int suffix = 1;
-                    while (batchNames.Contains(name))
+                    catch (Exception ex)
                     {
-                        name = $"{baseName}_{suffix++}";
+                        TM.App.Log($"[LocationRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
                     }
-                    batchNames.Add(name);
-                    dbNames.Add(name);
-
-                    var locationType = NormalizeFieldValue("LocationType", reader.GetString("LocationType"));
-                    var factionName = reader.GetString("FactionId");
-                    var factionId = NameToId(factionName);
-                    if (!string.IsNullOrWhiteSpace(factionName)
-                        && string.IsNullOrWhiteSpace(factionId)
-                        && !ShortIdGenerator.IsLikelyId(factionName))
-                    {
-                        TM.App.Log($"[LocationRulesViewModel] 实体引用（批量）：势力 '{factionName.Trim()}' 在上游不存在，已忽略");
-                        factionId = string.Empty;
-                    }
-
-                    var data = new LocationRulesData
-                    {
-                        Id = ShortIdGenerator.New("D"),
-                        Name = name,
-                        Category = categoryName,
-                        IsEnabled = true,
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        LocationType = locationType,
-                        Description = reader.GetString("Description"),
-                        Scale = reader.GetString("Scale"),
-                        Terrain = reader.GetString("Terrain"),
-                        Climate = reader.GetString("Climate"),
-                        Landmarks = reader.GetStringList("Landmarks"),
-                        Resources = reader.GetStringList("Resources"),
-                        HistoricalSignificance = reader.GetString("HistoricalSignificance"),
-                        Dangers = reader.GetStringList("Dangers"),
-                        FactionId = factionId
-                    };
-
-                    entity["Name"] = name;
-                    entity["LocationType"] = locationType;
-                    await Service.AddLocationRuleAsync(data);
-                    result.Add(entity);
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[LocationRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
-                }
+
+                TM.App.Log($"[LocationRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
+                return result;
             }
-
-            TM.App.Log($"[LocationRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
-            return result;
+            finally
+            {
+                Service.EndBatchSave();
+            }
         }
     }
 }

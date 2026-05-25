@@ -5,14 +5,6 @@ using TM.Framework.Appearance.ThemeManagement;
 namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 {
     [System.Reflection.Obfuscation(Exclude = true)]
-    public enum SystemThemeMapping
-    {
-        Light,
-        Dark,
-        Custom
-    }
-
-    [System.Reflection.Obfuscation(Exclude = true)]
     public enum HighContrastBehavior
     {
         Ignore,

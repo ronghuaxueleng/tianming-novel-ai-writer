@@ -101,18 +101,6 @@ namespace TM.Framework.Common.Helpers.Utility
             return new List<string>();
         }
 
-        public static bool IsValidCountry(string country)
-        {
-            return CountryProvincesMap.ContainsKey(country);
-        }
-
-        public static bool IsValidProvince(string country, string province)
-        {
-            if (!CountryProvincesMap.TryGetValue(country, out var provinces))
-                return false;
-
-            return provinces.Contains(province);
-        }
     }
 }
 

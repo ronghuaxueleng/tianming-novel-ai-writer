@@ -1,17 +1,21 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Threading;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Threading;
+using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.AI.SemanticKernel;
 
 namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class SessionHistoryDialog : Window, INotifyPropertyChanged
     {
         private readonly SessionManager _sessionManager;
@@ -21,9 +25,11 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
         private static UIStateCache GetUIStateCache() => ServiceLocator.Get<UIStateCache>();
 
         private ObservableCollection<SessionInfo> _sessions = new();
-        private ObservableCollection<SessionInfo> _filteredSessions = new();
+        private readonly RangeObservableCollection<SessionInfo> _filteredSessions = new();
         private SessionInfo? _selectedSession;
         private string _searchKeyword = string.Empty;
+        private DispatcherTimer? _searchDebounce;
+        private CancellationTokenSource? _searchCts;
 
         public ObservableCollection<SessionInfo> Sessions
         {
@@ -36,15 +42,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
             }
         }
 
-        public ObservableCollection<SessionInfo> FilteredSessions
-        {
-            get => _filteredSessions;
-            set
-            {
-                _filteredSessions = value;
-                OnPropertyChanged();
-            }
-        }
+        public RangeObservableCollection<SessionInfo> FilteredSessions => _filteredSessions;
 
         public SessionInfo? SelectedSession
         {
@@ -64,7 +62,11 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
             {
                 _searchKeyword = value;
                 OnPropertyChanged();
-                _ = ApplyFilterAsync();
+                _searchDebounce ??= new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+                _searchDebounce.Stop();
+                _searchDebounce.Tick -= OnSearchDebounced;
+                _searchDebounce.Tick += OnSearchDebounced;
+                _searchDebounce.Start();
             }
         }
 
@@ -98,27 +100,27 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
 
         private void ApplyFilter()
         {
-            _ = ApplyFilterAsync();
+            _ = ApplyFilterAsync(CancellationToken.None);
         }
 
-        private async System.Threading.Tasks.Task ApplyFilterAsync()
+        private async System.Threading.Tasks.Task ApplyFilterAsync(CancellationToken ct = default)
         {
             if (Sessions == null || Sessions.Count == 0)
             {
-                FilteredSessions = new ObservableCollection<SessionInfo>();
+                FilteredSessions.Clear();
                 return;
             }
 
             if (string.IsNullOrWhiteSpace(SearchKeyword))
             {
-                FilteredSessions = new ObservableCollection<SessionInfo>(Sessions);
+                FilteredSessions.ReplaceAll(Sessions);
                 return;
             }
 
             var keyword = SearchKeyword.Trim();
             if (keyword.Length == 0)
             {
-                FilteredSessions = new ObservableCollection<SessionInfo>(Sessions);
+                FilteredSessions.ReplaceAll(Sessions);
                 return;
             }
 
@@ -126,11 +128,13 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
             var snapshot = Sessions.ToList();
             var sessionManager = _sessionManager;
 
-            var result = await System.Threading.Tasks.Task.Run(() =>
+            var result = await System.Threading.Tasks.Task.Run(async () =>
             {
                 var matched = new List<SessionInfo>();
                 foreach (var session in snapshot)
                 {
+                    ct.ThrowIfCancellationRequested();
+
                     if (!string.IsNullOrEmpty(session.Title) &&
                         session.Title.ToLowerInvariant().Contains(lowered))
                     {
@@ -140,7 +144,7 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
 
                     try
                     {
-                        var records = sessionManager.LoadMessages(session.Id);
+                        var records = await sessionManager.LoadMessagesAsync(session.Id).ConfigureAwait(false);
                         if (records.Any(r =>
                                 !string.IsNullOrEmpty(r.Summary) &&
                                 r.Summary.ToLowerInvariant().Contains(lowered)))
@@ -154,9 +158,22 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
                     }
                 }
                 return matched;
-            }).ConfigureAwait(true);
+            }, ct).ConfigureAwait(true);
 
-            FilteredSessions = new ObservableCollection<SessionInfo>(result);
+            ct.ThrowIfCancellationRequested();
+            FilteredSessions.ReplaceAll(result);
+        }
+
+        private async void OnSearchDebounced(object? s, EventArgs e)
+        {
+            _searchDebounce!.Stop();
+            _searchCts?.Cancel();
+            _searchCts = new CancellationTokenSource();
+            try
+            {
+                await ApplyFilterAsync(_searchCts.Token);
+            }
+            catch (OperationCanceledException) { }
         }
 
         private void OnDeleteSession(object sender, RoutedEventArgs e)
@@ -200,7 +217,8 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("删除失败", ex.Message);
+                TM.App.Log($"[SessionHistoryDialog] 删除失败: {ex.Message}");
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         }
 
@@ -240,7 +258,8 @@ namespace TM.Framework.UI.Workspace.RightPanel.Dialogs
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("删除失败", ex.Message);
+                TM.App.Log($"[SessionHistoryDialog] 删除失败: {ex.Message}");
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         }
 

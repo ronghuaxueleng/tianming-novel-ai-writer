@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using TM.Framework.Common.Helpers.Id;
 
 namespace TM.Services.Framework.AI.Monitoring;
@@ -14,6 +14,10 @@ public class ApiCallRecord
     [System.Text.Json.Serialization.JsonPropertyName("InputTokens")] public int InputTokens { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("OutputTokens")] public int OutputTokens { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("ErrorMessage")] public string? ErrorMessage { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("FirstTokenMs")] public int FirstTokenMs { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("TokensPerSecond")] public double TokensPerSecond { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("ThinkingMs")] public int ThinkingMs { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("ToolCallCount")] public int ToolCallCount { get; set; }
 }
 
 public class StatisticsSummary
@@ -27,6 +31,10 @@ public class StatisticsSummary
     [System.Text.Json.Serialization.JsonPropertyName("TotalOutputTokens")] public int TotalOutputTokens { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("FirstCallTime")] public DateTime? FirstCallTime { get; set; }
     [System.Text.Json.Serialization.JsonPropertyName("LastCallTime")] public DateTime? LastCallTime { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("AverageFirstTokenMs")] public double AverageFirstTokenMs { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("AverageTokensPerSecond")] public double AverageTokensPerSecond { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("TotalThinkingMs")] public long TotalThinkingMs { get; set; }
+    [System.Text.Json.Serialization.JsonPropertyName("TotalToolCalls")] public int TotalToolCalls { get; set; }
 }
 
 public class DailyStatistics

@@ -1,13 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
-using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
+using TM.Services.Modules.ProjectData.Implementations.Guides;
 using TM.Services.Modules.ProjectData.Models.TaskContexts;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -16,6 +14,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         private readonly ConcurrentDictionary<int, string> _cache = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private int _cacheEpoch;
 
         public ChapterMilestoneStore()
         {
@@ -23,7 +22,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 StoragePathHelper.CurrentProjectChanged += (_, _) =>
                 {
-                    _cache.Clear();
+                    InvalidateCache();
                     TM.App.Log("[ChapterMilestoneStore] 项目切换，已清除里程碑缓存");
                 };
             }
@@ -35,22 +34,28 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 公开方法
 
-        public void InvalidateCache() => _cache.Clear();
+        public void InvalidateCache()
+        {
+            Interlocked.Increment(ref _cacheEpoch);
+            _cache.Clear();
+        }
 
         public async Task RebuildVolumeMilestoneAsync(int volumeNumber, Dictionary<string, string> volumeSummaries)
         {
             if (volumeNumber <= 0 || volumeSummaries == null || volumeSummaries.Count == 0)
                 return;
 
-            var milestone = BuildMilestoneText(volumeNumber, volumeSummaries);
-            var maxChars = LayeredContextConfig.VolumeMilestoneMaxChars;
+            var cfg = LayeredContextConfig.TakeSnapshot();
+            var milestone = BuildMilestoneText(volumeNumber, volumeSummaries, cfg);
+            var maxChars = cfg.VolumeMilestoneMaxChars;
             if (maxChars > 0 && milestone.Length >= maxChars)
                 TM.App.Log($"[MilestoneStore] 第{volumeNumber}卷里程碑已达到上限{maxChars}字，已自动丢弃较早章节摘要以控制规模");
 
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await SaveMilestoneAsync(volumeNumber, milestone);
+                Interlocked.Increment(ref _cacheEpoch);
+                await SaveMilestoneAsync(volumeNumber, milestone).ConfigureAwait(false);
                 _cache[volumeNumber] = milestone;
             }
             finally
@@ -65,19 +70,21 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             if (volumeNumber <= 0 || string.IsNullOrWhiteSpace(summary)) return;
 
+            var cfg = LayeredContextConfig.TakeSnapshot();
             var parsed = ChapterParserHelper.ParseChapterId(chapterId);
             var chNum = parsed?.chapterNumber ?? 0;
             var prefix = chNum > 0 ? $"第{chNum}章" : chapterId;
-            var maxChars = LayeredContextConfig.VolumeMilestoneMaxChars > 0
-                ? LayeredContextConfig.VolumeMilestoneMaxChars : 12000;
+            var maxChars = cfg.VolumeMilestoneMaxChars > 0
+                ? cfg.VolumeMilestoneMaxChars : 12000;
             var perChapterMax = System.Math.Max(200, System.Math.Min(800, maxChars / 10));
             var trunc = summary.Length > perChapterMax ? summary.Substring(0, perChapterMax) + "..." : summary;
             var newLine = $"[{prefix}] {trunc}";
 
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var existing = await LoadMilestoneAsync(volumeNumber);
+                Interlocked.Increment(ref _cacheEpoch);
+                var existing = await LoadMilestoneAsync(volumeNumber, cfg).ConfigureAwait(false);
                 string updated;
                 if (string.IsNullOrWhiteSpace(existing))
                     updated = $"=== 第{volumeNumber}卷 历史摘要 ===" + Environment.NewLine + newLine;
@@ -87,7 +94,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 if (updated.Length > maxChars)
                 {
                     var firstNl = updated.IndexOf('\n');
-                    if (firstNl > 0 && firstNl < 300 && updated.StartsWith("=== "))
+                    if (firstNl > 0 && firstNl < 300 && updated.StartsWith("=== ", StringComparison.Ordinal))
                     {
                         var header = updated.Substring(0, firstNl).TrimEnd('\r');
                         var body = updated.Substring(firstNl + 1);
@@ -110,7 +117,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
 
-                await SaveMilestoneAsync(volumeNumber, updated);
+                await SaveMilestoneAsync(volumeNumber, updated).ConfigureAwait(false);
                 _cache[volumeNumber] = updated;
             }
             finally
@@ -123,19 +130,27 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         public async Task<List<VolumeMilestoneEntry>> GetPreviousMilestonesAsync(int currentVolumeNumber)
         {
-            var result = new List<VolumeMilestoneEntry>();
+            var cfg = LayeredContextConfig.TakeSnapshot();
 
-            var maxVols = LayeredContextConfig.MilestoneMaxPreviousVolumes;
+            var maxVols = cfg.MilestoneMaxPreviousVolumes;
             var startVol = System.Math.Max(1, currentVolumeNumber - maxVols);
-            for (var vol = startVol; vol < currentVolumeNumber; vol++)
+            var volCount = currentVolumeNumber - startVol;
+            if (volCount <= 0)
+                return new List<VolumeMilestoneEntry>();
+
+            var volumes = Enumerable.Range(startVol, volCount).ToList();
+            var tasks = volumes.Select(v => LoadMilestoneAsync(v, cfg)).ToList();
+            var milestones = await Task.WhenAll(tasks).ConfigureAwait(false);
+
+            var result = new List<VolumeMilestoneEntry>(volCount);
+            for (int i = 0; i < volumes.Count; i++)
             {
-                var milestone = await LoadMilestoneAsync(vol);
-                if (!string.IsNullOrWhiteSpace(milestone))
+                if (!string.IsNullOrWhiteSpace(milestones[i]))
                 {
                     result.Add(new VolumeMilestoneEntry
                     {
-                        VolumeNumber = vol,
-                        Milestone = milestone
+                        VolumeNumber = volumes[i],
+                        Milestone = milestones[i]
                     });
                 }
             }
@@ -147,7 +162,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 私有方法
 
-        private static string BuildMilestoneText(int volumeNumber, Dictionary<string, string> volumeSummaries)
+        private static string BuildMilestoneText(int volumeNumber, Dictionary<string, string> volumeSummaries, LayeredContextConfigSnapshot cfg)
         {
             var header = $"=== 第{volumeNumber}卷 历史摘要 ===";
             if (volumeSummaries.Count == 0)
@@ -157,9 +172,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 .OrderBy(kv => kv.Key, Comparer<string>.Create(ChapterParserHelper.CompareChapterId))
                 .ToList();
 
-            var interval = System.Math.Max(1, LayeredContextConfig.MilestoneAnchorInterval);
-            var tailRecentCount = System.Math.Max(0, LayeredContextConfig.VolumeMilestoneTailRecentCount);
-            var maxChars = LayeredContextConfig.VolumeMilestoneMaxChars;
+            var interval = System.Math.Max(1, cfg.MilestoneAnchorInterval);
+            var tailRecentCount = System.Math.Max(0, cfg.VolumeMilestoneTailRecentCount);
+            var maxChars = cfg.VolumeMilestoneMaxChars;
             if (maxChars <= 0)
                 maxChars = 12000;
             var perChapterMax = System.Math.Max(200, System.Math.Min(800, maxChars / 10));
@@ -230,24 +245,26 @@ namespace TM.Services.Modules.ProjectData.Implementations
             return Path.Combine(GetMilestonesDir(), $"vol{volumeNumber}.txt");
         }
 
-        private async Task<string> LoadMilestoneAsync(int volumeNumber)
+        private async Task<string> LoadMilestoneAsync(int volumeNumber, LayeredContextConfigSnapshot cfg)
         {
             if (_cache.TryGetValue(volumeNumber, out var cached))
                 return cached;
 
-            var path = GetMilestoneFilePath(volumeNumber);
+            var path = (await MilestoneCondenser.GetEffectiveFilePathAsync(volumeNumber).ConfigureAwait(false))
+                       ?? GetMilestoneFilePath(volumeNumber);
+            var epoch = Volatile.Read(ref _cacheEpoch);
             if (!File.Exists(path))
                 return string.Empty;
 
             try
             {
-                var text = await File.ReadAllTextAsync(path);
+                var text = await File.ReadAllTextAsync(path).ConfigureAwait(false);
 
-                var maxChars = LayeredContextConfig.VolumeMilestoneMaxChars;
+                var maxChars = cfg.VolumeMilestoneMaxChars;
                 if (maxChars > 0 && text.Length > maxChars)
                 {
                     var firstLineEnd = text.IndexOf('\n');
-                    if (firstLineEnd > 0 && firstLineEnd < 300 && text.StartsWith("=== "))
+                    if (firstLineEnd > 0 && firstLineEnd < 300 && text.StartsWith("=== ", StringComparison.Ordinal))
                     {
                         var header = text.Substring(0, firstLineEnd).TrimEnd('\r');
                         var body = text.Substring(firstLineEnd + 1);
@@ -271,7 +288,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     TM.App.Log($"[MilestoneStore] vol{volumeNumber}.txt 超过上限{maxChars}字，读取时已自动截断");
                 }
 
-                _cache[volumeNumber] = text;
+                if (epoch == Volatile.Read(ref _cacheEpoch))
+                    _cache[volumeNumber] = text;
                 return text;
             }
             catch (Exception ex)
@@ -288,11 +306,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Directory.CreateDirectory(dir);
 
             var path = GetMilestoneFilePath(volumeNumber);
-            var tmpPath = path + ".tmp";
+            var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
 
             try
             {
-                await File.WriteAllTextAsync(tmpPath, milestone);
+                await File.WriteAllTextAsync(tmpPath, milestone).ConfigureAwait(false);
                 File.Move(tmpPath, path, overwrite: true);
             }
             catch (Exception ex)

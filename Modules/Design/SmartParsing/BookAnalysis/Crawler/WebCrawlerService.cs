@@ -2,9 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Windows.Threading;
 using Microsoft.Web.WebView2.Wpf;
 
 namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
@@ -64,15 +64,18 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
                 TM.App.Log($"[WebCrawlerService] 提取到 {chapters?.Count ?? 0} 个章节");
                 if (chapters != null && chapters.Count > 0)
                 {
+                    foreach (var ch in chapters)
+                        ch.Title = CleanChapterTitle(ch.Title);
+
                     for (int i = 0; i < Math.Min(3, chapters.Count); i++)
                     {
                         TM.App.Log($"[WebCrawlerService] 章节样本[{i}]: title='{chapters[i].Title}' url='{chapters[i].Url}'");
                     }
                 }
 
-                if (chapters != null && chapters.Count > 0 && chapters.Count < 50 && IsBqgdeSite())
+                if (chapters != null && chapters.Count > 0 && chapters.Count < 50)
                 {
-                    var expanded = await TryNavigateToBqgdeFullListAsync(chapters, script);
+                    var expanded = await TryExpandChapterListAsync(chapters, script);
                     if (expanded.Count > chapters.Count)
                     {
                         chapters = expanded;
@@ -119,101 +122,188 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
         #endregion
 
         private async Task<(bool success, string title, string content, int wordCount, string? error)> ExtractChapterContentWithPaginationAsync(
-            CancellationToken cancellationToken)
+            CancellationToken cancellationToken, string? chapterBaseUrl = null, string? catalogChapterTitle = null)
         {
-            var source = _webView.Source?.ToString() ?? string.Empty;
-            var isShuquta = !string.IsNullOrWhiteSpace(source)
-                          && Uri.TryCreate(source, UriKind.Absolute, out var uri)
-                          && (uri.Host.Contains("shuquta.com", StringComparison.OrdinalIgnoreCase));
+            const int maxPages = 8;
+            const int maxChapterChars = 30000;
+            var mergedSb = new System.Text.StringBuilder();
+            string? firstPageTitle = null;
+            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            int firstPageLen = 0;
 
-            if (!isShuquta)
+            for (var page = 0; page < maxPages; page++)
             {
-                var content = await ExtractChapterContentAsync();
-                if (content.success) return content;
+                if (cancellationToken.IsCancellationRequested) break;
+                await Dispatcher.Yield(DispatcherPriority.Input);
 
-                var isBqgde = !string.IsNullOrWhiteSpace(source)
-                              && Uri.TryCreate(source, UriKind.Absolute, out var bqUri)
-                              && IsBqgdeHost(bqUri.Host);
-                if (isBqgde)
+                var currentUrl = _webView.Source?.ToString() ?? string.Empty;
+                if (!string.IsNullOrWhiteSpace(currentUrl) && !visited.Add(currentUrl)) break;
+
+                var content = await ExtractChapterContentAsync();
+
+                if (!content.success && page == 0)
                 {
-                    int[] retryDelays = { 1500, 3000, 5000 };
+                    int[] retryDelays = { 1000, 2500, 5000 };
                     for (int r = 0; r < retryDelays.Length; r++)
                     {
                         await Task.Delay(retryDelays[r], cancellationToken);
                         content = await ExtractChapterContentAsync();
-                        if (content.success) return content;
+                        if (content.success) break;
                     }
                 }
 
-                return content;
-            }
+                if (!content.success) return content;
 
-            const int maxPages = 8;
-            var merged = string.Empty;
-            string? finalTitle = null;
-            var totalWords = 0;
-            var visited = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                if (string.IsNullOrWhiteSpace(firstPageTitle) && !string.IsNullOrWhiteSpace(content.title))
+                    firstPageTitle = content.title;
 
-            for (var page = 0; page < maxPages; page++)
-            {
-                if (cancellationToken.IsCancellationRequested)
+                if (page > 0)
                 {
-                    break;
-                }
-
-                var currentUrl = _webView.Source?.ToString() ?? string.Empty;
-                if (!string.IsNullOrWhiteSpace(currentUrl) && !visited.Add(currentUrl))
-                {
-                    break;
-                }
-
-                var content = await ExtractChapterContentAsync();
-                if (!content.success)
-                {
-                    return content;
-                }
-
-                if (string.IsNullOrWhiteSpace(finalTitle) && !string.IsNullOrWhiteSpace(content.title))
-                {
-                    finalTitle = content.title;
-                }
-
-                var part = content.content ?? string.Empty;
-                part = part.Replace("\r\n", "\n");
-                part = part.Trim();
-
-                if (!string.IsNullOrWhiteSpace(part))
-                {
-                    if (merged.IndexOf(part, StringComparison.Ordinal) < 0)
+                    var referenceTitle = catalogChapterTitle ?? firstPageTitle;
+                    if (!string.IsNullOrWhiteSpace(content.title) && !string.IsNullOrWhiteSpace(referenceTitle))
                     {
-                        if (!string.IsNullOrWhiteSpace(merged))
+                        if (!IsSameChapterTitle(referenceTitle, content.title))
                         {
-                            merged += "\n\n";
+                            TM.App.Log($"[WebCrawlerService] 跨章防御(标题): 基准='{referenceTitle}' → 新页='{content.title}'");
+                            break;
                         }
-                        merged += part;
+                    }
+
+                    if (firstPageLen > 0 && mergedSb.Length > firstPageLen * 5)
+                    {
+                        TM.App.Log($"[WebCrawlerService] 跨章防御(膨胀): 内容已达首页{mergedSb.Length / firstPageLen}倍({mergedSb.Length}字)，停止拼接");
+                        break;
                     }
                 }
 
-                merged = merged.Replace("\n{3,}", "\n\n");
-                totalWords = merged.Length;
+                var contentPart = (content.content ?? string.Empty).Replace("\r\n", "\n").Trim();
+                if (!string.IsNullOrWhiteSpace(contentPart))
+                {
+                    var merged = mergedSb.ToString();
+                    if (!merged.Contains(contentPart, StringComparison.Ordinal))
+                    {
+                        if (mergedSb.Length > 0) mergedSb.Append("\n\n");
+                        mergedSb.Append(contentPart);
+                    }
+
+                    if (page == 0) firstPageLen = contentPart.Length;
+                }
+
+                if (mergedSb.Length >= maxChapterChars)
+                {
+                    TM.App.Log($"[WebCrawlerService] 跨章防御(上限): 已达{mergedSb.Length}字符，停止拼接");
+                    break;
+                }
 
                 var nextUrl = await TryGetNextPageUrlAsync();
-                if (string.IsNullOrWhiteSpace(nextUrl))
-                {
-                    break;
-                }
+                if (string.IsNullOrWhiteSpace(nextUrl)) break;
 
-                if (!string.IsNullOrWhiteSpace(currentUrl) && string.Equals(nextUrl, currentUrl, StringComparison.OrdinalIgnoreCase))
+                if (!string.IsNullOrWhiteSpace(currentUrl))
                 {
-                    break;
+                    if (string.Equals(nextUrl, currentUrl, StringComparison.OrdinalIgnoreCase)) break;
+
+                    if (IsPaginationUrl(chapterBaseUrl ?? currentUrl, nextUrl))
+                    {
+                    }
+                    else if (IsLikelyDifferentChapterUrl(currentUrl, nextUrl))
+                    {
+                        TM.App.Log($"[WebCrawlerService] 跨章防御(URL): '{currentUrl}' → '{nextUrl}'");
+                        break;
+                    }
                 }
 
                 await NavigateAndWaitAsync(nextUrl, cancellationToken);
             }
 
-            merged = merged.Replace("\n{3,}", "\n\n").Trim();
+            var finalContent = System.Text.RegularExpressions.Regex.Replace(mergedSb.ToString(), "\n{3,}", "\n\n").Trim();
+            return (true, firstPageTitle ?? string.Empty, finalContent, finalContent.Length, null);
+        }
 
-            return (true, finalTitle ?? string.Empty, merged, totalWords, null);
+        private static bool IsSameChapterTitle(string firstTitle, string currentTitle)
+        {
+            if (string.IsNullOrWhiteSpace(firstTitle) || string.IsNullOrWhiteSpace(currentTitle))
+                return true;
+
+            var chapterPattern = new System.Text.RegularExpressions.Regex(@"第[\d一二三四五六七八九十百千万零〇]+[章节回篇]");
+            var m1 = chapterPattern.Match(firstTitle);
+            var m2 = chapterPattern.Match(currentTitle);
+
+            if (m1.Success && m2.Success)
+                return m1.Value == m2.Value;
+
+            return string.Equals(firstTitle.Trim(), currentTitle.Trim(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        private static bool IsPaginationUrl(string baseUrl, string nextUrl)
+        {
+            try
+            {
+                var baseUri = new Uri(baseUrl);
+                var nextUri = new Uri(nextUrl);
+
+                if (!string.Equals(baseUri.Host, nextUri.Host, StringComparison.OrdinalIgnoreCase))
+                    return false;
+
+                var baseFile = System.IO.Path.GetFileNameWithoutExtension(baseUri.AbsolutePath);
+                var nextFile = System.IO.Path.GetFileNameWithoutExtension(nextUri.AbsolutePath);
+
+                if (System.Text.RegularExpressions.Regex.IsMatch(nextFile,
+                    @"^" + System.Text.RegularExpressions.Regex.Escape(baseFile) + @"[_\-]p?\d+$",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    return true;
+
+                var query = nextUri.Query;
+                if (System.Text.RegularExpressions.Regex.IsMatch(query, @"[?&]p(age)?=\d+",
+                    System.Text.RegularExpressions.RegexOptions.IgnoreCase))
+                    return true;
+
+                var basePath = baseUri.AbsolutePath.TrimEnd('/');
+                var nextPath = nextUri.AbsolutePath.TrimEnd('/');
+                if (nextPath.StartsWith(basePath, StringComparison.OrdinalIgnoreCase)
+                    && System.Text.RegularExpressions.Regex.IsMatch(
+                        nextPath.Substring(basePath.Length), @"^/\d+$"))
+                    return true;
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+
+        private static bool IsLikelyDifferentChapterUrl(string currentUrl, string nextUrl)
+        {
+            try
+            {
+                var curUri = new Uri(currentUrl);
+                var nextUri = new Uri(nextUrl);
+
+                if (!string.Equals(curUri.Host, nextUri.Host, StringComparison.OrdinalIgnoreCase))
+                    return true;
+
+                var curFile = System.IO.Path.GetFileNameWithoutExtension(curUri.AbsolutePath);
+                var nextFile = System.IO.Path.GetFileNameWithoutExtension(nextUri.AbsolutePath);
+
+                if (long.TryParse(curFile, out var curId) && long.TryParse(nextFile, out var nextId))
+                {
+                    if (curId != nextId)
+                        return true;
+                }
+
+                if (!string.IsNullOrWhiteSpace(curFile) && !string.IsNullOrWhiteSpace(nextFile)
+                    && !string.Equals(curFile, nextFile, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!nextFile.StartsWith(curFile, StringComparison.OrdinalIgnoreCase))
+                        return true;
+                }
+
+                return false;
+            }
+            catch
+            {
+                return false;
+            }
         }
 
         private async Task<string> TryGetNextPageUrlAsync()
@@ -261,9 +351,13 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
 
             var crawledChapters = new List<ChapterContent>();
             var totalWords = 0;
+            const int maxWordsPerChapter = 30000;
+            const int maxTotalWords = 500000;
 
             for (int i = 0; i < targetChapters.Count; i++)
             {
+                await Dispatcher.Yield(DispatcherPriority.Input);
+
                 if (cancellationToken.IsCancellationRequested)
                 {
                     TM.App.Log("[WebCrawlerService] 用户取消抓取");
@@ -286,29 +380,51 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
                 {
                     await NavigateAndWaitAsync(chapter.Url, cancellationToken);
 
-                    var content = await ExtractChapterContentWithPaginationAsync(cancellationToken);
+                    var content = await ExtractChapterContentWithPaginationAsync(cancellationToken, chapter.Url, chapter.Title);
 
                     if (content.success)
                     {
                         TM.App.Log($"[WebCrawlerService] 内容提取title='{content.title}' chapterTitle='{chapter.Title}'");
                         if (string.IsNullOrWhiteSpace(content.content) || content.wordCount < 50)
                         {
-                            TM.App.Log($"[WebCrawlerService] 正文过短，可能解析到了非正文区域: {chapter.Title} ({chapter.Url}) len={content.wordCount}");
+                            TM.App.Log($"[WebCrawlerService] 正文过短，跳过不保存: {chapter.Title} ({chapter.Url}) len={content.wordCount}");
                         }
-
-                        crawledChapters.Add(new ChapterContent
+                        else if (string.IsNullOrWhiteSpace(content.title) && content.wordCount < 300)
                         {
-                            Index = chapter.Index,
-                            Title = string.IsNullOrEmpty(content.title) ? chapter.Title : content.title,
-                            Url = chapter.Url,
-                            Content = content.content,
-                            WordCount = content.wordCount
-                        });
+                            TM.App.Log($"[WebCrawlerService] 疑似目录页/专题页，跳过不保存: {chapter.Title} ({chapter.Url}) len={content.wordCount}");
+                        }
+                        else
+                        {
+                            var chapterContent = content.content;
+                            var chapterWordCount = content.wordCount;
 
-                        totalWords += content.wordCount;
-                        chapter.IsCrawled = true;
+                            if (chapterWordCount > maxWordsPerChapter)
+                            {
+                                TM.App.Log($"[WebCrawlerService] 单章字数超限({chapterWordCount}>{maxWordsPerChapter})，截断: {chapter.Title}");
+                                chapterContent = chapterContent.Substring(0, maxWordsPerChapter);
+                                chapterWordCount = maxWordsPerChapter;
+                            }
 
-                        TM.App.Log($"[WebCrawlerService] 抓取成功: {chapter.Title} ({content.wordCount} 字)");
+                            crawledChapters.Add(new ChapterContent
+                            {
+                                Index = chapter.Index,
+                                Title = string.IsNullOrEmpty(content.title) ? chapter.Title : content.title,
+                                Url = chapter.Url,
+                                Content = chapterContent,
+                                WordCount = chapterWordCount
+                            });
+
+                            totalWords += chapterWordCount;
+                            chapter.IsCrawled = true;
+
+                            TM.App.Log($"[WebCrawlerService] 抓取成功: {chapter.Title} ({chapterWordCount} 字)");
+
+                            if (totalWords >= maxTotalWords)
+                            {
+                                TM.App.Log($"[WebCrawlerService] 总字数已达上限({totalWords}>={maxTotalWords})，停止抓取");
+                                break;
+                            }
+                        }
                     }
                     else
                     {
@@ -378,38 +494,16 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
 
         #endregion
 
-        #region bqgde 完整目录导航
+        #region 目录扩展导航
 
-        private bool IsBqgdeSite()
-        {
-            var source = _webView.Source?.ToString() ?? "";
-            if (string.IsNullOrWhiteSpace(source) || !Uri.TryCreate(source, UriKind.Absolute, out var uri))
-                return false;
-            return IsBqgdeHost(uri.Host);
-        }
-
-        private static bool IsBqgdeHost(string host)
-        {
-            host = host.ToLowerInvariant();
-            if (host.Contains("bqgde.de")) return true;
-            var idx = host.IndexOf("bqg", StringComparison.Ordinal);
-            if (idx >= 0)
-            {
-                var pos = idx + 3;
-                while (pos < host.Length && char.IsDigit(host[pos])) pos++;
-                if (pos < host.Length && host[pos] == '.') return true;
-            }
-            return false;
-        }
-
-        private async Task<List<ChapterInfo>> TryNavigateToBqgdeFullListAsync(
+        private async Task<List<ChapterInfo>> TryExpandChapterListAsync(
             List<ChapterInfo> currentChapters, string extractScript)
         {
             try
             {
-                TM.App.Log($"[WebCrawlerService] bqgde: 当前页面仅提取到 {currentChapters.Count} 章，尝试导航到完整目录");
+                TM.App.Log($"[WebCrawlerService] 当前页面仅提取到 {currentChapters.Count} 章，尝试扩展目录");
 
-                var navScript = ContentExtractor.GetBqgdeFullListNavigationScript();
+                var navScript = ContentExtractor.GetExpandCatalogScript();
                 var navResult = await _webView.ExecuteScriptAsync(navScript);
                 var navJson = JsonSerializer.Deserialize<string>(navResult);
 
@@ -424,13 +518,13 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
 
                     if (type == "url" && !string.IsNullOrWhiteSpace(value))
                     {
-                        TM.App.Log($"[WebCrawlerService] bqgde: 导航到完整目录: {value}");
+                        TM.App.Log($"[WebCrawlerService] 导航到完整目录: {value}");
                         await NavigateSpaAsync(value);
                         expandedChapters = await TryExtractChaptersAsync(extractScript);
                     }
                     else if (type == "clicked")
                     {
-                        TM.App.Log("[WebCrawlerService] bqgde: 已点击'查看更多章节'，等待页面更新");
+                        TM.App.Log("[WebCrawlerService] 已点击'查看更多章节'，等待页面更新");
                         await Task.Delay(3000);
                         expandedChapters = await TryExtractChaptersAsync(extractScript);
                     }
@@ -438,30 +532,30 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
 
                 if (expandedChapters != null && expandedChapters.Count > currentChapters.Count)
                 {
-                    TM.App.Log($"[WebCrawlerService] bqgde: 阶段1成功，提取到 {expandedChapters.Count} 章（原 {currentChapters.Count} 章）");
-                    return NormalizeBqgdeChapterUrls(expandedChapters);
+                    TM.App.Log($"[WebCrawlerService] 阶段1成功，提取到 {expandedChapters.Count} 章（原 {currentChapters.Count} 章）");
+                    return NormalizeMobileChapterUrls(expandedChapters);
                 }
 
-                var desktopUrl = TryBuildBqgdeDesktopUrl();
+                var desktopUrl = TryBuildDesktopUrl();
                 if (!string.IsNullOrWhiteSpace(desktopUrl))
                 {
-                    TM.App.Log($"[WebCrawlerService] bqgde: 阶段1未增加章节，fallback 到桌面版: {desktopUrl}");
+                    TM.App.Log($"[WebCrawlerService] 阶段1未增加章节，fallback 到桌面版: {desktopUrl}");
                     await NavigateAndWaitAsync(desktopUrl, CancellationToken.None);
                     var desktopChapters = await TryExtractChaptersAsync(extractScript);
                     if (desktopChapters != null && desktopChapters.Count > currentChapters.Count)
                     {
-                        TM.App.Log($"[WebCrawlerService] bqgde: 桌面版提取到 {desktopChapters.Count} 章（原 {currentChapters.Count} 章）");
-                        return NormalizeBqgdeChapterUrls(desktopChapters);
+                        TM.App.Log($"[WebCrawlerService] 桌面版提取到 {desktopChapters.Count} 章（原 {currentChapters.Count} 章）");
+                        return NormalizeMobileChapterUrls(desktopChapters);
                     }
                 }
 
-                TM.App.Log($"[WebCrawlerService] bqgde: 所有策略均未增加章节，保留原结果并归一化URL");
-                return NormalizeBqgdeChapterUrls(currentChapters);
+                TM.App.Log($"[WebCrawlerService] 所有策略均未增加章节，保留原结果");
+                return NormalizeMobileChapterUrls(currentChapters);
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[WebCrawlerService] bqgde: 导航完整目录失败: {ex.Message}");
-                return NormalizeBqgdeChapterUrls(currentChapters);
+                TM.App.Log($"[WebCrawlerService] 扩展目录失败: {ex.Message}");
+                return NormalizeMobileChapterUrls(currentChapters);
             }
         }
 
@@ -480,25 +574,25 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
             }
         }
 
-        private string? TryBuildBqgdeDesktopUrl()
+        private string? TryBuildDesktopUrl()
         {
             var source = _webView.Source?.ToString() ?? "";
             if (!Uri.TryCreate(source, UriKind.Absolute, out var uri)) return null;
             var host = uri.Host.ToLowerInvariant();
-            if (!host.StartsWith("m.")) return null;
+            if (!host.StartsWith("m.", StringComparison.Ordinal)) return null;
             var desktopHost = "www." + host.Substring(2);
             var builder = new UriBuilder(uri) { Host = desktopHost };
             return builder.Uri.ToString();
         }
 
-        private static List<ChapterInfo> NormalizeBqgdeChapterUrls(List<ChapterInfo> chapters)
+        private static List<ChapterInfo> NormalizeMobileChapterUrls(List<ChapterInfo> chapters)
         {
             foreach (var ch in chapters)
             {
                 if (string.IsNullOrWhiteSpace(ch.Url)) continue;
                 if (!Uri.TryCreate(ch.Url, UriKind.Absolute, out var uri)) continue;
                 var host = uri.Host.ToLowerInvariant();
-                if (host.StartsWith("m."))
+                if (host.StartsWith("m.", StringComparison.Ordinal))
                 {
                     var desktopHost = "www." + host.Substring(2);
                     var builder = new UriBuilder(uri) { Host = desktopHost };
@@ -567,6 +661,7 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
                 }
 
                 await Task.Delay(500, cancellationToken);
+                await Dispatcher.Yield(DispatcherPriority.Input);
             }
             finally
             {
@@ -592,12 +687,20 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
                 if (!success)
                 {
                     var error = root.TryGetProperty("error", out var e) ? e.GetString() : "未知错误";
+                    TM.App.Log($"[WebCrawlerService] 正文提取失败: {error} url={_webView.Source}");
                     return (false, "", "", 0, error);
+                }
+                if (TM.App.IsDebugMode)
+                {
+                    var dbgWc = root.TryGetProperty("wordCount", out var wcEl) ? wcEl.GetInt32() : 0;
+                    TM.App.Log($"[WebCrawlerService] 正文提取成功 wordCount={dbgWc} url={_webView.Source}");
                 }
 
                 var title = root.TryGetProperty("title", out var t) ? t.GetString() ?? "" : "";
+                title = CleanChapterTitle(title);
                 var content = root.TryGetProperty("content", out var c) ? c.GetString() ?? "" : "";
-                var wordCount = root.TryGetProperty("wordCount", out var w) ? w.GetInt32() : content.Length;
+                content = CleanNovelContent(content);
+                var wordCount = content.Length;
 
                 return (true, title, content, wordCount, null);
             }
@@ -608,5 +711,74 @@ namespace TM.Modules.Design.SmartParsing.BookAnalysis.Crawler
         }
 
         #endregion
+
+        private static readonly System.Text.RegularExpressions.Regex _puaRegex =
+            new(@"[\uE000-\uF8FF]", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static string CleanChapterTitle(string title)
+        {
+            if (string.IsNullOrWhiteSpace(title)) return title;
+
+            var cleaned = _puaRegex.Replace(title, string.Empty);
+
+            cleaned = cleaned
+                .Replace("\u25A1", "")
+                .Replace("\u25A0", "")
+                .Replace("\u25AA", "")
+                .Replace("\u25AB", "")
+                .Replace("\u25FD", "")
+                .Replace("\u25FE", "")
+                .Replace("\uFFFD", "")
+                .Replace("\u0000", "");
+
+            cleaned = System.Text.RegularExpressions.Regex.Replace(cleaned, @"\s+", " ").Trim();
+
+            return string.IsNullOrWhiteSpace(cleaned) ? title.Trim() : cleaned;
+        }
+
+        private static string StripPuaCharacters(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return text;
+            return _puaRegex.Replace(text, string.Empty);
+        }
+
+        private static string CleanNovelContent(string content)
+        {
+            if (string.IsNullOrWhiteSpace(content)) return string.Empty;
+
+            content = StripPuaCharacters(content);
+
+            var adLineKeywords = new[]
+            {
+                "最新网址", "最新章节", "请记住本书首发域名", "手机版阅读网址",
+                "本章未完", "点击下一页", "笔趣阁", "顶点小说", "全本免费",
+                "天才一秒", "记住地址", "shuquta.com", "xheiyan.info",
+                "bqgde.de", "bqg", "17k.com", "qidian.com",
+                "推荐阅读", "相关推荐", "更多精彩", "手机用户请浏览",
+                "温馨提示：", "投票推荐", "加入书签"
+            };
+
+            var lines = content.Split('\n');
+            var sb = new System.Text.StringBuilder(content.Length);
+            foreach (var line in lines)
+            {
+                var trimmed = line.Trim();
+                var isAd = false;
+                foreach (var kw in adLineKeywords)
+                {
+                    if (trimmed.Contains(kw, StringComparison.OrdinalIgnoreCase))
+                    {
+                        isAd = true;
+                        break;
+                    }
+                }
+                if (!isAd)
+                    sb.AppendLine(trimmed);
+            }
+
+            var result = System.Text.RegularExpressions.Regex.Replace(
+                sb.ToString().Trim(), @"\n{3,}", "\n\n");
+            return result;
+        }
     }
 }

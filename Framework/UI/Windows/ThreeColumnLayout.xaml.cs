@@ -1,36 +1,32 @@
-using System;
+﻿using System;
 using System.Reflection;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
-using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers.Storage;
+using System.Windows.Media.Animation;
 using TM.Framework.UI.Workspace;
 using TM.Framework.UI.Workspace.Services;
 using TM.Framework.UI.Helpers;
-using TM.Framework.Appearance.ThemeManagement;
-using TM.Services.Framework.AI.Core;
 
 namespace TM.Framework.UI.Windows
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ThreeColumnLayout : UserControl
     {
-        private readonly DispatcherTimer _timer;
         private UnifiedWindow? _unifiedWindow;
         private Window? _ownerWindow;
         private readonly PanelCommunicationService _comm = ServiceLocator.Get<PanelCommunicationService>();
-        private int _memRefreshCounter;
 
-        private enum WindowMode { Single, Multi }
-        private WindowMode _windowMode = WindowMode.Multi;
-        private bool _lastWasCreative = true;
+        private static readonly CubicEase _easeIn = FreezeCubicEase(EasingMode.EaseIn);
+        private static readonly CubicEase _easeOut = FreezeCubicEase(EasingMode.EaseOut);
+        private static CubicEase FreezeCubicEase(EasingMode mode) { var e = new CubicEase { EasingMode = mode }; e.Freeze(); return e; }
+        private static readonly DoubleAnimation _fadeOutTemplate = CreateFadeOutTemplate();
+        private static readonly DoubleAnimation _fadeInTemplate = CreateFadeInTemplate();
+        private static DoubleAnimation CreateFadeOutTemplate() { var a = new DoubleAnimation { To = 0, Duration = new Duration(TimeSpan.FromMilliseconds(500)), EasingFunction = _easeIn }; a.Freeze(); return a; }
+        private static DoubleAnimation CreateFadeInTemplate() { var a = new DoubleAnimation(0, 1, new Duration(TimeSpan.FromMilliseconds(500))) { EasingFunction = _easeOut }; a.Freeze(); return a; }
 
         public Button MinimizeBtn => MinimizeButton;
         public Button MaximizeBtn => MaximizeButton;
@@ -46,20 +42,11 @@ namespace TM.Framework.UI.Windows
 
             SizeChanged += OnLayoutSizeChanged;
 
-            _timer = new DispatcherTimer
-            {
-                Interval = TimeSpan.FromSeconds(1)
-            };
-            _timer.Tick += UpdateBottomBar;
-            _timer.Start();
-
-            UpdateBottomBar(null, null);
-
             _comm.FunctionNavigationRequested += OnFunctionNavigationRequested;
             _comm.ModuleNavigationRequested += OnModuleNavigationRequested;
 
             Loaded += OnThreeColumnLoaded;
-            Loaded += (_, _) => Dispatcher.BeginInvoke(LoadAppIcon, System.Windows.Threading.DispatcherPriority.Background);
+            Loaded += (_, _) => TM.Framework.Common.Helpers.UI.AppIconLoader.Load(AppIconBorder, 24, logTag: "ThreeColumnLayout");
             Unloaded += OnThreeColumnUnloaded;
 
             TM.App.Log("[组件] 3栏布局初始化完成");
@@ -91,131 +78,22 @@ namespace TM.Framework.UI.Windows
             }
         }
 
-        private static string GetWindowModeSettingsPath()
-            => StoragePathHelper.GetFilePath("Framework", "UI/Windows/ThreeColumnLayout", "layout_settings.json");
-
-        private async Task LoadWindowModeSettingsAsync()
+        private void OnThreeColumnLoaded(object sender, RoutedEventArgs e)
         {
             try
             {
-                var path = GetWindowModeSettingsPath();
-                if (!File.Exists(path)) return;
-                var json = await File.ReadAllTextAsync(path).ConfigureAwait(true);
-                using var doc = JsonDocument.Parse(json);
-                if (doc.RootElement.TryGetProperty("windowMode", out var prop)
-                    && prop.GetString() == "Single")
-                {
-                    _windowMode = WindowMode.Single;
-                    UpdateMultiWindowButtonLabel();
-                    TM.App.Log("[ThreeColumnLayout] 已恢复单窗口模式");
-                }
+                _ownerWindow = Window.GetWindow(this);
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ThreeColumnLayout] 加载窗口模式失败（忽略）: {ex.Message}");
+                TM.App.Log($"[ThreeColumnLayout] OnThreeColumnLoaded 失败: {ex.Message}");
             }
-        }
-
-        private void SaveWindowModeSettings()
-        {
-            var path = GetWindowModeSettingsPath();
-            var json = $"{{\"windowMode\":\"{(_windowMode == WindowMode.Single ? "Single" : "Multi")}\"}}";
-            _ = Task.Run(() =>
-            {
-                try
-                {
-                    var dir = Path.GetDirectoryName(path);
-                    if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                        Directory.CreateDirectory(dir);
-                    var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                    File.WriteAllText(tmp, json);
-                    File.Move(tmp, path, overwrite: true);
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[ThreeColumnLayout] 保存窗口模式失败（忽略）: {ex.Message}");
-                }
-            });
-        }
-
-        private async void OnThreeColumnLoaded(object sender, RoutedEventArgs e)
-        {
-            _ownerWindow = Window.GetWindow(this);
-            if (_ownerWindow != null)
-            {
-                _ownerWindow.Activated += OnOwnerWindowActivated;
-                _ownerWindow.Activated += OnOwnerWindowActivatedMarkCreative;
-                CenterWindowOnScreen(_ownerWindow);
-            }
-            await LoadWindowModeSettingsAsync();
         }
 
         private void OnThreeColumnUnloaded(object sender, RoutedEventArgs e)
         {
             _comm.FunctionNavigationRequested -= OnFunctionNavigationRequested;
             _comm.ModuleNavigationRequested -= OnModuleNavigationRequested;
-            _timer.Stop();
-
-            try
-            {
-                if (_ownerWindow != null)
-                {
-                    _ownerWindow.Activated -= OnOwnerWindowActivated;
-                    _ownerWindow.Activated -= OnOwnerWindowActivatedMarkCreative;
-                }
-            }
-            catch { }
-        }
-
-        private void OnOwnerWindowActivatedMarkCreative(object? sender, EventArgs e)
-        {
-            _lastWasCreative = true;
-        }
-
-        private void OnOwnerWindowActivated(object? sender, EventArgs e)
-        {
-            if (_windowMode == WindowMode.Single) return;
-            if (_unifiedWindow != null && _unifiedWindow.IsVisible)
-                _unifiedWindow.Activate();
-        }
-
-        private void UpdateMultiWindowButtonLabel()
-        {
-            MultiWindowButtonLabel.Text = _windowMode == WindowMode.Single ? "多窗口" : "单窗口";
-        }
-
-        private void OnMultiWindowToggleClick(object sender, RoutedEventArgs e)
-        {
-            if (_windowMode == WindowMode.Single)
-            {
-                if (_unifiedWindow != null)
-                    _unifiedWindow.IsStandaloneMode = false;
-                _ownerWindow?.Show();
-                _unifiedWindow?.Show();
-                _windowMode = WindowMode.Multi;
-            }
-            else
-            {
-                if (_lastWasCreative)
-                {
-                    if (_unifiedWindow != null)
-                        _unifiedWindow.IsStandaloneMode = false;
-                    _unifiedWindow?.Hide();
-                    _ownerWindow?.Show();
-                    _ownerWindow?.Activate();
-                }
-                else
-                {
-                    if (_unifiedWindow != null)
-                        _unifiedWindow.IsStandaloneMode = true;
-                    _ownerWindow?.Hide();
-                    _unifiedWindow?.Show();
-                    _unifiedWindow?.Activate();
-                }
-                _windowMode = WindowMode.Single;
-            }
-            UpdateMultiWindowButtonLabel();
-            SaveWindowModeSettings();
         }
 
         private void OnMainPinToggleClick(object sender, RoutedEventArgs e)
@@ -226,65 +104,151 @@ namespace TM.Framework.UI.Windows
             MainPinButtonContent.Opacity = win.Topmost ? 1.0 : 0.4;
         }
 
+        private void SyncSizeFromUnifiedToOwner()
+        {
+            if (_ownerWindow == null || _unifiedWindow == null) return;
+
+            var bounds = _unifiedWindow.GetSharedWindowBounds();
+
+            if (_unifiedWindow.IsCustomMaximized)
+            {
+                _ownerWindow.Left = bounds.Left;
+                _ownerWindow.Top = bounds.Top;
+                _ownerWindow.Width = bounds.Width;
+                _ownerWindow.Height = bounds.Height;
+                _ownerWindow.WindowState = WindowState.Maximized;
+            }
+            else
+            {
+                if (_ownerWindow.WindowState == WindowState.Maximized)
+                {
+                    _ownerWindow.WindowState = WindowState.Normal;
+                }
+
+                _ownerWindow.Left = bounds.Left;
+                _ownerWindow.Top = bounds.Top;
+                _ownerWindow.Width = bounds.Width;
+                _ownerWindow.Height = bounds.Height;
+            }
+        }
+
+        private void SyncSizeFromOwnerToUnified()
+        {
+            if (_ownerWindow == null || _unifiedWindow == null) return;
+
+            var bounds = _ownerWindow.WindowState == WindowState.Maximized
+                ? _ownerWindow.RestoreBounds
+                : new Rect(
+                    _ownerWindow.Left,
+                    _ownerWindow.Top,
+                    _ownerWindow.ActualWidth > 0 ? _ownerWindow.ActualWidth : _ownerWindow.Width,
+                    _ownerWindow.ActualHeight > 0 ? _ownerWindow.ActualHeight : _ownerWindow.Height);
+
+            _unifiedWindow.ApplySharedWindowBounds(
+                bounds.Left,
+                bounds.Top,
+                bounds.Width,
+                bounds.Height,
+                _ownerWindow.WindowState == WindowState.Maximized);
+        }
+
         private void CreateUnifiedWindow()
         {
             _unifiedWindow = new UnifiedWindow();
             _unifiedWindow.Owner = ResolveUnifiedWindowOwner();
-            _unifiedWindow.Closed += (s, args) => _unifiedWindow = null;
-            _unifiedWindow.Activated += (_, _) => _lastWasCreative = false;
+            _unifiedWindow.Closed += (s, args) =>
+            {
+                _unifiedWindow = null;
+            };
             _unifiedWindow.CreativeWindowRequested += () =>
             {
-                _unifiedWindow!.IsStandaloneMode = false;
-                _windowMode = WindowMode.Single;
-                UpdateMultiWindowButtonLabel();
-                SaveWindowModeSettings();
-                CenterWindowOnScreen(_ownerWindow);
-                _ownerWindow?.Show();
-                _ownerWindow?.Activate();
-            };
-        }
+                SyncSizeFromUnifiedToOwner();
 
-        private static void CenterWindowOnScreen(Window? window)
-        {
-            if (window == null || window.WindowState == WindowState.Maximized) return;
-            var area = System.Windows.SystemParameters.WorkArea;
-            var w = window.ActualWidth > 0 ? window.ActualWidth : window.Width;
-            var h = window.ActualHeight > 0 ? window.ActualHeight : window.Height;
-            window.Left = area.Left + (area.Width  - w) / 2;
-            window.Top  = area.Top  + (area.Height - h) / 2;
+                if (_ownerWindow != null)
+                {
+                    if (_unifiedWindow!.Owner == null)
+                        _unifiedWindow.Owner = _ownerWindow;
+
+                    _ownerWindow.BeginAnimation(Window.OpacityProperty, null);
+                    _ownerWindow.Opacity = 1;
+                    _ownerWindow.Show();
+
+                    var unifiedRef = _unifiedWindow;
+                    var ownerRef = _ownerWindow;
+                    var fadeOut = (DoubleAnimation)_fadeOutTemplate.Clone();
+                    fadeOut.Completed += (_, _) =>
+                    {
+                        unifiedRef.BeginAnimation(Window.OpacityProperty, null);
+                        unifiedRef.Opacity = 1;
+                        unifiedRef.Hide();
+                        unifiedRef.IsStandaloneMode = false;
+                        ownerRef.Activate();
+                    };
+                    _unifiedWindow.BeginAnimation(Window.OpacityProperty, fadeOut, HandoffBehavior.SnapshotAndReplace);
+                    return;
+                }
+
+                _unifiedWindow!.IsStandaloneMode = false;
+            };
         }
 
         private void ShowUnifiedWindow()
         {
-            if (_windowMode == WindowMode.Single)
-            {
-                _unifiedWindow!.IsStandaloneMode = true;
-                _ownerWindow?.Hide();
-                CenterWindowOnScreen(_unifiedWindow);
-            }
-            else
-            {
-                _unifiedWindow!.IsStandaloneMode = false;
-            }
-            if (_unifiedWindow.WindowState == WindowState.Minimized)
+            SyncSizeFromOwnerToUnified();
+            _unifiedWindow!.IsStandaloneMode = true;
+
+            if (_unifiedWindow!.WindowState == WindowState.Minimized)
                 _unifiedWindow.WindowState = WindowState.Normal;
+
+            var wasHidden = !_unifiedWindow.IsVisible;
+            if (!wasHidden)
+            {
+                _unifiedWindow.BeginAnimation(Window.OpacityProperty, null);
+                _unifiedWindow.Opacity = 1;
+                _unifiedWindow.Activate();
+
+                if (_ownerWindow != null && _ownerWindow.IsVisible)
+                    _ownerWindow.Hide();
+
+                return;
+            }
+
+            _unifiedWindow.BeginAnimation(Window.OpacityProperty, null);
+            _unifiedWindow.Opacity = 0;
             _unifiedWindow.Show();
             _unifiedWindow.Activate();
+
+            var ownerToHide = _ownerWindow;
+            var fadeIn = (DoubleAnimation)_fadeInTemplate.Clone();
+            fadeIn.Completed += (_, _) =>
+            {
+                _unifiedWindow.BeginAnimation(Window.OpacityProperty, null);
+                _unifiedWindow.Opacity = 1;
+                ownerToHide?.Hide();
+            };
+            var unifiedForFade = _unifiedWindow;
+            Dispatcher.InvokeAsync(() =>
+            {
+                unifiedForFade.BeginAnimation(Window.OpacityProperty, fadeIn, HandoffBehavior.SnapshotAndReplace);
+            }, System.Windows.Threading.DispatcherPriority.Render);
         }
 
-        private void OnModuleNavigationRequested(string moduleName)
+        private string GetCurrentBusinessKey()
+        {
+            if (_unifiedWindow?.DataContext is UnifiedWindowViewModel currentVm &&
+                currentVm.SelectedTab != null &&
+                !string.IsNullOrWhiteSpace(currentVm.SelectedTab.ModuleName))
+            {
+                return currentVm.SelectedTab.ModuleName;
+            }
+            return string.Empty;
+        }
+
+        private async void OnModuleNavigationRequested(string moduleName)
         {
             try
             {
-                var currentKey = string.Empty;
-                if (_unifiedWindow?.DataContext is UnifiedWindowViewModel currentVm &&
-                    currentVm.SelectedTab != null &&
-                    !string.IsNullOrWhiteSpace(currentVm.SelectedTab.ModuleName))
-                {
-                    currentKey = currentVm.SelectedTab.ModuleName;
-                }
-
-                if (!BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSession(currentKey))
+                if (!await BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSessionAsync(GetCurrentBusinessKey()))
                 {
                     return;
                 }
@@ -322,18 +286,6 @@ namespace TM.Framework.UI.Windows
             }
         }
 
-        private void UpdateBottomBar(object? sender, EventArgs? e)
-        {
-            TimeDisplay.Text = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss");
-
-            if (++_memRefreshCounter >= 10)
-            {
-                _memRefreshCounter = 0;
-                var memoryMB = Environment.WorkingSet / 1024 / 1024;
-                SystemInfo.Text = $"内存: {memoryMB}MB";
-            }
-        }
-
         private void OnOpenWorkbench(object sender, RoutedEventArgs e)
         {
             if (_unifiedWindow == null)
@@ -344,27 +296,19 @@ namespace TM.Framework.UI.Windows
             if (_unifiedWindow!.DataContext is UnifiedWindowViewModel viewModel)
             {
                 if (viewModel.CurrentMode != UnifiedWindowViewModel.WindowMode.Writing)
-                    viewModel.CurrentMode = UnifiedWindowViewModel.WindowMode.Settings;
+                    viewModel.CurrentMode = UnifiedWindowViewModel.WindowMode.Writing;
             }
 
             ShowUnifiedWindow();
 
-            TM.App.Log("[ThreeColumnLayout] 打开工具台窗口");
+            TM.App.Log("[ThreeColumnLayout] 打开工作台窗口");
         }
 
-        private void OnFunctionNavigationRequested(string moduleName, string subModuleName, Type viewType)
+        private async void OnFunctionNavigationRequested(string moduleName, string subModuleName, Type viewType)
         {
             try
             {
-                var currentKey = string.Empty;
-                if (_unifiedWindow?.DataContext is UnifiedWindowViewModel currentVm &&
-                    currentVm.SelectedTab != null &&
-                    !string.IsNullOrWhiteSpace(currentVm.SelectedTab.ModuleName))
-                {
-                    currentKey = currentVm.SelectedTab.ModuleName;
-                }
-
-                if (!BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSession(currentKey))
+                if (!await BusinessSessionNavigationGuard.TryConfirmAndEndDirtyBusinessSessionAsync(GetCurrentBusinessKey()))
                 {
                     return;
                 }
@@ -384,10 +328,7 @@ namespace TM.Framework.UI.Windows
                     if (targetTab != null)
                     {
                         viewModel.SelectedTab = targetTab;
-                        Dispatcher.BeginInvoke(new Action(() =>
-                        {
-                            NavigateToFunction(viewModel, viewType);
-                        }), DispatcherPriority.Background);
+                        NavigateToFunction(viewModel, viewType);
                     }
                 }
 
@@ -477,47 +418,6 @@ namespace TM.Framework.UI.Windows
             });
         }
 
-        private void LoadAppIcon()
-        {
-            try
-            {
-                var iconPath = StoragePathHelper.GetFrameworkPath("UI/Icons/app.ico");
-                if (!File.Exists(iconPath))
-                {
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    return;
-                }
-
-                var decoder = new IconBitmapDecoder(new Uri(iconPath, UriKind.Absolute), BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-                var target = 24;
-                var best = decoder.Frames
-                    .OrderBy(f => Math.Abs(f.PixelWidth - target))
-                    .ThenByDescending(f => f.PixelWidth)
-                    .FirstOrDefault();
-
-                var source = best ?? decoder.Frames.FirstOrDefault();
-                if (source == null)
-                {
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    return;
-                }
-
-                var brush = new ImageBrush(source)
-                {
-                    Stretch = Stretch.Uniform
-                };
-                if (brush.CanFreeze)
-                    brush.Freeze();
-
-                AppIconBorder.Background = brush;
-                AppIconBorder.Visibility = Visibility.Visible;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ThreeColumnLayout] 加载应用图标失败: {ex.Message}");
-                AppIconBorder.Visibility = Visibility.Collapsed;
-            }
-        }
     }
 }
 

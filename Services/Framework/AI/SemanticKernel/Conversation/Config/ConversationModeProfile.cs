@@ -1,4 +1,4 @@
-using TM.Framework.UI.Workspace.RightPanel.Modes;
+﻿using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Config

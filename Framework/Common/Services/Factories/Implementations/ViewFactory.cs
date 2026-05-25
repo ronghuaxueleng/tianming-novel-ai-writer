@@ -18,9 +18,7 @@ namespace TM.Framework.Common.Services.Factories
             if (!typeof(UserControl).IsAssignableFrom(viewType))
                 throw new ArgumentException($"类型 {viewType.Name} 不是 UserControl 类型", nameof(viewType));
 
-            var view = (UserControl)ActivatorUtilities.CreateInstance(_serviceProvider, viewType);
-            TrySetViewModel(view, viewType);
-            return view;
+            return (UserControl)ActivatorUtilities.CreateInstance(_serviceProvider, viewType);
         }
 
         public UserControl CreateView(Type viewType, params object[] args)
@@ -28,27 +26,17 @@ namespace TM.Framework.Common.Services.Factories
             if (!typeof(UserControl).IsAssignableFrom(viewType))
                 throw new ArgumentException($"类型 {viewType.Name} 不是 UserControl 类型", nameof(viewType));
 
-            var view = (UserControl)ActivatorUtilities.CreateInstance(_serviceProvider, viewType, args);
-            TrySetViewModel(view, viewType);
-            return view;
+            return (UserControl)ActivatorUtilities.CreateInstance(_serviceProvider, viewType, args);
         }
 
         public T CreateView<T>() where T : UserControl
         {
-            var view = ActivatorUtilities.CreateInstance<T>(_serviceProvider);
-            TrySetViewModel(view, typeof(T));
-            return view;
+            return ActivatorUtilities.CreateInstance<T>(_serviceProvider);
         }
 
         public T CreateView<T>(params object[] args) where T : UserControl
         {
-            var view = ActivatorUtilities.CreateInstance<T>(_serviceProvider, args);
-            TrySetViewModel(view, typeof(T));
-            return view;
-        }
-
-        private void TrySetViewModel(UserControl view, Type viewType)
-        {
+            return ActivatorUtilities.CreateInstance<T>(_serviceProvider, args);
         }
     }
 }

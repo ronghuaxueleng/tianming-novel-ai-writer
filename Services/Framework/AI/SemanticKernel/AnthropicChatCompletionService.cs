@@ -1,6 +1,7 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Text.RegularExpressions;
 using System.Net.Http;
 using System.Text;
 using System.Text.Json;
@@ -16,43 +17,40 @@ namespace TM.Services.Framework.AI.SemanticKernel
     public class AnthropicChatCompletionService : IChatCompletionService, IDisposable
     {
         private readonly HttpClient _httpClient;
+        private readonly bool _ownsHttpClient;
         private bool _disposed;
         private readonly string _modelId;
+        private readonly string _originalModelId;
         private readonly string _endpoint;
-        private string _apiKey;
+        private readonly string _apiKey;
+        private readonly bool _enableLongContext;
+        private readonly string? _providerId;
         private readonly JsonSerializerOptions _jsonOptions;
 
-        private static readonly object _debugLogLock = new();
-        private static readonly System.Collections.Generic.HashSet<string> _debugLoggedKeys = new();
+        private static readonly Regex ClaudeMajorRegex = new(@"claude[/\-](\d+)", RegexOptions.Compiled);
+        private static readonly Regex ClaudeMinorRegex = new(@"claude[/\-]3[.\-](\d+)", RegexOptions.Compiled);
 
         private static void DebugLogOnce(string key, Exception ex)
-        {
-            if (!TM.App.IsDebugMode)
-            {
-                return;
-            }
-
-            lock (_debugLogLock)
-            {
-                if (_debugLoggedKeys.Count >= 500 || !_debugLoggedKeys.Add(key))
-                {
-                    return;
-                }
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[AnthropicService] {key}: {ex.Message}");
-        }
+            => TM.Framework.Common.Helpers.InfoLogDedup.DebugLogOnce(key, ex, "AnthropicService");
 
         public IReadOnlyDictionary<string, object?> Attributes { get; }
 
-        public void UpdateApiKey(string newKey)
+        public AnthropicChatCompletionService(
+            string apiKey,
+            string modelId,
+            string? baseUrl = null,
+            int timeoutSeconds = 0,
+            HttpClient? httpClient = null,
+            bool enableLongContext = false,
+            string? providerId = null,
+            string? configModelIdForCache = null)
         {
-            _apiKey = newKey;
-        }
-
-        public AnthropicChatCompletionService(string apiKey, string modelId, string? baseUrl = null)
-        {
-            _modelId = modelId;
+            _originalModelId = !string.IsNullOrEmpty(configModelIdForCache)
+                ? configModelIdForCache!
+                : (modelId ?? string.Empty);
+            _modelId = StripLongContextSuffix(modelId ?? string.Empty);
+            _enableLongContext = enableLongContext;
+            _providerId = providerId;
             _apiKey = apiKey;
 
             var root = string.IsNullOrWhiteSpace(baseUrl)
@@ -60,7 +58,35 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 : baseUrl!;
 
             _endpoint = NormalizeEndpoint(root);
-            _httpClient = ServiceLocator.Get<ProxyService>().CreateHttpClient(TimeSpan.FromMinutes(5));
+
+            string timeoutSource;
+            if (httpClient != null)
+            {
+                _httpClient = httpClient;
+                _ownsHttpClient = false;
+                timeoutSource = $"外部传入（{httpClient.Timeout}）";
+            }
+            else
+            {
+                TimeSpan httpTimeout;
+                if (IsLocalEndpoint(root))
+                {
+                    httpTimeout = System.Threading.Timeout.InfiniteTimeSpan;
+                    timeoutSource = "无限（本地端点）";
+                }
+                else if (timeoutSeconds > 0)
+                {
+                    httpTimeout = TimeSpan.FromSeconds(timeoutSeconds);
+                    timeoutSource = $"{timeoutSeconds}秒（用户配置）";
+                }
+                else
+                {
+                    httpTimeout = TimeSpan.FromMinutes(5);
+                    timeoutSource = "5分钟（默认兜底）";
+                }
+                _httpClient = ServiceLocator.Get<ProxyService>().CreateHttpClient(httpTimeout);
+                _ownsHttpClient = true;
+            }
 
             _jsonOptions = JsonHelper.Lenient;
 
@@ -70,7 +96,34 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 { "Provider", "Anthropic" }
             };
 
-            TM.App.Log($"[AnthropicService] 初始化: Model={modelId}, Endpoint={_endpoint}");
+            var endpointForLog = TM.Services.Framework.AI.Core.TianmingProviderIdentity.IsTianmingPrivate(_providerId) ? TM.Services.Framework.AI.Core.TianmingProviderIdentity.MaskedEndpointLabel : _endpoint;
+            TM.App.Log($"[AnthropicService] 初始化: Model={_modelId}" +
+                (string.Equals(_modelId, _originalModelId, StringComparison.Ordinal) ? string.Empty : $" (cache key={_originalModelId})") +
+                $", Endpoint={endpointForLog}, EnableLongContext={_enableLongContext}, Timeout={timeoutSource}");
+        }
+
+        private static string StripLongContextSuffix(string modelId)
+        {
+            if (string.IsNullOrEmpty(modelId)) return modelId;
+            if (modelId.EndsWith("[1m]", StringComparison.OrdinalIgnoreCase))
+                return modelId.Substring(0, modelId.Length - 4);
+            if (modelId.EndsWith(":extended", StringComparison.OrdinalIgnoreCase))
+                return modelId.Substring(0, modelId.Length - 9);
+            return modelId;
+        }
+
+        private static bool IsLocalEndpoint(string? url)
+        {
+            if (string.IsNullOrWhiteSpace(url)) return false;
+            if (!Uri.TryCreate(url, UriKind.Absolute, out var uri)) return false;
+            var host = uri.Host.ToLowerInvariant();
+            return host == "localhost"
+                || host == "127.0.0.1"
+                || host == "::1"
+                || host.StartsWith("192.168.", StringComparison.Ordinal)
+                || host.StartsWith("10.", StringComparison.Ordinal)
+                || (host.StartsWith("172.", StringComparison.Ordinal) && System.Net.IPAddress.TryParse(host, out var ip)
+                    && ip.GetAddressBytes() is { } b && b[0] == 172 && b[1] >= 16 && b[1] <= 31);
         }
 
         public async Task<IReadOnlyList<ChatMessageContent>> GetChatMessageContentsAsync(
@@ -99,26 +152,42 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
                 InjectThinkingIfSupported(body, maxTokens);
 
-                var request = BuildHttpRequest(body, stream: false);
+                using var request = BuildHttpRequest(body, stream: false);
 
                 TM.App.Log($"[AnthropicService] 发送请求: {messages.Count} 条消息, MaxTokens={maxTokens}, HasSystem={!string.IsNullOrWhiteSpace(systemMessage)}");
 
-                using var response = await _httpClient.SendAsync(request, cancellationToken);
-                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken);
+                using var response = await _httpClient.SendAsync(request, cancellationToken).ConfigureAwait(false);
+                var responseJson = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
 
                 if (!response.IsSuccessStatusCode)
                 {
                     TM.App.Log($"[AnthropicService] 错误 ({(int)response.StatusCode}): {responseJson}");
-                    response.EnsureSuccessStatusCode();
+                    throw new System.Net.Http.HttpRequestException(
+                        $"Anthropic API error ({(int)response.StatusCode}): {responseJson}",
+                        null,
+                        response.StatusCode);
                 }
 
                 var content = TryExtractContent(responseJson);
+                var stopReason = TryExtractStopReason(responseJson);
+                var (inputTokens, outputTokens) = TryExtractUsage(responseJson);
+                ChatModeSettings.SyncLastFinishReason(stopReason);
 
-                TM.App.Log($"[AnthropicService] 收到响应: {content.Length} 字符");
+                TM.App.Log($"[AnthropicService] 收到响应: {content.Length} 字符, stop_reason={stopReason ?? "(null)"}, usage=in/{inputTokens} out/{outputTokens}");
 
+                var msgMeta = new Dictionary<string, object?>();
+                if (!string.IsNullOrEmpty(stopReason)) msgMeta["FinishReason"] = stopReason;
+                if (inputTokens > 0 || outputTokens > 0)
+                {
+                    msgMeta["Usage"] = new Dictionary<string, int>
+                    {
+                        ["InputTokens"] = inputTokens,
+                        ["OutputTokens"] = outputTokens
+                    };
+                }
                 return new List<ChatMessageContent>
                 {
-                    new ChatMessageContent(AuthorRole.Assistant, content)
+                    new ChatMessageContent(AuthorRole.Assistant, content, metadata: msgMeta.Count > 0 ? msgMeta : null)
                 };
             }
             catch (Exception ex)
@@ -153,28 +222,37 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
             InjectThinkingIfSupported(body, maxTokens);
 
-            var request = BuildHttpRequest(body, stream: true);
+            using var request = BuildHttpRequest(body, stream: true);
 
             TM.App.Log($"[AnthropicService] 流式请求: {messages.Count} 条消息, MaxTokens={maxTokens}, HasSystem={!string.IsNullOrWhiteSpace(systemMessage)}");
 
             using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                cancellationToken);
+                cancellationToken).ConfigureAwait(false);
 
             if (!response.IsSuccessStatusCode)
             {
-                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken);
+                var errorBody = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
                 TM.App.Log($"[AnthropicService] 流式请求失败 ({(int)response.StatusCode}): {errorBody}");
-                response.EnsureSuccessStatusCode();
+                throw new System.Net.Http.HttpRequestException(
+                    $"Anthropic API error ({(int)response.StatusCode}): {errorBody}",
+                    null,
+                    response.StatusCode);
             }
 
-            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken);
+            await using var stream = await response.Content.ReadAsStreamAsync(cancellationToken).ConfigureAwait(false);
             using var reader = new StreamReader(stream, Encoding.UTF8);
+
+            int accInputTokens = 0;
+            int accOutputTokens = 0;
+            var thinkingBuilder = new StringBuilder();
+            long? thinkingStartTicks = null;
+            long? thinkingEndTicks = null;
 
             while (!reader.EndOfStream && !cancellationToken.IsCancellationRequested)
             {
-                var line = await reader.ReadLineAsync(cancellationToken);
+                var line = await reader.ReadLineAsync(cancellationToken).ConfigureAwait(false);
                 if (string.IsNullOrWhiteSpace(line))
                 {
                     continue;
@@ -184,11 +262,17 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
                 if (!string.IsNullOrEmpty(delta.Content))
                 {
+                    if (thinkingStartTicks.HasValue && !thinkingEndTicks.HasValue)
+                        thinkingEndTicks = DateTime.UtcNow.Ticks;
+
                     yield return new StreamingChatMessageContent(AuthorRole.Assistant, delta.Content);
                 }
 
                 if (!string.IsNullOrEmpty(delta.Thinking))
                 {
+                    thinkingStartTicks ??= DateTime.UtcNow.Ticks;
+                    thinkingBuilder.Append(delta.Thinking);
+
                     var metadata = new Dictionary<string, object?>
                     {
                         ["Thinking"] = delta.Thinking
@@ -197,40 +281,83 @@ namespace TM.Services.Framework.AI.SemanticKernel
                     var thinkingChunk = new StreamingChatMessageContent(AuthorRole.Assistant, content: string.Empty, metadata: metadata);
                     yield return thinkingChunk;
                 }
+
+                if (delta.InputTokens > 0) accInputTokens = delta.InputTokens;
+                if (delta.OutputTokens > 0) accOutputTokens = delta.OutputTokens;
+
+                if (!string.IsNullOrEmpty(delta.StopReason))
+                {
+                    ChatModeSettings.SyncLastFinishReason(delta.StopReason);
+
+                    if (thinkingStartTicks.HasValue && !thinkingEndTicks.HasValue)
+                        thinkingEndTicks = DateTime.UtcNow.Ticks;
+
+                    var frMeta = new Dictionary<string, object?> { ["FinishReason"] = delta.StopReason };
+
+                    if (accInputTokens > 0 || accOutputTokens > 0)
+                    {
+                        frMeta["Usage"] = new Dictionary<string, int>
+                        {
+                            ["InputTokens"] = accInputTokens,
+                            ["OutputTokens"] = accOutputTokens
+                        };
+                    }
+                    if (thinkingBuilder.Length > 0)
+                    {
+                        frMeta["ThinkingFull"] = thinkingBuilder.ToString();
+                        if (thinkingStartTicks.HasValue && thinkingEndTicks.HasValue)
+                        {
+                            var durationMs = (int)TimeSpan.FromTicks(thinkingEndTicks.Value - thinkingStartTicks.Value).TotalMilliseconds;
+                            frMeta["ThinkingMs"] = durationMs > 0 ? durationMs : 0;
+                        }
+                    }
+
+                    yield return new StreamingChatMessageContent(AuthorRole.Assistant, content: string.Empty, metadata: frMeta);
+                }
             }
         }
 
         #region 辅助方法
 
-        private static int GetMaxTokens(PromptExecutionSettings? executionSettings)
+        private int GetMaxTokens(PromptExecutionSettings? executionSettings)
         {
-            const int defaultMaxTokens = 4096;
-
-            if (executionSettings?.ExtensionData == null)
+            if (executionSettings is Microsoft.SemanticKernel.Connectors.OpenAI.OpenAIPromptExecutionSettings oai
+                && oai.MaxTokens.HasValue && oai.MaxTokens.Value > 0)
             {
-                return defaultMaxTokens;
+                var v = oai.MaxTokens.Value;
+                ChatModeSettings.SyncLastUsedMaxTokens(v);
+                return v;
             }
 
-            try
+            if (executionSettings?.ExtensionData != null)
             {
-                if (executionSettings.ExtensionData.TryGetValue("max_tokens", out var value) && value != null)
+                try
                 {
-                    return value switch
+                    if (executionSettings.ExtensionData.TryGetValue("max_tokens", out var value) && value != null)
                     {
-                        int i => i,
-                        long l => (int)l,
-                        double d => (int)d,
-                        string s when int.TryParse(s, out var parsed) => parsed,
-                        _ => defaultMaxTokens
-                    };
+                        var parsed = value switch
+                        {
+                            int i when i > 0 => i,
+                            long l when l > 0 => (int)l,
+                            double d when d > 0 => (int)d,
+                            string s when int.TryParse(s, out var p) && p > 0 => p,
+                            _ => 0
+                        };
+                        if (parsed > 0)
+                        {
+                            ChatModeSettings.SyncLastUsedMaxTokens(parsed);
+                            return parsed;
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[AnthropicService] 解析 max_tokens 失败，回退到安全默认值: {ex.Message}");
                 }
             }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[AnthropicService] 解析 max_tokens 失败，使用默认值: {ex.Message}");
-            }
 
-            return defaultMaxTokens;
+            ChatModeSettings.SyncLastUsedMaxTokens(4096);
+            return 4096;
         }
 
         private HttpRequestMessage BuildHttpRequest(Dictionary<string, object?> body, bool stream)
@@ -246,6 +373,12 @@ namespace TM.Services.Framework.AI.SemanticKernel
             request.Headers.Add("x-api-key", _apiKey);
             request.Headers.Add("anthropic-version", "2023-06-01");
             request.Headers.Add("User-Agent", "TianMing-SK-Anthropic/1.0");
+
+            if (_enableLongContext
+                && !ChatModeSettings.IsUnsupportedParam(_providerId, _endpoint, _originalModelId, "long_context"))
+            {
+                request.Headers.Add("anthropic-beta", "context-1m-2025-08-07");
+            }
 
             if (stream)
             {
@@ -338,15 +471,25 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 return false;
 
             var lower = modelId.ToLowerInvariant();
+            if (!lower.Contains("claude")) return false;
 
-            if (lower.Contains("claude-4") || lower.Contains("claude-sonnet-4") || lower.Contains("claude-opus-4"))
-                return true;
+            var majorMatch = ClaudeMajorRegex.Match(lower);
+            if (!majorMatch.Success) return false;
 
-            if (lower.Contains("claude-3-7") || lower.Contains("claude-3.7"))
-                return true;
+            if (!int.TryParse(majorMatch.Groups[1].Value, out var major)) return false;
 
-            if (lower.Contains("claude-3-5-sonnet") || lower.Contains("claude-3.5-sonnet"))
-                return true;
+            if (major >= 4) return true;
+
+            if (major == 3)
+            {
+                var minorMatch = ClaudeMinorRegex.Match(lower);
+                if (!minorMatch.Success || !int.TryParse(minorMatch.Groups[1].Value, out var minor))
+                    return false;
+
+                if (minor >= 7) return true;
+
+                if (minor >= 5 && lower.Contains("sonnet")) return true;
+            }
 
             return false;
         }
@@ -366,13 +509,47 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 return trimmed;
             }
 
-            if (lower.EndsWith("/v1") || lower.EndsWith("/v1/"))
+            if (lower.EndsWith("/v1", StringComparison.Ordinal) || lower.EndsWith("/v1/", StringComparison.Ordinal))
             {
                 var root = trimmed.TrimEnd('/');
                 return root + "/messages";
             }
 
             return trimmed;
+        }
+
+        private static string TryExtractStopReason(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson)) return string.Empty;
+            try
+            {
+                using var doc = JsonDocument.Parse(responseJson, new JsonDocumentOptions { AllowTrailingCommas = true });
+                if (doc.RootElement.TryGetProperty("stop_reason", out var p))
+                    return p.GetString() ?? string.Empty;
+            }
+            catch { }
+            return string.Empty;
+        }
+
+        private static (int InputTokens, int OutputTokens) TryExtractUsage(string responseJson)
+        {
+            if (string.IsNullOrWhiteSpace(responseJson)) return (0, 0);
+            try
+            {
+                using var doc = JsonDocument.Parse(responseJson, new JsonDocumentOptions { AllowTrailingCommas = true });
+                if (doc.RootElement.TryGetProperty("usage", out var usage)
+                    && usage.ValueKind == JsonValueKind.Object)
+                {
+                    int inTokens = 0, outTokens = 0;
+                    if (usage.TryGetProperty("input_tokens", out var i) && i.ValueKind == JsonValueKind.Number)
+                        i.TryGetInt32(out inTokens);
+                    if (usage.TryGetProperty("output_tokens", out var o) && o.ValueKind == JsonValueKind.Number)
+                        o.TryGetInt32(out outTokens);
+                    return (inTokens, outTokens);
+                }
+            }
+            catch { }
+            return (0, 0);
         }
 
         private string TryExtractContent(string responseJson)
@@ -419,14 +596,20 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
         private readonly struct StreamDelta
         {
-            public StreamDelta(string? thinking, string? content)
+            public StreamDelta(string? thinking, string? content, string? stopReason = null, int inputTokens = 0, int outputTokens = 0)
             {
                 Thinking = thinking;
                 Content = content;
+                StopReason = stopReason;
+                InputTokens = inputTokens;
+                OutputTokens = outputTokens;
             }
 
             public string? Thinking { get; }
             public string? Content { get; }
+            public string? StopReason { get; }
+            public int InputTokens { get; }
+            public int OutputTokens { get; }
         }
 
         private StreamDelta TryExtractStreamDeltaWithThinking(string sseLine)
@@ -473,6 +656,41 @@ namespace TM.Services.Framework.AI.SemanticKernel
                             }
                         }
                     }
+
+                    if (eventType == "message_start"
+                        && root.TryGetProperty("message", out var msgElem)
+                        && msgElem.TryGetProperty("usage", out var msUsage)
+                        && msUsage.ValueKind == JsonValueKind.Object)
+                    {
+                        int inTokens = 0;
+                        if (msUsage.TryGetProperty("input_tokens", out var ip) && ip.ValueKind == JsonValueKind.Number)
+                            ip.TryGetInt32(out inTokens);
+                        if (inTokens > 0)
+                            return new StreamDelta(null, null, stopReason: null, inputTokens: inTokens, outputTokens: 0);
+                    }
+
+                    if (eventType == "message_delta")
+                    {
+                        string? sr = null;
+                        int outTokens = 0;
+
+                        if (root.TryGetProperty("delta", out var msgDelta)
+                            && msgDelta.TryGetProperty("stop_reason", out var stopReasonProp))
+                        {
+                            sr = stopReasonProp.GetString();
+                        }
+
+                        if (root.TryGetProperty("usage", out var mdUsage)
+                            && mdUsage.ValueKind == JsonValueKind.Object
+                            && mdUsage.TryGetProperty("output_tokens", out var op)
+                            && op.ValueKind == JsonValueKind.Number)
+                        {
+                            op.TryGetInt32(out outTokens);
+                        }
+
+                        if (!string.IsNullOrEmpty(sr) || outTokens > 0)
+                            return new StreamDelta(null, null, stopReason: sr, inputTokens: 0, outputTokens: outTokens);
+                    }
                 }
             }
             catch (JsonException ex)
@@ -490,8 +708,12 @@ namespace TM.Services.Framework.AI.SemanticKernel
             if (!_disposed)
             {
                 _disposed = true;
-                _httpClient.Dispose();
+                if (_ownsHttpClient)
+                {
+                    _httpClient.Dispose();
+                }
             }
+            GC.SuppressFinalize(this);
         }
     }
 }

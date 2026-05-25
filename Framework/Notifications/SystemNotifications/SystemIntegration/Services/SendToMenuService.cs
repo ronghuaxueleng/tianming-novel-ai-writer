@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.IO;
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -159,9 +159,9 @@ namespace TM.Framework.Notifications.SystemNotifications.SystemIntegration.Servi
                     case ".md":
                     case ".json":
                     case ".xml":
-                        var content = File.ReadAllText(filePath);
-                        ToastNotification.ShowInfo("文本文件", $"{fileName}\n已读取 {content.Length} 个字符");
-                        App.Log($"[SendToMenu] 读取文本文件，长度: {content.Length}");
+                        var fileSize = new FileInfo(filePath).Length;
+                        ToastNotification.ShowInfo("文本文件", $"{fileName}\n文件大小: {fileSize} 字节");
+                        App.Log($"[SendToMenu] 读取文本文件，大小: {fileSize} 字节");
                         break;
 
                     case ".jpg":

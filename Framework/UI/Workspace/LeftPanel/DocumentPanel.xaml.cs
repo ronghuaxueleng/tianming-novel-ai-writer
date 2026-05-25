@@ -1,8 +1,7 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Windows.Controls;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Modules.ProjectData.Interfaces;
@@ -10,6 +9,7 @@ using TM.Services.Modules.ProjectData.Interfaces;
 namespace TM.Framework.UI.Workspace.LeftPanel
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class DocumentPanel : UserControl
     {
         private PanelCommunicationService? _comm;
@@ -61,11 +61,6 @@ namespace TM.Framework.UI.Workspace.LeftPanel
             ChapterList.ChapterDeleted += (s, chapterId) =>
             {
                 Comm.PublishChapterDeleted(chapterId);
-            };
-
-            ChapterList.NewChapterRequested += (s, args) =>
-            {
-                Comm.PublishNewChapterRequested(args.ChapterId, args.ChapterTitle, args.InitialContent, true);
             };
         }
 

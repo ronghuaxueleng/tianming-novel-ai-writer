@@ -1,0 +1,342 @@
+[
+  {
+    "Id": "CE9M2YE972BR4",
+    "Name": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Icon": "Icon.Target",
+    "ParentCategory": null,
+    "Level": 1,
+    "Order": 1,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CB0S1YVYWDCQA",
+    "Name": "\u62C6\u4E66\u5206\u6790\u5E08",
+    "Icon": "Icon.Books",
+    "ParentCategory": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Level": 2,
+    "Order": 1,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CFNZB59HN3452",
+    "Name": "\u7384\u5E7B",
+    "Icon": "Icon.Swords",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 1,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CSXMTVMQPFCHW",
+    "Name": "\u7D20\u6750\u8BBE\u8BA1\u5E08",
+    "Icon": "Icon.Palette",
+    "ParentCategory": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Level": 2,
+    "Order": 2,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CB0S1YVYWDCQC",
+    "Name": "AIGC",
+    "Icon": "Icon.Sparkles",
+    "ParentCategory": null,
+    "Level": 1,
+    "Order": 2,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CGBWW4H0J8F2K",
+    "Name": "\u4ED9\u4FA0",
+    "Icon": "Icon.Cloud",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 2,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CHW7ZQEECGHX4",
+    "Name": "\u5C0F\u8BF4\u8BBE\u8BA1\u5E08",
+    "Icon": "Icon.Write",
+    "ParentCategory": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Level": 2,
+    "Order": 3,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CSXMTVMQPFCHX",
+    "Name": "Spec",
+    "Icon": "Icon.Ruler",
+    "ParentCategory": null,
+    "Level": 1,
+    "Order": 3,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CY0EVGGVZV18J",
+    "Name": "\u7075\u5F02",
+    "Icon": "Icon.Mask",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 3,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CB0S1YVYWDCQB",
+    "Name": "\u5C0F\u8BF4\u521B\u4F5C\u8005",
+    "Icon": "Icon.Note",
+    "ParentCategory": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Level": 2,
+    "Order": 4,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CBIZ8PROMPT01",
+    "Name": "\u4E1A\u52A1\u63D0\u793A\u8BCD",
+    "Icon": "Icon.Clipboard",
+    "ParentCategory": "\u7EDF\u4E00\u63D0\u793A\u8BCD",
+    "Level": 2,
+    "Order": 5,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CHW7ZQEECGHX5",
+    "Name": "\u6821\u9A8C",
+    "Icon": "Icon.CheckCircle",
+    "ParentCategory": null,
+    "Level": 1,
+    "Order": 4,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CEHB5PRBRBDVE",
+    "Name": "\u90FD\u5E02",
+    "Icon": "Icon.Institution",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 4,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CMG7AQJYH5CF5",
+    "Name": "\u79D1\u5E7B",
+    "Icon": "Icon.Rocket",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 5,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CD58HY4243YZF",
+    "Name": "\u5947\u5E7B",
+    "Icon": "Icon.Magic",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 6,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CH89XX9M2CSTA",
+    "Name": "\u5386\u53F2",
+    "Icon": "Icon.Scroll",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 7,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "C54Z9J0YW153M",
+    "Name": "\u6E38\u620F",
+    "Icon": "Icon.Gamepad",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 8,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CWX1A7SPEC09W",
+    "Name": "\u6B66\u4FA0",
+    "Icon": "Icon.Sword",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 9,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CXY2B8SPEC10X",
+    "Name": "\u60AC\u7591",
+    "Icon": "Icon.Search",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 10,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CYQ3C9SPEC11Y",
+    "Name": "\u8A00\u60C5",
+    "Icon": "Icon.Heart",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 11,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CZR4D0SPEC12Z",
+    "Name": "\u8F7B\u5C0F\u8BF4",
+    "Icon": "Icon.Sparkle",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 12,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CAS5E1SPEC13A",
+    "Name": "\u519B\u4E8B",
+    "Icon": "Icon.Shield",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 13,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CBT6F2SPEC14B",
+    "Name": "\u77ED\u7BC7\u723D\u6587",
+    "Icon": "Icon.Fire",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 14,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CCU7G3SPEC15C",
+    "Name": "\u65E0\u9650\u6D41",
+    "Icon": "Icon.Galaxy",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 15,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CDV8H4SPEC16D",
+    "Name": "\u672B\u65E5",
+    "Icon": "Icon.Forbidden",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 16,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CEW9I5SPEC17E",
+    "Name": "\u6050\u6016",
+    "Icon": "Icon.Warning",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 17,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CFX0J6SPEC18F",
+    "Name": "\u53E4\u8A00",
+    "Icon": "Icon.Castle",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 18,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CGY1K7SPEC19G",
+    "Name": "\u73B0\u5B9E",
+    "Icon": "Icon.Home",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 19,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CHZ2L8SPEC20H",
+    "Name": "\u4F53\u80B2",
+    "Icon": "Icon.Run",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 20,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CIA3M9SPEC21I",
+    "Name": "\u540C\u4EBA",
+    "Icon": "Icon.Globe",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 21,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CJB4N0SPEC22J",
+    "Name": "\u79CD\u7530",
+    "Icon": "Icon.Landscape",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 22,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CKC5O1SPEC23K",
+    "Name": "\u7CFB\u7EDF",
+    "Icon": "Icon.Chart",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 23,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CLD6P2SPEC24L",
+    "Name": "\u7A7F\u8D8A\u91CD\u751F",
+    "Icon": "Icon.Refresh",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 24,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  },
+  {
+    "Id": "CME7Q3SPEC25M",
+    "Name": "\u803D\u7F8E",
+    "Icon": "Icon.Heart",
+    "ParentCategory": "Spec",
+    "Level": 2,
+    "Order": 25,
+    "IsEnabled": true,
+    "IsBuiltIn": true
+  }
+]

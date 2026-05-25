@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -6,8 +6,12 @@ using System.Windows.Media;
 namespace TM.Framework.Common.Controls.Feedback
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class BusyOverlay : UserControl
     {
+        private static readonly SolidColorBrush _defaultOverlayBg = FreezeBrush(Color.FromArgb(0xAA, 0, 0, 0));
+        private static SolidColorBrush FreezeBrush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
         public BusyOverlay()
         {
             InitializeComponent();
@@ -31,7 +35,7 @@ namespace TM.Framework.Common.Controls.Feedback
                 nameof(OverlayBackground),
                 typeof(Brush),
                 typeof(BusyOverlay),
-                new PropertyMetadata(new SolidColorBrush(Color.FromArgb(0x55, 0x00, 0x00, 0x00))));
+                new PropertyMetadata(_defaultOverlayBg));
 
         public Brush OverlayBackground
         {

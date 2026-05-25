@@ -1,7 +1,6 @@
 <UserControl x:Class="TM.Framework.User.Preferences.Display.DisplayView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:behaviors="clr-namespace:TM.Framework.Common.Behaviors"
              xmlns:common="clr-namespace:TM.Framework.Common.Controls.Layout"
              xmlns:local="clr-namespace:TM.Framework.User.Preferences.Display">
@@ -13,7 +12,7 @@
                       behaviors:SmoothScrollBehavior.AnimationDuration="200">
             <StackPanel Margin="5">
 
-                <common:IconHeaderGroupBox Icon="🔍" Title="界面缩放" Margin="0,0,0,20">
+                <common:IconHeaderGroupBox Icon="{DynamicResource Icon.Search}" Title="界面缩放" Margin="0,0,0,20">
                     <StackPanel>
                         <Grid>
                             <Grid.ColumnDefinitions>
@@ -22,19 +21,19 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <TextBlock Grid.Column="0" Text="80%" FontSize="12" 
-                                       Foreground="{DynamicResource TextSecondary}" 
+                            <TextBlock Grid.Column="0" Text="80%" FontSize="12"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,10,0"/>
 
-                            <Slider Grid.Column="1" 
-                                    Minimum="0.8" Maximum="2.0" 
+                            <Slider Grid.Column="1"
+                                    Minimum="0.8" Maximum="2.0"
                                     Value="{Binding UiScale}"
-                                    TickFrequency="0.1" 
+                                    TickFrequency="0.1"
                                     IsSnapToTickEnabled="True"
                                     VerticalAlignment="Center"/>
 
-                            <TextBlock Grid.Column="2" Text="200%" FontSize="12" 
-                                       Foreground="{DynamicResource TextSecondary}" 
+                            <TextBlock Grid.Column="2" Text="200%" FontSize="12"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="10,0,0,0"/>
                         </Grid>
 
@@ -43,38 +42,38 @@
                             <Run Text="{Binding UiScalePercent, Mode=OneWay}" Foreground="{DynamicResource PrimaryColor}"/>
                         </TextBlock>
 
-                        <Border Background="{DynamicResource Surface}" CornerRadius="6" Padding="10" Margin="0,10,0,0">
+                        <Border Background="{DynamicResource SurfaceGlass}" CornerRadius="6" Padding="10" Margin="0,10,0,0">
                             <StackPanel Orientation="Horizontal">
-                                <emoji:TextBlock Text="ℹ️" FontSize="12" Margin="0,0,8,0"/>
-                                <TextBlock Text="缩放立即生效，并自动保存" 
-                                           FontSize="11" Foreground="{DynamicResource TextSecondary}" 
+                                <Image Source="{DynamicResource Icon.Info}" Width="12" Height="12" Margin="0,0,8,0"/>
+                                <TextBlock Text="缩放立即生效，并自动保存"
+                                           FontSize="11" Foreground="{DynamicResource TextSecondary}"
                                            TextWrapping="Wrap"/>
                             </StackPanel>
                         </Border>
                     </StackPanel>
                 </common:IconHeaderGroupBox>
 
-                <common:IconHeaderGroupBox Icon="⚙️" Title="显示选项" Margin="0,0,0,20">
+                <common:IconHeaderGroupBox Icon="{DynamicResource Icon.Settings}" Title="显示选项" Margin="0,0,0,20">
                     <StackPanel>
-                        <CheckBox Content="显示左侧功能栏" 
+                        <CheckBox Content="显示左侧功能栏"
                                   IsChecked="{Binding ShowFunctionBar}"
                                   Margin="0,0,0,15" FontSize="13"/>
 
                         <TextBlock Text="列表密度" FontSize="13" Margin="0,0,0,10"/>
                         <StackPanel>
-                            <RadioButton Content="紧凑" 
+                            <RadioButton Content="紧凑"
                                          IsChecked="{Binding SelectedDensity, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=0}"
                                          Margin="0,0,0,8" FontSize="13"/>
-                            <RadioButton Content="标准（推荐）" 
+                            <RadioButton Content="标准（推荐）"
                                          IsChecked="{Binding SelectedDensity, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=1}"
                                          Margin="0,0,0,8" FontSize="13"/>
-                            <RadioButton Content="宽松" 
+                            <RadioButton Content="宽松"
                                          IsChecked="{Binding SelectedDensity, Converter={StaticResource EnumToBoolConverter}, ConverterParameter=2}"
                                          Margin="0,0,0,8" FontSize="13"/>
                         </StackPanel>
 
-                        <TextBlock Text="{Binding DensityDescription, Mode=OneWay}" 
-                                   FontSize="11" Foreground="{DynamicResource TextSecondary}" 
+                        <TextBlock Text="{Binding DensityDescription, Mode=OneWay}"
+                                   FontSize="11" Foreground="{DynamicResource TextSecondary}"
                                    Margin="20,5,0,0"/>
                     </StackPanel>
                 </common:IconHeaderGroupBox>

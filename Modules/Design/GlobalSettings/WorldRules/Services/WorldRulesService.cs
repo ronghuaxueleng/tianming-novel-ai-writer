@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Design.Worldview;
 
 namespace TM.Modules.Design.GlobalSettings.WorldRules.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class WorldRulesService : ModuleServiceBase<WorldRulesCategory, WorldRulesData>
     {
         public WorldRulesService()
@@ -15,6 +16,8 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules.Services
                 dataFileName: "world_rules.json")
         {
         }
+
+        protected override string? GetEntityTypeKeyForPropagation() => "worldrules";
 
         public List<WorldRulesData> GetAllWorldRules() => GetAllData();
 

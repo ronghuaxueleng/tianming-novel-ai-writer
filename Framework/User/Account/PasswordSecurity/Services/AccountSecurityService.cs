@@ -1,11 +1,7 @@
 using System;
-using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Text;
-using System.Text.Json;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Account.PasswordSecurity.Services
 {
@@ -13,229 +9,212 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
     {
         private readonly AccountLockoutService _lockoutService;
         private readonly PasswordSecuritySettings _securitySettings;
+        private volatile int _hasPasswordCache;
 
         public AccountSecurityService(AccountLockoutService lockoutService, PasswordSecuritySettings securitySettings)
         {
             _lockoutService = lockoutService;
             _securitySettings = securitySettings;
+            _ = System.Threading.Tasks.Task.Run(async () => { try { var d = await _securitySettings.LoadPasswordDataAsync().ConfigureAwait(false); _hasPasswordCache = d != null ? 1 : -1; } catch { } });
         }
 
         #region R1
 
-        public bool VerifyPassword(string password)
+        public bool HasPassword()
+        {
+            var cache = _hasPasswordCache;
+            if (cache != 0) return cache > 0;
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var d = await _securitySettings.LoadPasswordDataAsync().ConfigureAwait(false);
+                    _hasPasswordCache = d != null ? 1 : -1;
+                }
+                catch { }
+            });
+            return false;
+        }
+
+        public async System.Threading.Tasks.Task<bool> HasPasswordAsync()
+        {
+            if (_hasPasswordCache != 0) return _hasPasswordCache > 0;
+            var result = await _securitySettings.LoadPasswordDataAsync().ConfigureAwait(false) != null;
+            _hasPasswordCache = result ? 1 : -1;
+            return result;
+        }
+
+        public async System.Threading.Tasks.Task<bool> VerifyPasswordAsync(string password)
         {
             var lockoutService = _lockoutService;
-
-            if (lockoutService.IsAccountLocked())
+            if (await lockoutService.IsAccountLockedAsync())
             {
-                var remaining = lockoutService.GetLockoutTimeRemaining();
-                TM.App.Log($"[ASS] locked: {remaining}");
+                TM.App.Log($"[ASS] locked: {await lockoutService.GetLockoutTimeRemainingAsync()}");
                 return false;
             }
-
             var settings = _securitySettings;
-            var data = settings.LoadPasswordData();
-            if (data == null)
+
+            var (data, isValid, needsUpgrade, upgradedData) = await System.Threading.Tasks.Task.Run(async () =>
             {
-                lockoutService.RecordFailedAttempt();
-                return false;
-            }
+                var d = await settings.LoadPasswordDataAsync().ConfigureAwait(false);
+                if (d == null) return (d, false, false, (PasswordData?)null);
 
-            bool isSHA256 = string.IsNullOrEmpty(data.HashAlgorithm) || data.HashAlgorithm == "SHA256";
+                bool sha256 = string.IsNullOrEmpty(d.HashAlgorithm) || d.HashAlgorithm == "SHA256";
+                bool valid;
+                bool upgrade = false;
+                PasswordData? upgraded = null;
 
-            string hash;
-            bool isValid;
-
-            if (isSHA256)
-            {
-                hash = HashPasswordSHA256(password, data.Salt);
-                isValid = hash == data.PasswordHash;
-
-                if (isValid)
+                if (sha256)
                 {
-                    TM.App.Log("[ASS] upg");
-                    var newSalt = GenerateSalt();
-                    var newHash = HashPasswordPBKDF2(password, newSalt, 100000);
-
-                    data.PasswordHash = newHash;
-                    data.Salt = newSalt;
-                    data.Iterations = 100000;
-                    data.HashAlgorithm = "PBKDF2";
-                    data.LastModifiedTime = DateTime.Now;
-
-                    settings.SavePasswordData(data);
-                    TM.App.Log("[ASS] upg ok");
+                    var h = HashPasswordSHA256(password, d.Salt);
+                    valid = h == d.PasswordHash;
+                    if (valid)
+                    {
+                        var ns = GenerateSalt();
+                        var nh = HashPasswordPBKDF2(password, ns, 100000);
+                        upgraded = new PasswordData
+                        {
+                            PasswordHash = nh,
+                            Salt = ns,
+                            Iterations = 100000,
+                            HashAlgorithm = "PBKDF2",
+                            LastModifiedTime = DateTime.Now,
+                            StrengthLevel = d.StrengthLevel
+                        };
+                        upgrade = true;
+                    }
                 }
-            }
-            else
+                else
+                {
+                    var h = HashPasswordPBKDF2(password, d.Salt, d.Iterations);
+                    valid = h == d.PasswordHash;
+                }
+                return (d, valid, upgrade, upgraded);
+            }).ConfigureAwait(false);
+
+            if (data == null) { await lockoutService.RecordFailedAttemptAsync(); return false; }
+
+            if (needsUpgrade && upgradedData != null)
             {
-                hash = HashPasswordPBKDF2(password, data.Salt, data.Iterations);
-                isValid = hash == data.PasswordHash;
+                await settings.SavePasswordDataAsync(upgradedData).ConfigureAwait(false);
+                TM.App.Log("[ASS] upg ok");
             }
 
-            if (isValid)
-            {
-                lockoutService.ResetFailedAttempts();
-                TM.App.Log("[ASS] ok");
-            }
-            else
-            {
-                lockoutService.RecordFailedAttempt();
-                TM.App.Log("[ASS] fail");
-            }
-
+            if (isValid) await lockoutService.ResetFailedAttemptsAsync();
+            else await lockoutService.RecordFailedAttemptAsync();
+            TM.App.Log(isValid ? "[ASS] ok" : "[ASS] fail");
             return isValid;
         }
 
-        public bool ChangePassword(string oldPassword, string newPassword)
+        public async System.Threading.Tasks.Task<bool> ChangePasswordAsync(string oldPassword, string newPassword)
         {
             try
             {
-                if (!VerifyPassword(oldPassword))
-                {
-                    TM.App.Log("[ASS] old fail");
-                    return false;
-                }
-
-                if (IsPasswordInHistory(newPassword))
-                {
-                    TM.App.Log("[ASS] dup");
-                    return false;
-                }
-
+                if (!await VerifyPasswordAsync(oldPassword).ConfigureAwait(false)) { TM.App.Log("[ASS] old fail"); return false; }
+                if (await IsPasswordInHistoryAsync(newPassword).ConfigureAwait(false)) { TM.App.Log("[ASS] dup"); return false; }
                 var salt = GenerateSalt();
-                var hash = HashPasswordPBKDF2(newPassword, salt, 100000);
-
+                var hash = await System.Threading.Tasks.Task.Run(() => HashPasswordPBKDF2(newPassword, salt, 100000)).ConfigureAwait(false);
                 var data = new PasswordData
                 {
                     PasswordHash = hash,
                     Salt = salt,
                     Iterations = 100000,
                     HashAlgorithm = "PBKDF2",
-                    LastModifiedTime = DateTime.Now
+                    LastModifiedTime = DateTime.Now,
+                    StrengthLevel = TM.Framework.Common.Helpers.Validation.PasswordStrengthValidator.GetStrengthScore(newPassword)
                 };
-                var settings = _securitySettings;
-                settings.SavePasswordData(data);
-
-                AddToPasswordHistory(hash);
-
+                await _securitySettings.SavePasswordDataAsync(data).ConfigureAwait(false);
+                await AddToPasswordHistoryAsync(hash).ConfigureAwait(false);
+                _hasPasswordCache = 1;
                 TM.App.Log("[ASS] changed");
                 return true;
             }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ASS] chg err: {ex.Message}");
-                return false;
-            }
+            catch (Exception ex) { TM.App.Log($"[ASS] chg err: {ex.Message}"); return false; }
         }
 
-        public void SetInitialPassword(string password)
+        public async System.Threading.Tasks.Task SetInitialPasswordAsync(string password)
         {
             var salt = GenerateSalt();
-            var hash = HashPasswordPBKDF2(password, salt, 100000);
-
+            var hash = await System.Threading.Tasks.Task.Run(() => HashPasswordPBKDF2(password, salt, 100000)).ConfigureAwait(false);
             var data = new PasswordData
             {
                 PasswordHash = hash,
                 Salt = salt,
                 Iterations = 100000,
                 HashAlgorithm = "PBKDF2",
-                LastModifiedTime = DateTime.Now
+                LastModifiedTime = DateTime.Now,
+                StrengthLevel = TM.Framework.Common.Helpers.Validation.PasswordStrengthValidator.GetStrengthScore(password)
             };
-            var settings = _securitySettings;
-            settings.SavePasswordData(data);
-
-            AddToPasswordHistory(hash);
-
+            await _securitySettings.SavePasswordDataAsync(data).ConfigureAwait(false);
+            await AddToPasswordHistoryAsync(hash).ConfigureAwait(false);
+            _hasPasswordCache = 1;
             TM.App.Log("[ASS] init ok");
         }
 
-        public bool HasPassword()
+        private async System.Threading.Tasks.Task AddToPasswordHistoryAsync(string passwordHash)
         {
             var settings = _securitySettings;
-            return settings.LoadPasswordData() != null;
+            var history = await settings.LoadPasswordHistoryAsync().ConfigureAwait(false);
+            history.Add(passwordHash);
+            if (history.Count > 5) history = history.Skip(history.Count - 5).ToList();
+            await settings.SavePasswordHistoryAsync(history).ConfigureAwait(false);
         }
 
         #endregion
 
         #region R2
 
-        private bool IsPasswordInHistory(string password)
+        private async System.Threading.Tasks.Task<bool> IsPasswordInHistoryAsync(string password)
         {
             var settings = _securitySettings;
-            var history = settings.LoadPasswordHistory();
-            var data = settings.LoadPasswordData();
+            var history = await settings.LoadPasswordHistoryAsync().ConfigureAwait(false);
+            var data = await settings.LoadPasswordDataAsync().ConfigureAwait(false);
             if (data == null) return false;
-
             var hash = HashPasswordPBKDF2(password, data.Salt, data.Iterations);
             return history.Contains(hash);
-        }
-
-        private void AddToPasswordHistory(string passwordHash)
-        {
-            var settings = _securitySettings;
-            var history = settings.LoadPasswordHistory();
-            history.Add(passwordHash);
-
-            if (history.Count > 5)
-            {
-                history = history.Skip(history.Count - 5).ToList();
-            }
-
-            settings.SavePasswordHistory(history);
         }
 
         #endregion
 
         #region R3
 
-        public string EnableTwoFactorAuth()
+        public async System.Threading.Tasks.Task<string> EnableTwoFactorAuthAsync()
         {
             var secret = GenerateTwoFactorSecret();
-            var data = new TwoFactorAuthData
-            {
-                Secret = secret,
-                IsEnabled = true,
-                EnabledTime = DateTime.Now
-            };
-            var settings = _securitySettings;
-            settings.SaveTwoFactorData(data);
-
+            var data = new TwoFactorAuthData { Secret = secret, IsEnabled = true, EnabledTime = DateTime.Now };
+            await _securitySettings.SaveTwoFactorDataAsync(data).ConfigureAwait(false);
             TM.App.Log("[ASS] 2fa on");
             return secret;
         }
 
-        public void DisableTwoFactorAuth()
+        public async System.Threading.Tasks.Task DisableTwoFactorAuthAsync()
         {
             var settings = _securitySettings;
-            var data = settings.LoadTwoFactorData();
+            var data = await settings.LoadTwoFactorDataAsync().ConfigureAwait(false);
             if (data != null)
             {
                 data.IsEnabled = false;
-                settings.SaveTwoFactorData(data);
+                await settings.SaveTwoFactorDataAsync(data).ConfigureAwait(false);
             }
-
             TM.App.Log("[ASS] 2fa off");
         }
 
-        public bool IsTwoFactorEnabled()
+        public async System.Threading.Tasks.Task<bool> IsTwoFactorEnabledAsync()
         {
-            var settings = _securitySettings;
-            var data = settings.LoadTwoFactorData();
+            var data = await _securitySettings.LoadTwoFactorDataAsync().ConfigureAwait(false);
             return data?.IsEnabled ?? false;
         }
 
-        public string? GetTwoFactorSecret()
+        public async System.Threading.Tasks.Task<string?> GetTwoFactorSecretAsync()
         {
-            var settings = _securitySettings;
-            var data = settings.LoadTwoFactorData();
+            var data = await _securitySettings.LoadTwoFactorDataAsync().ConfigureAwait(false);
             return data?.Secret;
         }
 
-        public bool VerifyTOTPCode(string code)
+        public async System.Threading.Tasks.Task<bool> VerifyTOTPCodeAsync(string code)
         {
-            var settings = _securitySettings;
-            var data = settings.LoadTwoFactorData();
+            var data = await _securitySettings.LoadTwoFactorDataAsync().ConfigureAwait(false);
             if (data == null || !data.IsEnabled || string.IsNullOrEmpty(data.Secret))
                 return false;
 
@@ -265,8 +244,8 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
 
         private string GenerateTOTPCode(string secret, long timeStep = 0)
         {
-            long counter = timeStep == 0 
-                ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30 
+            long counter = timeStep == 0
+                ? DateTimeOffset.UtcNow.ToUnixTimeSeconds() / 30
                 : timeStep;
 
             var counterBytes = BitConverter.GetBytes(counter);
@@ -336,11 +315,6 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
             return Convert.ToBase64String(hash);
         }
 
-        private string HashPassword(string password, string salt, int iterations = 100000)
-        {
-            return HashPasswordPBKDF2(password, salt, iterations);
-        }
-
         private string GenerateSalt()
         {
             var bytes = new byte[32];
@@ -362,6 +336,7 @@ namespace TM.Framework.User.Account.PasswordSecurity.Services
         [System.Text.Json.Serialization.JsonPropertyName("LastModifiedTime")] public DateTime LastModifiedTime { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("Iterations")] public int Iterations { get; set; } = 100000;
         [System.Text.Json.Serialization.JsonPropertyName("HashAlgorithm")] public string HashAlgorithm { get; set; } = "PBKDF2";
+        [System.Text.Json.Serialization.JsonPropertyName("StrengthLevel")] public int StrengthLevel { get; set; } = 0;
     }
 
     public class TwoFactorAuthData

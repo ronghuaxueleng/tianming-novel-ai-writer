@@ -1,9 +1,16 @@
-using System;
+﻿using System;
 using TM.Framework.Common.Helpers.Id;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 
 namespace TM.Services.Framework.AI.SemanticKernel
 {
+    public enum RunType
+    {
+        Chat = 0,
+        Task = 1,
+        Execution = 2
+    }
+
     public enum ExecutionEventType
     {
         RunStarted,
@@ -27,7 +34,9 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
         public DateTime Timestamp { get; set; } = DateTime.Now;
 
-        public ChatMode Mode { get; set; } = ChatMode.Ask;
+        public ChatMode Mode { get; set; } = ChatMode.Edit;
+
+        public RunType RunType { get; set; } = RunType.Chat;
 
         public ExecutionEventType EventType { get; set; }
 
@@ -42,6 +51,8 @@ namespace TM.Services.Framework.AI.SemanticKernel
         public int? StepIndex { get; set; }
 
         public bool? Succeeded { get; set; }
+
+        public bool IsPolishFatal { get; set; }
     }
 
     public static class ExecutionEventHub
@@ -50,7 +61,25 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
         public static void Publish(ExecutionEvent evt)
         {
-            Published?.Invoke(evt);
+            var snapshot = Published;
+            if (snapshot == null) return;
+            foreach (var handler in snapshot.GetInvocationList())
+            {
+                try
+                {
+                    ((Action<ExecutionEvent>)handler).Invoke(evt);
+                }
+                catch (Exception ex)
+                {
+                    try
+                    {
+                        TM.App.Log($"[ExecutionEventHub] 订阅者抛异常已隔离: {ex.GetType().Name}: {ex.Message}");
+                    }
+                    catch
+                    {
+                    }
+                }
+            }
         }
 
         #region 便捷发布方法

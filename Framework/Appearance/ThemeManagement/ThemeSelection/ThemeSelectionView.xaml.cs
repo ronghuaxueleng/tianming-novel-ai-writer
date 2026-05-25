@@ -1,7 +1,6 @@
 using System;
 using System.Reflection;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.IO;
 using System.Linq;
 using System.Windows;
@@ -9,25 +8,46 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Xml.Linq;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ThemeSelectionView : UserControl
     {
-        private ObservableCollection<ThemeCardData> _themes = new();
-        private ObservableCollection<ThemeCardData> _allThemes = new();
+        private RangeObservableCollection<ThemeCardData> _themes = new();
+        private RangeObservableCollection<ThemeCardData> _allThemes = new();
         private string? _selectedThemeId;
         private ThemeType _currentTheme;
         private readonly ThemeManager _themeManager;
         private readonly TM.Services.Framework.Settings.SettingsManager _settings;
         private readonly ThemeSelectionSettings _themeSelectionSettings;
         private bool _showOnlyFavorites = false;
+        private System.Windows.Threading.DispatcherTimer? _searchDebounceTimer;
         private HashSet<string> _favoriteIds = new();
         private string _searchText = "";
 
         private static readonly object _debugLogLock = new();
         private static readonly HashSet<string> _debugLoggedKeys = new();
+
+        private static SolidColorBrush FB(string hex) { var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(hex)); b.Freeze(); return b; }
+        private static readonly SolidColorBrush _cHighContrastP = FB("#FFFF00"), _cHighContrastS = FB("#00FFFF"), _cHighContrastBg = FB("#000000"), _cHighContrastT = FB("#FFFFFF");
+        private static readonly SolidColorBrush _cLinearP = FB("#5E6AD2"), _cLinearS = FB("#8492E6"), _cLinearBg = FB("#F7F8FA"), _cLinearT = FB("#1E2028");
+        private static readonly SolidColorBrush _cLightP = FB("#3B82F6"), _cLightS = FB("#64748B"), _cLightBg = FB("#FFFFFF"), _cLightT = FB("#1E293B");
+        private static readonly SolidColorBrush _cGreenP = FB("#8B6914"), _cGreenS = FB("#6B5744"), _cGreenBg = FB("#F5EDDC"), _cGreenT = FB("#4A3728");
+        private static readonly SolidColorBrush _cDarkP = FB("#60A5FA"), _cDarkS = FB("#94A3B8"), _cDarkBg = FB("#1E293B"), _cDarkT = FB("#F1F5F9");
+        private static readonly SolidColorBrush _cArcticP = FB("#0284C7"), _cArcticS = FB("#2D5087"), _cArcticBg = FB("#F0F7FF"), _cArcticT = FB("#1A365D");
+        private static readonly SolidColorBrush _cForestP = FB("#2E7D32"), _cForestS = FB("#3E6B42"), _cForestBg = FB("#F1F8F2"), _cForestT = FB("#1B3A1D");
+        private static readonly SolidColorBrush _cVioletP = FB("#7C3AED"), _cVioletS = FB("#5B3E8A"), _cVioletBg = FB("#F8F0FF"), _cVioletT = FB("#2D1B4E");
+        private static readonly SolidColorBrush _cBizP = FB("#4A6FA5"), _cBizS = FB("#595959"), _cBizBg = FB("#F7F7F7"), _cBizT = FB("#262626");
+        private static readonly SolidColorBrush _cBlackP = FB("#6CB6FF"), _cBlackS = FB("#A0A0A0"), _cBlackBg = FB("#1A1A1A"), _cBlackT = FB("#E8E8E8");
+        private static readonly SolidColorBrush _cMBlueP = FB("#1890FF"), _cMBlueS = FB("#8892B0"), _cMBlueBg = FB("#112240"), _cMBlueT = FB("#E2E8F0");
+        private static readonly SolidColorBrush _cOrangeP = FB("#E8780A"), _cOrangeS = FB("#8C6540"), _cOrangeBg = FB("#FFF7E6"), _cOrangeT = FB("#5C3A18");
+        private static readonly SolidColorBrush _cPinkP = FB("#EB2F96"), _cPinkS = FB("#7A3055"), _cPinkBg = FB("#FFF0F6"), _cPinkT = FB("#4A1030");
+        private static readonly SolidColorBrush _cCyanP = FB("#13C2C2"), _cCyanS = FB("#88B0B8"), _cCyanBg = FB("#0D2137"), _cCyanT = FB("#E0F0F0");
+        private static readonly SolidColorBrush _cSunsetP = FB("#E85D26"), _cSunsetS = FB("#8C5A3C"), _cSunsetBg = FB("#FFF4EC"), _cSunsetT = FB("#5C2E18");
+        private static readonly SolidColorBrush _cMorandiP = FB("#7C9299"), _cMorandiS = FB("#6B6865"), _cMorandiBg = FB("#F5F4F2"), _cMorandiT = FB("#4A4845");
 
         private static void DebugLogOnce(string key, Exception ex)
         {
@@ -58,21 +78,56 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
 
             _themeManager.ThemeChanged += OnThemeManagerChanged;
 
+            Unloaded += OnViewUnloaded;
+
             LoadFavorites();
             LoadThemes();
+        }
+
+        private void OnViewUnloaded(object sender, RoutedEventArgs e)
+        {
+            _themeManager.ThemeChanged -= OnThemeManagerChanged;
+            Unloaded -= OnViewUnloaded;
+
+            if (_searchDebounceTimer != null)
+            {
+                _searchDebounceTimer.Stop();
+                _searchDebounceTimer = null;
+            }
         }
 
         private void OnThemeManagerChanged(object? sender, ThemeChangedEventArgs e)
         {
             _currentTheme = e.NewTheme;
-            LoadThemes();
+            if (_currentTheme == ThemeType.Custom && !string.IsNullOrWhiteSpace(_themeManager.CurrentThemeFileName))
+            {
+                var customName = Path.GetFileNameWithoutExtension(_themeManager.CurrentThemeFileName)
+                    .Replace("Theme", "");
+                CurrentThemeLabel.Text = $"自定义主题：{customName}";
+            }
+            else
+            {
+                CurrentThemeLabel.Text = ThemeManager.GetThemeDisplayName(_currentTheme);
+            }
+            foreach (var card in _allThemes)
+                card.IsCurrent = IsCurrentTheme(card);
+        }
+
+        private bool IsCurrentTheme(ThemeCardData card)
+        {
+            if (card.ThemeId.StartsWith("Custom_", StringComparison.OrdinalIgnoreCase))
+                return _currentTheme == ThemeType.Custom &&
+                       string.Equals(_themeManager.CurrentThemeFileName,
+                           card.ThemeId.Substring("Custom_".Length),
+                           StringComparison.OrdinalIgnoreCase);
+            return int.TryParse(card.ThemeId, out var id) && _currentTheme == (ThemeType)id;
         }
 
         private void LoadThemes()
         {
             try
             {
-                _allThemes.Clear();
+                var builtInThemes = new List<ThemeCardData>();
 
                 if (_currentTheme == ThemeType.Custom && !string.IsNullOrWhiteSpace(_themeManager.CurrentThemeFileName))
                 {
@@ -85,173 +140,199 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                     CurrentThemeLabel.Text = ThemeManager.GetThemeDisplayName(_currentTheme);
                 }
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Light).ToString(),
                     ThemeName = "浅色主题",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3B82F6")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#64748B")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFFFFF")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1E293B")),
+                    PrimaryColor = _cLightP,
+                    SecondaryColor = _cLightS,
+                    BackgroundColor = _cLightBg,
+                    TextColor = _cLightT,
                     IsCurrent = (_currentTheme == ThemeType.Light),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Green).ToString(),
                     ThemeName = "护眼色",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8B6914")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#6B5744")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F5EDDC")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4A3728")),
+                    PrimaryColor = _cGreenP,
+                    SecondaryColor = _cGreenS,
+                    BackgroundColor = _cGreenBg,
+                    TextColor = _cGreenT,
                     IsCurrent = (_currentTheme == ThemeType.Green),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Dark).ToString(),
                     ThemeName = "深色主题",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#60A5FA")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#94A3B8")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1E293B")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F1F5F9")),
+                    PrimaryColor = _cDarkP,
+                    SecondaryColor = _cDarkS,
+                    BackgroundColor = _cDarkBg,
+                    TextColor = _cDarkT,
                     IsCurrent = (_currentTheme == ThemeType.Dark),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Arctic).ToString(),
                     ThemeName = "北极蓝",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0284C7")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2D5087")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F0F7FF")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A365D")),
+                    PrimaryColor = _cArcticP,
+                    SecondaryColor = _cArcticS,
+                    BackgroundColor = _cArcticBg,
+                    TextColor = _cArcticT,
                     IsCurrent = (_currentTheme == ThemeType.Arctic),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Forest).ToString(),
                     ThemeName = "森林绿",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2E7D32")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#3E6B42")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F1F8F2")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1B3A1D")),
+                    PrimaryColor = _cForestP,
+                    SecondaryColor = _cForestS,
+                    BackgroundColor = _cForestBg,
+                    TextColor = _cForestT,
                     IsCurrent = (_currentTheme == ThemeType.Forest),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Violet).ToString(),
                     ThemeName = "紫罗兰",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#7C3AED")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5B3E8A")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F8F0FF")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#2D1B4E")),
+                    PrimaryColor = _cVioletP,
+                    SecondaryColor = _cVioletS,
+                    BackgroundColor = _cVioletBg,
+                    TextColor = _cVioletT,
                     IsCurrent = (_currentTheme == ThemeType.Violet),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Business).ToString(),
                     ThemeName = "商务灰",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4A6FA5")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#595959")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F7F7F7")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#262626")),
+                    PrimaryColor = _cBizP,
+                    SecondaryColor = _cBizS,
+                    BackgroundColor = _cBizBg,
+                    TextColor = _cBizT,
                     IsCurrent = (_currentTheme == ThemeType.Business),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.MinimalBlack).ToString(),
                     ThemeName = "极简黑",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#6CB6FF")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#A0A0A0")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1A1A1A")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E8E8E8")),
+                    PrimaryColor = _cBlackP,
+                    SecondaryColor = _cBlackS,
+                    BackgroundColor = _cBlackBg,
+                    TextColor = _cBlackT,
                     IsCurrent = (_currentTheme == ThemeType.MinimalBlack),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.ModernBlue).ToString(),
                     ThemeName = "现代深蓝",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#1890FF")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8892B0")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#112240")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E2E8F0")),
+                    PrimaryColor = _cMBlueP,
+                    SecondaryColor = _cMBlueS,
+                    BackgroundColor = _cMBlueBg,
+                    TextColor = _cMBlueT,
                     IsCurrent = (_currentTheme == ThemeType.ModernBlue),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.WarmOrange).ToString(),
                     ThemeName = "暖阳橙",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E8780A")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8C6540")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFF7E6")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5C3A18")),
+                    PrimaryColor = _cOrangeP,
+                    SecondaryColor = _cOrangeS,
+                    BackgroundColor = _cOrangeBg,
+                    TextColor = _cOrangeT,
                     IsCurrent = (_currentTheme == ThemeType.WarmOrange),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Pink).ToString(),
                     ThemeName = "樱花粉",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#EB2F96")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#7A3055")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFF0F6")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4A1030")),
+                    PrimaryColor = _cPinkP,
+                    SecondaryColor = _cPinkS,
+                    BackgroundColor = _cPinkBg,
+                    TextColor = _cPinkT,
                     IsCurrent = (_currentTheme == ThemeType.Pink),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.TechCyan).ToString(),
                     ThemeName = "科技青",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#13C2C2")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#88B0B8")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#0D2137")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E0F0F0")),
+                    PrimaryColor = _cCyanP,
+                    SecondaryColor = _cCyanS,
+                    BackgroundColor = _cCyanBg,
+                    TextColor = _cCyanT,
                     IsCurrent = (_currentTheme == ThemeType.TechCyan),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Sunset).ToString(),
                     ThemeName = "日落橙",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#E85D26")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#8C5A3C")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#FFF4EC")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#5C2E18")),
+                    PrimaryColor = _cSunsetP,
+                    SecondaryColor = _cSunsetS,
+                    BackgroundColor = _cSunsetBg,
+                    TextColor = _cSunsetT,
                     IsCurrent = (_currentTheme == ThemeType.Sunset),
                     IsSelected = false
                 });
 
-                _allThemes.Add(new ThemeCardData
+                builtInThemes.Add(new ThemeCardData
                 {
                     ThemeId = ((int)ThemeType.Morandi).ToString(),
                     ThemeName = "莫兰迪",
-                    PrimaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#7C9299")),
-                    SecondaryColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#6B6865")),
-                    BackgroundColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#F5F4F2")),
-                    TextColor = new SolidColorBrush((Color)ColorConverter.ConvertFromString("#4A4845")),
+                    PrimaryColor = _cMorandiP,
+                    SecondaryColor = _cMorandiS,
+                    BackgroundColor = _cMorandiBg,
+                    TextColor = _cMorandiT,
                     IsCurrent = (_currentTheme == ThemeType.Morandi),
                     IsSelected = false
                 });
+
+                builtInThemes.Add(new ThemeCardData
+                {
+                    ThemeId = ((int)ThemeType.HighContrast).ToString(),
+                    ThemeName = "高对比度",
+                    PrimaryColor = _cHighContrastP,
+                    SecondaryColor = _cHighContrastS,
+                    BackgroundColor = _cHighContrastBg,
+                    TextColor = _cHighContrastT,
+                    IsCurrent = (_currentTheme == ThemeType.HighContrast),
+                    IsSelected = false
+                });
+
+                builtInThemes.Add(new ThemeCardData
+                {
+                    ThemeId = ((int)ThemeType.Linear).ToString(),
+                    ThemeName = "Linear极简",
+                    PrimaryColor = _cLinearP,
+                    SecondaryColor = _cLinearS,
+                    BackgroundColor = _cLinearBg,
+                    TextColor = _cLinearT,
+                    IsCurrent = (_currentTheme == ThemeType.Linear),
+                    IsSelected = false
+                });
+
+                _allThemes.ReplaceAll(builtInThemes);
 
                 LoadThemeFiles();
 
@@ -341,16 +422,16 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                     _currentTheme = themeType;
                 }
 
+                foreach (var card in _themes)
+                    card.IsSelected = false;
                 _selectedThemeId = null;
-
-                LoadThemes();
 
                 App.Log($"[ThemeSelection] 主题切换成功: {selectedTheme.ThemeName}");
             }
             catch (Exception ex)
             {
                 App.Log($"[ThemeSelection] 切换主题失败: {ex.Message}");
-                StandardDialog.ShowError($"切换主题失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"切换主题失败：{ex.Message}", "切换失败", Window.GetWindow(this));
             }
         }
 
@@ -440,7 +521,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             catch (Exception ex)
             {
                 App.Log($"[ThemeSelection] 删除主题失败: {ex.Message}");
-                StandardDialog.ShowError($"删除主题失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"删除主题失败：{ex.Message}", "删除失败", Window.GetWindow(this));
             }
         }
 
@@ -457,7 +538,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             catch (Exception ex)
             {
                 App.Log($"[ThemeSelection] 刷新失败: {ex.Message}");
-                StandardDialog.ShowError($"刷新失败：\n\n{ex.Message}", "错误", Window.GetWindow(this));
+                StandardDialog.ShowError($"刷新失败：{ex.Message}", "刷新失败", Window.GetWindow(this));
             }
         }
 
@@ -467,7 +548,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             var currentThemeSnapshot = _currentTheme;
             var currentFileNameSnapshot = _themeManager.CurrentThemeFileName;
 
-            _ = System.Threading.Tasks.Task.Run(() =>
+            _ = System.Threading.Tasks.Task.Run(async () =>
             {
                 var results = new List<(string ThemeId, string ThemeName, string Primary, string Secondary, string Background, string Text, bool IsCurrent)>();
                 try
@@ -500,7 +581,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                             var fileName = Path.GetFileName(themeFile);
                             var themeName = Path.GetFileNameWithoutExtension(fileName).Replace("Theme", "");
 
-                            var (p, s, bg, t) = ExtractThemeColorStrings(themeFile);
+                            var (p, s, bg, t) = await ExtractThemeColorStringsAsync(themeFile);
                             var isCurrent = currentThemeSnapshot == ThemeType.Custom &&
                                             string.Equals(currentFileNameSnapshot, fileName, StringComparison.OrdinalIgnoreCase);
 
@@ -526,11 +607,11 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                         {
                             ThemeId = themeId,
                             ThemeName = themeName,
-                            PrimaryColor    = MakeBrush(primary,    "#3B82F6"),
-                            SecondaryColor  = MakeBrush(secondary,  "#64748B"),
+                            PrimaryColor = MakeBrush(primary, "#3B82F6"),
+                            SecondaryColor = MakeBrush(secondary, "#64748B"),
                             BackgroundColor = MakeBrush(background, "#FFFFFF"),
-                            TextColor       = MakeBrush(text,       "#1E293B"),
-                            IsCurrent  = isCurrent,
+                            TextColor = MakeBrush(text, "#1E293B"),
+                            IsCurrent = isCurrent,
                             IsSelected = false
                         });
                     }
@@ -544,11 +625,12 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             });
         }
 
-        private static (string Primary, string Secondary, string Background, string Text) ExtractThemeColorStrings(string filePath)
+        private static async System.Threading.Tasks.Task<(string Primary, string Secondary, string Background, string Text)> ExtractThemeColorStringsAsync(string filePath)
         {
             try
             {
-                var doc = XDocument.Load(filePath);
+                var xml = await System.IO.File.ReadAllTextAsync(filePath).ConfigureAwait(false);
+                var doc = XDocument.Parse(xml);
                 var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
 
                 string GetColor(string key, string fallback)
@@ -559,10 +641,10 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                 }
 
                 return (
-                    GetColor("PrimaryColor",     "#3B82F6"),
-                    GetColor("TextSecondary",    "#64748B"),
-                    GetColor("ContentBackground","#FFFFFF"),
-                    GetColor("TextPrimary",      "#1E293B")
+                    GetColor("PrimaryColor", "#3B82F6"),
+                    GetColor("TextSecondary", "#64748B"),
+                    GetColor("ContentBackground", "#FFFFFF"),
+                    GetColor("TextPrimary", "#1E293B")
                 );
             }
             catch
@@ -575,49 +657,22 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
         {
             try
             {
-                return new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorString));
+                var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorString));
+                b.Freeze();
+                return b;
             }
             catch
             {
-                return new SolidColorBrush((Color)ColorConverter.ConvertFromString(fallback));
+                var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(fallback));
+                b.Freeze();
+                return b;
             }
         }
 
-        private (SolidColorBrush Primary, SolidColorBrush Secondary, SolidColorBrush Background, SolidColorBrush Text) ExtractThemeColors(string filePath)
-        {
-            try
-            {
-                var doc = XDocument.Load(filePath);
-                var ns = doc.Root?.Name.Namespace ?? XNamespace.None;
-
-                string GetColor(string key, string fallback)
-                {
-                    var element = doc.Descendants(ns + "SolidColorBrush")
-                        .FirstOrDefault(e => e.Attribute(ns + "Key")?.Value == key);
-                    return element?.Attribute("Color")?.Value ?? fallback;
-                }
-
-                return (
-                    Primary: new SolidColorBrush((Color)ColorConverter.ConvertFromString(GetColor("PrimaryColor", "#3B82F6"))),
-                    Secondary: new SolidColorBrush((Color)ColorConverter.ConvertFromString(GetColor("TextSecondary", "#64748B"))),
-                    Background: new SolidColorBrush((Color)ColorConverter.ConvertFromString(GetColor("ContentBackground", "#FFFFFF"))),
-                    Text: new SolidColorBrush((Color)ColorConverter.ConvertFromString(GetColor("TextPrimary", "#1E293B")))
-                );
-            }
-            catch (Exception ex)
-            {
-                DebugLogOnce(nameof(ExtractThemeColors), ex);
-                return (
-                    Primary: new SolidColorBrush(Colors.Blue),
-                    Secondary: new SolidColorBrush(Colors.Gray),
-                    Background: new SolidColorBrush(Colors.White),
-                    Text: new SolidColorBrush(Colors.Black)
-                );
-            }
-        }
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ThemeCardData : System.ComponentModel.INotifyPropertyChanged
     {
         private bool _isSelected;
@@ -675,7 +730,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             }
         }
 
-        public string FavoriteIcon => IsFavorite ? "⭐" : "☆";
+        public string FavoriteIcon => IsFavorite ? "Icon.Star" : "Icon.Star";
 
         public string StatusText => IsCurrent ? "✓ 使用中" : "点击切换";
 
@@ -691,6 +746,8 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
 
     #region 收藏功能扩展方法
 
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ThemeSelectionView
     {
         private void LoadFavorites()
@@ -717,8 +774,6 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
 
         private void ApplyFilter()
         {
-            _themes.Clear();
-
             var filteredThemes = _allThemes.AsEnumerable();
 
             if (_showOnlyFavorites)
@@ -728,16 +783,12 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
 
             if (!string.IsNullOrWhiteSpace(_searchText))
             {
-                var searchLower = _searchText.ToLower();
-                filteredThemes = filteredThemes.Where(t => 
-                    t.ThemeName.ToLower().Contains(searchLower) ||
-                    t.ThemeId.ToLower().Contains(searchLower));
+                filteredThemes = filteredThemes.Where(t =>
+                    t.ThemeName.Contains(_searchText, StringComparison.OrdinalIgnoreCase) ||
+                    t.ThemeId.Contains(_searchText, StringComparison.OrdinalIgnoreCase));
             }
 
-            foreach (var theme in filteredThemes)
-            {
-                _themes.Add(theme);
-            }
+            _themes.ReplaceAll(filteredThemes.ToList());
 
             if (SearchResultText != null)
             {
@@ -758,16 +809,29 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
             if (sender is TextBox textBox)
             {
                 _searchText = textBox.Text;
-                ApplyFilter();
 
                 if (ClearSearchButton != null)
                 {
-                    ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(_searchText) 
-                        ? Visibility.Collapsed 
+                    ClearSearchButton.Visibility = string.IsNullOrWhiteSpace(_searchText)
+                        ? Visibility.Collapsed
                         : Visibility.Visible;
                 }
 
-                App.Log($"[ThemeSelection] 搜索: \"{_searchText}\"，找到 {_themes.Count} 个主题");
+                if (_searchDebounceTimer == null)
+                {
+                    _searchDebounceTimer = new System.Windows.Threading.DispatcherTimer
+                    {
+                        Interval = TimeSpan.FromMilliseconds(150)
+                    };
+                    _searchDebounceTimer.Tick += (_, _) =>
+                    {
+                        _searchDebounceTimer.Stop();
+                        ApplyFilter();
+                        App.Log($"[ThemeSelection] 搜索: \"{_searchText}\"，找到 {_themes.Count} 个主题");
+                    };
+                }
+                _searchDebounceTimer.Stop();
+                _searchDebounceTimer.Start();
             }
         }
 

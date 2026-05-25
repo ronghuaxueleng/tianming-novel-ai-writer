@@ -23,7 +23,7 @@ namespace TM.Framework.Common.Helpers.MVVM
             }
             else
             {
-                LoadSync(filePath, onLoaded, logTag);
+                _ = LoadAsyncCoreAsync(filePath, onLoaded, logTag);
             }
         }
 
@@ -41,8 +41,8 @@ namespace TM.Framework.Common.Helpers.MVVM
                 }
                 else
                 {
-                    var json = await File.ReadAllTextAsync(filePath, Encoding.UTF8).ConfigureAwait(false);
-                    data = JsonSerializer.Deserialize<T>(json, _readOptions) ?? new T();
+                    await using var stream = File.OpenRead(filePath);
+                    data = await JsonSerializer.DeserializeAsync<T>(stream, _readOptions).ConfigureAwait(false) ?? new T();
                 }
             }
             catch (Exception ex)
@@ -64,7 +64,8 @@ namespace TM.Framework.Common.Helpers.MVVM
             });
         }
 
-        private static void LoadSync<T>(string filePath, Action<T> onLoaded, string logTag) where T : class, new()
+        private static async System.Threading.Tasks.Task LoadAsyncCoreAsync<T>(
+            string filePath, Action<T> onLoaded, string logTag) where T : class, new()
         {
             try
             {
@@ -75,13 +76,13 @@ namespace TM.Framework.Common.Helpers.MVVM
                     return;
                 }
 
-                var json = File.ReadAllText(filePath, Encoding.UTF8);
+                var json = await File.ReadAllTextAsync(filePath, Encoding.UTF8).ConfigureAwait(false);
                 var data = JsonSerializer.Deserialize<T>(json, _readOptions) ?? new T();
                 onLoaded(data);
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[{logTag}] 同步加载失败: {ex.Message}");
+                TM.App.Log($"[{logTag}] 异步加载失败: {ex.Message}");
                 try
                 {
                     onLoaded(new T());
@@ -112,6 +113,39 @@ namespace TM.Framework.Common.Helpers.MVVM
                     TM.App.Log($"[{logTag}] 同步执行失败: {ex.Message}");
                 }
             }
+        }
+
+        public static void RunOrDeferAsync(Func<System.Threading.Tasks.Task<Action?>> asyncWork, string logTag)
+        {
+            _ = RunOnBackgroundAsyncTask(asyncWork, logTag);
+        }
+
+        private static async System.Threading.Tasks.Task RunOnBackgroundAsyncTask(
+            Func<System.Threading.Tasks.Task<Action?>> asyncWork, string logTag)
+        {
+            Action? uiAction = null;
+            try
+            {
+                uiAction = await System.Threading.Tasks.Task.Run(async () => await asyncWork().ConfigureAwait(false)).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[{logTag}] 后台执行失败: {ex.Message}");
+            }
+
+            if (uiAction == null) return;
+
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                try
+                {
+                    uiAction();
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[{logTag}] UI回调失败: {ex.Message}");
+                }
+            });
         }
 
         private static async System.Threading.Tasks.Task RunOnBackgroundAsync(Func<Action?> work, string logTag)

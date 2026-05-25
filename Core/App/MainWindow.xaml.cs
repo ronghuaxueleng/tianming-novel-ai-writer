@@ -1,17 +1,19 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Net.NetworkInformation;
 using System.Threading;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Interop;
 using TM.Framework.User.Account.Login;
 using TM.Framework.User.Security.PasswordProtection;
-using TM.Framework.Common.Services;
+using TM.Framework.UI.Windows;
 
 namespace TM
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class MainWindow : Window
     {
         private bool _wasDeactivated = false;
@@ -79,8 +81,8 @@ namespace TM
             LayoutComponent.MinimizeBtn.Click += (s, e) => this.WindowState = WindowState.Minimized;
             LayoutComponent.MaximizeBtn.Click += (s, e) =>
             {
-                this.WindowState = this.WindowState == WindowState.Maximized 
-                    ? WindowState.Normal 
+                this.WindowState = this.WindowState == WindowState.Maximized
+                    ? WindowState.Normal
                     : WindowState.Maximized;
             };
             LayoutComponent.CloseBtn.Click += (s, e) => this.Close();
@@ -102,18 +104,23 @@ namespace TM
 
             InitializeTrayIconService();
 
+            this.Closing += (s, e) => SaveSharedWindowSize();
+
             this.Loaded += (s, e) =>
             {
                 StartNetworkMonitor();
 
-                System.Threading.Tasks.Task.Run(async () =>
+                _ = System.Threading.Tasks.Task.Run(async () =>
                 {
-                    await System.Threading.Tasks.Task.Delay(800);
-                    Application.Current?.Dispatcher.BeginInvoke(() =>
+                    try
                     {
-                        ToastNotification.ShowSuccess("欢迎使用天命", "程序已成功启动！", 4000);
-                    });
+                        await System.Threading.Tasks.Task.Delay(800);
+                        Application.Current?.Dispatcher.BeginInvoke(() =>
+                            ToastNotification.ShowSuccess("欢迎使用天命", "程序已成功启动！", 4000));
+                    }
+                    catch (Exception ex) { App.Log($"[MainWindow] 欢迎Toast失败: {ex.Message}"); }
                 });
+                _ = TM.Framework.Common.Services.UIPreWarmService.PreWarmPriorityViewsAsync();
             };
 
             InitializePasswordProtection();
@@ -445,6 +452,110 @@ namespace TM
 
             ServiceLocator.Get<TM.Framework.UI.Workspace.Services.PanelCommunicationService>()
                 .RequestClearMessageSelection();
+        }
+
+        protected override void OnSourceInitialized(EventArgs e)
+        {
+            base.OnSourceInitialized(e);
+
+            try
+            {
+                var hwndSource = PresentationSource.FromVisual(this) as HwndSource;
+                hwndSource?.AddHook(SingleInstanceWndProc);
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[SingleInstance] 注册 WndProc Hook 失败: {ex.Message}");
+            }
+
+            try
+            {
+                var settings = TM.Framework.UI.Windows.UnifiedWindowSettings.Load();
+                if (settings.Width > 0 && settings.Height > 0)
+                {
+                    Width = settings.Width;
+                    Height = settings.Height;
+                }
+                if (settings.Left >= 0 && settings.Top >= 0)
+                {
+                    Left = settings.Left;
+                    Top = settings.Top;
+                }
+                if (settings.IsMaximized)
+                {
+                    WindowState = WindowState.Maximized;
+                }
+                App.Log($"[MainWindow] 已从共享设置加载窗口状态: ({Left}, {Top}) {Width}x{Height}, 最大化: {settings.IsMaximized}");
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[MainWindow] 加载共享窗口大小失败（忽略）: {ex.Message}");
+            }
+        }
+
+        private IntPtr SingleInstanceWndProc(IntPtr hwnd, int msg, IntPtr wParam, IntPtr lParam, ref bool handled)
+        {
+            if (App.SingleInstanceMessageId != 0 && (uint)msg == App.SingleInstanceMessageId)
+            {
+                try
+                {
+                    if (!IsVisible)
+                    {
+                        Show();
+                    }
+
+                    if (WindowState == WindowState.Minimized)
+                    {
+                        WindowState = WindowState.Normal;
+                    }
+
+                    var originalTopmost = Topmost;
+                    Topmost = true;
+                    Topmost = originalTopmost;
+
+                    Activate();
+                    Focus();
+
+                    App.Log("[SingleInstance] 已响应激活消息，主窗口置前");
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"[SingleInstance] 激活主窗口失败: {ex.Message}");
+                }
+                handled = true;
+            }
+            return IntPtr.Zero;
+        }
+
+        private void SaveSharedWindowSize()
+        {
+            try
+            {
+                var settings = UnifiedWindowSettings.Update(currentSettings =>
+                {
+                    if (WindowState == WindowState.Maximized)
+                    {
+                        currentSettings.Left = RestoreBounds.Left;
+                        currentSettings.Top = RestoreBounds.Top;
+                        currentSettings.Width = RestoreBounds.Width;
+                        currentSettings.Height = RestoreBounds.Height;
+                    }
+                    else
+                    {
+                        currentSettings.Left = Left;
+                        currentSettings.Top = Top;
+                        currentSettings.Width = ActualWidth;
+                        currentSettings.Height = ActualHeight;
+                    }
+
+                    currentSettings.IsMaximized = WindowState == WindowState.Maximized;
+                });
+                App.Log($"[MainWindow] 已保存窗口状态到共享设置: ({settings.Left}, {settings.Top}) {settings.Width}x{settings.Height}, 最大化: {settings.IsMaximized}");
+            }
+            catch (Exception ex)
+            {
+                App.Log($"[MainWindow] 保存共享窗口大小失败（忽略）: {ex.Message}");
+            }
         }
 
     }

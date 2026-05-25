@@ -4,26 +4,24 @@ using System.Reflection;
 using System.Linq;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Models.Design.Characters;
 using TM.Modules.Design.Elements.CharacterRules.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Framework.AI.Interfaces.Prompts;
-using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
+using TM.Services.Modules.ProjectData.Metadata;
 
 namespace TM.Modules.Design.Elements.CharacterRules
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class CharacterRulesViewModel : DataManagementViewModelBase<CharacterRulesData, CharacterRulesCategory, CharacterRulesService>
     {
         private readonly IPromptRepository _promptRepository;
         private readonly ContextService _contextService;
         private string _formName = string.Empty;
-        private string _formIcon = "👤";
+        private string _formIcon = "Icon.User";
         private string _formStatus = "已启用";
         private string _formCategory = string.Empty;
 
@@ -59,6 +57,9 @@ namespace TM.Modules.Design.Elements.CharacterRules
         public string FormRace { get => _formRace; set { _formRace = value; OnPropertyChanged(); } }
         public string FormAppearance { get => _formAppearance; set { _formAppearance = value; OnPropertyChanged(); } }
 
+        private string _formPersonality = string.Empty;
+        public string FormPersonality { get => _formPersonality; set { _formPersonality = value; OnPropertyChanged(); } }
+
         private string _formTargetCharacterName = string.Empty;
         private string _formRelationshipType = string.Empty;
         private string _formEmotionDynamic = string.Empty;
@@ -66,6 +67,9 @@ namespace TM.Modules.Design.Elements.CharacterRules
         public string FormTargetCharacterName { get => _formTargetCharacterName; set { _formTargetCharacterName = value; OnPropertyChanged(); } }
         public string FormRelationshipType { get => _formRelationshipType; set { _formRelationshipType = value; OnPropertyChanged(); } }
         public string FormEmotionDynamic { get => _formEmotionDynamic; set { _formEmotionDynamic = value; OnPropertyChanged(); } }
+
+        private string _formRelationships = string.Empty;
+        public string FormRelationships { get => _formRelationships; set { _formRelationships = value; OnPropertyChanged(); } }
 
         private string _formWant = string.Empty;
         private string _formNeed = string.Empty;
@@ -99,6 +103,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
         private List<string> _availableCharacters = new();
         private Dictionary<string, string> _charIdToName = new(StringComparer.OrdinalIgnoreCase);
         private Dictionary<string, string> _charNameToId = new(StringComparer.OrdinalIgnoreCase);
+        private readonly TM.Framework.Common.Services.LazyListCache<CharacterRulesData> _allCharsCache = new();
 
         public List<string> AvailableCharacters
         {
@@ -110,24 +115,36 @@ namespace TM.Modules.Design.Elements.CharacterRules
         {
             _promptRepository = promptRepository;
             _contextService = contextService;
+        }
+
+        protected override void OnAfterInitializeRefresh()
+        {
             RefreshRelationshipOptions();
         }
 
+        private void InvalidateCharacterCache() => _allCharsCache.Invalidate();
+
         private void RefreshRelationshipOptions()
         {
-            _charIdToName = new(StringComparer.OrdinalIgnoreCase);
-            _charNameToId = new(StringComparer.OrdinalIgnoreCase);
             try
             {
-                var characters = Service.GetAllCharacterRules()
-                    .Where(c => c.IsEnabled && c.Id != _currentEditingData?.Id)
-                    .ToList();
-                foreach (var c in characters)
+                var all = _allCharsCache.Get(() => Service.GetAllCharacterRules().Where(c => c.IsEnabled).ToList());
+
+                var currentId = _currentEditingData?.Id;
+                var filtered = string.IsNullOrWhiteSpace(currentId)
+                    ? all
+                    : all.Where(c => c.Id != currentId).ToList();
+
+                var newIdToName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                var newNameToId = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                foreach (var c in filtered)
                 {
-                    if (!string.IsNullOrWhiteSpace(c.Id))  _charIdToName[c.Id]   = c.Name;
-                    if (!string.IsNullOrWhiteSpace(c.Name)) _charNameToId[c.Name] = c.Id;
+                    if (!string.IsNullOrWhiteSpace(c.Id)) newIdToName[c.Id] = c.Name;
+                    if (!string.IsNullOrWhiteSpace(c.Name)) newNameToId[c.Name] = c.Id;
                 }
-                AvailableCharacters = characters.Select(c => c.Name).ToList();
+                _charIdToName = newIdToName;
+                _charNameToId = newNameToId;
+                AvailableCharacters = filtered.Select(c => c.Name).ToList();
             }
             catch (Exception ex)
             {
@@ -153,7 +170,23 @@ namespace TM.Modules.Design.Elements.CharacterRules
             return string.Empty;
         }
 
-        protected override string DefaultDataIcon => "👤";
+        private string NormalizeTargetCharacterName(
+            string? rawName,
+            string? selfName,
+            HashSet<string> candidateNames,
+            HashSet<string> candidateIds)
+        {
+            var normalized = EntityNameNormalizeHelper.StripBracketAnnotation((rawName ?? string.Empty).Trim()).Trim();
+            if (string.IsNullOrWhiteSpace(normalized) || EntityNameNormalizeHelper.IsIgnoredValue(normalized))
+                return string.Empty;
+            if (!string.IsNullOrWhiteSpace(selfName) && string.Equals(normalized, selfName, StringComparison.OrdinalIgnoreCase))
+                return string.Empty;
+            if (ShortIdGenerator.IsLikelyId(normalized))
+                return candidateIds.Contains(normalized) ? normalized : string.Empty;
+            return candidateNames.Contains(normalized) ? normalized : string.Empty;
+        }
+
+        protected override string DefaultDataIcon => "Icon.User";
 
         protected override CharacterRulesData? CreateNewData(string? categoryName = null)
         {
@@ -170,28 +203,23 @@ namespace TM.Modules.Design.Elements.CharacterRules
 
         protected override System.Threading.Tasks.Task ResolveEntityReferencesBeforeSaveAsync()
         {
-            var name = (FormTargetCharacterName ?? string.Empty).Trim();
-            var normalized = EntityNameNormalizeHelper.StripBracketAnnotation(name).Trim();
-            if (EntityNameNormalizeHelper.IsIgnoredValue(normalized))
-            {
-                FormTargetCharacterName = string.Empty;
-                return System.Threading.Tasks.Task.CompletedTask;
-            }
+            var candidates = Service.GetAllCharacterRules()
+                .Where(c => c.IsEnabled && c.Id != _currentEditingData?.Id)
+                .ToList();
+            var candidateNames = candidates
+                .Select(c => c.Name)
+                .Where(n => !string.IsNullOrWhiteSpace(n))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var candidateIds = candidates
+                .Select(c => c.Id)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            if (ShortIdGenerator.IsLikelyId(normalized))
-            {
-                FormTargetCharacterName = normalized;
-                return System.Threading.Tasks.Task.CompletedTask;
-            }
-            if (!AvailableCharacters.Any(c => string.Equals(c, normalized, StringComparison.OrdinalIgnoreCase)))
-            {
-                TM.App.Log($"[CharacterRulesViewModel] 实体引用：'{normalized}' 在上游不存在，已忽略");
-                FormTargetCharacterName = string.Empty;
-            }
-            else
-            {
-                FormTargetCharacterName = normalized;
-            }
+            FormTargetCharacterName = NormalizeTargetCharacterName(
+                FormTargetCharacterName,
+                FormName,
+                candidateNames,
+                candidateIds);
             return System.Threading.Tasks.Task.CompletedTask;
         }
 
@@ -206,6 +234,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
 
             try
             {
+                InvalidateCharacterCache();
                 var dispatcher = System.Windows.Application.Current?.Dispatcher;
                 if (dispatcher != null)
                 {
@@ -221,6 +250,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             }
             catch
             {
+                InvalidateCharacterCache();
                 RefreshRelationshipOptions();
             }
         }
@@ -233,6 +263,8 @@ namespace TM.Modules.Design.Elements.CharacterRules
         }
 
         protected override int ClearAllDataItems() => Service.ClearAllCharacterRules();
+
+        protected override string GetModuleNameForVersionTracking() => "CharacterRules";
 
         protected override void SaveCurrentEditingData()
         {
@@ -251,20 +283,15 @@ namespace TM.Modules.Design.Elements.CharacterRules
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = "👤",
+                Icon = IconHelper.Get("Icon.User"),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(CharacterRulesData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(CharacterRulesData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword)) return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Identity.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Race.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.Want.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.Identity, data.Race, data.Want };
         }
 
         private ICommand? _selectNodeCommand;
@@ -284,21 +311,29 @@ namespace TM.Modules.Design.Elements.CharacterRules
                 {
                     _currentEditingCategory = category;
                     _currentEditingData = null;
-                    LoadCategoryToForm(category);
-                    EnterEditMode();
+                    if (category.IsBuiltIn)
+                    {
+                        ResetForm();
+                        EnterEditMode();
+                    }
+                    else
+                    {
+                        LoadCategoryToForm(category);
+                        EnterEditMode();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[CharacterRulesViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
         private void LoadDataToForm(CharacterRulesData data)
         {
             FormName = data.Name;
-            FormIcon = "👤";
+            FormIcon = "Icon.User";
             FormStatus = data.IsEnabled ? "已启用" : "已禁用";
             FormCategory = data.Category;
 
@@ -308,10 +343,12 @@ namespace TM.Modules.Design.Elements.CharacterRules
             FormIdentity = data.Identity;
             FormRace = data.Race;
             FormAppearance = data.Appearance;
+            FormPersonality = data.Personality;
 
             FormTargetCharacterName = IdToName(data.TargetCharacterName);
             FormRelationshipType = data.RelationshipType;
             FormEmotionDynamic = data.EmotionDynamic;
+            FormRelationships = data.Relationships;
 
             FormWant = data.Want;
             FormNeed = data.Need;
@@ -353,10 +390,12 @@ namespace TM.Modules.Design.Elements.CharacterRules
             FormIdentity = string.Empty;
             FormRace = string.Empty;
             FormAppearance = string.Empty;
+            FormPersonality = string.Empty;
 
             FormTargetCharacterName = string.Empty;
             FormRelationshipType = string.Empty;
             FormEmotionDynamic = string.Empty;
+            FormRelationships = string.Empty;
 
             FormWant = string.Empty;
             FormNeed = string.Empty;
@@ -386,7 +425,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             catch (Exception ex)
             {
                 TM.App.Log($"[CharacterRulesViewModel] 新建失败: {ex.Message}");
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
             }
         });
 
@@ -407,7 +446,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             catch (Exception ex)
             {
                 TM.App.Log($"[CharacterRulesViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         });
 
@@ -478,6 +517,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             UpdateDataFromForm(newData);
             await Service.AddCharacterRuleAsync(newData);
             _currentEditingData = newData;
+            InvalidateCharacterCache();
             GlobalToast.Success("保存成功", $"角色规则『{newData.Name}』已创建");
         }
 
@@ -503,6 +543,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
 
             UpdateDataFromForm(_currentEditingData);
             await Service.UpdateCharacterRuleAsync(_currentEditingData);
+            InvalidateCharacterCache();
             GlobalToast.Success("保存成功", $"角色规则『{_currentEditingData.Name}』已更新");
         }
 
@@ -511,7 +552,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             var newIsEnabled = (FormStatus == "已启用");
             if (newIsEnabled && !data.IsEnabled)
             {
-                if (!CheckScopeBeforeEnable(data.SourceBookId, data.Name))
+                if (!CheckBeforeEnable(null, data.Name))
                 {
                     FormStatus = "已禁用";
                     return;
@@ -529,10 +570,12 @@ namespace TM.Modules.Design.Elements.CharacterRules
             data.Identity = FormIdentity;
             data.Race = FormRace;
             data.Appearance = FormAppearance;
+            data.Personality = FormPersonality;
 
             data.TargetCharacterName = NameToId(FormTargetCharacterName);
             data.RelationshipType = FormRelationshipType;
             data.EmotionDynamic = FormEmotionDynamic;
+            data.Relationships = FormRelationships;
 
             data.Want = FormWant;
             data.Need = FormNeed;
@@ -564,10 +607,15 @@ namespace TM.Modules.Design.Elements.CharacterRules
 
                     int totalDataDeleted = 0;
 
+                    var categoryIdLookup = Service.GetAllCategories()
+                        .ToDictionary(c => c.Name, c => c.Id, StringComparer.Ordinal);
                     foreach (var categoryName in allCategoriesToDelete)
                     {
+                        categoryIdLookup.TryGetValue(categoryName, out var cId);
                         var dataInCategory = Service.GetAllCharacterRules()
-                            .Where(d => d.Category == categoryName)
+                            .Where(d =>
+                                (!string.IsNullOrWhiteSpace(cId) && d.CategoryId == cId) ||
+                                (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName))
                             .ToList();
 
                         foreach (var item in dataInCategory)
@@ -594,6 +642,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
                     if (!result) return;
 
                     Service.DeleteCharacterRule(_currentEditingData.Id);
+                    InvalidateCharacterCache();
                     GlobalToast.Success("删除成功", $"角色规则『{_currentEditingData.Name}』已删除");
 
                     _currentEditingData = null;
@@ -608,7 +657,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             catch (Exception ex)
             {
                 TM.App.Log($"[CharacterRulesViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -619,6 +668,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             return new TM.Framework.Common.ViewModels.AIGenerationConfig
             {
                 Category = "小说设计师",
+                ActiveModuleHint = "角色规则",
                 ServiceType = TM.Framework.Common.ViewModels.AIServiceType.ChatEngine,
                 ResponseFormat = TM.Framework.Common.ViewModels.ResponseFormat.Json,
                 MessagePrefix = "角色设计",
@@ -636,9 +686,11 @@ namespace TM.Modules.Design.Elements.CharacterRules
                     ["身份"] = v => FormIdentity = v,
                     ["种族"] = v => FormRace = v,
                     ["外貌特征"] = v => FormAppearance = v,
+                    ["性格特征"] = v => FormPersonality = v,
                     ["关联角色姓名"] = v => FormTargetCharacterName = FilterToCandidateOrRaw(v, AvailableCharacters),
                     ["关系类型"] = v => FormRelationshipType = v,
                     ["情感动态"] = v => FormEmotionDynamic = v,
+                    ["关系描述"] = v => FormRelationships = v,
                     ["外在目标"] = v => FormWant = v,
                     ["内在需求"] = v => FormNeed = v,
                     ["致命缺点"] = v => FormFlawBelief = v,
@@ -658,9 +710,11 @@ namespace TM.Modules.Design.Elements.CharacterRules
                     ["身份"] = () => FormIdentity,
                     ["种族"] = () => FormRace,
                     ["外貌特征"] = () => FormAppearance,
+                    ["性格特征"] = () => FormPersonality,
                     ["关联角色姓名"] = () => FormTargetCharacterName,
                     ["关系类型"] = () => FormRelationshipType,
                     ["情感动态"] = () => FormEmotionDynamic,
+                    ["关系描述"] = () => FormRelationships,
                     ["外在目标"] = () => FormWant,
                     ["内在需求"] = () => FormNeed,
                     ["致命缺点"] = () => FormFlawBelief,
@@ -673,31 +727,13 @@ namespace TM.Modules.Design.Elements.CharacterRules
                     ["个人资产"] = () => FormPersonalAssets,
                 },
                 ContextProvider = async () => await GetEnhancedCharacterContextAsync(),
-                BatchFieldKeyMap = new()
-                {
-                    ["角色类型"] = "CharacterType",
-                    ["性别"] = "Gender",
-                    ["年龄"] = "Age",
-                    ["身份"] = "Identity",
-                    ["种族"] = "Race",
-                    ["外貌特征"] = "Appearance",
-                    ["关联角色姓名"] = "TargetCharacterName",
-                    ["关系类型"] = "RelationshipType",
-                    ["情感动态"] = "EmotionDynamic",
-                    ["外在目标"] = "Want",
-                    ["内在需求"] = "Need",
-                    ["致命缺点"] = "FlawBelief",
-                    ["成长路径"] = "GrowthPath",
-                    ["战斗技能"] = "CombatSkills",
-                    ["特殊能力"] = "SpecialAbilities",
-                    ["非战斗技能"] = "NonCombatSkills",
-                    ["标志性装备"] = "SignatureItems",
-                    ["常规装备"] = "CommonItems",
-                    ["个人资产"] = "PersonalAssets"
-                },
+                BatchFieldKeyMap = CreateBatchFieldKeyMap(),
                 BatchIndexFields = new() { "Name", "CharacterType", "Identity", "SpecialAbilities" }
             };
         }
+
+        public static Dictionary<string, string> CreateBatchFieldKeyMap()
+            => EntityFieldMeta.GetFieldKeyMap("characters");
 
         protected override ModuleNormalizationConfig? GetNormalizationConfig()
         {
@@ -731,7 +767,9 @@ namespace TM.Modules.Design.Elements.CharacterRules
 
         protected override IEnumerable<string> GetExistingNamesForDedup()
             => Service.GetAllCharacterRules().Select(r => r.Name);
-        protected override int GetDefaultBatchSize() => 10;
+        protected override int GetBaseBatchSize() => 8;
+        protected override int GetBatchSize64K() => 12;
+        protected override int GetBatchSize128K() => 15;
 
         protected override async System.Threading.Tasks.Task<List<Dictionary<string, object>>> SaveBatchEntitiesAsync(
             List<Dictionary<string, object>> entities,
@@ -739,8 +777,11 @@ namespace TM.Modules.Design.Elements.CharacterRules
             Dictionary<string, int>? versionSnapshot)
         {
             var result = new List<Dictionary<string, object>>();
+            var allExistingCharacters = Service.GetAllCharacterRules()
+                .Where(c => c.IsEnabled)
+                .ToList();
             var dbNames = new HashSet<string>(
-                Service.GetAllCharacterRules().Select(r => r.Name),
+                allExistingCharacters.Select(r => r.Name),
                 StringComparer.OrdinalIgnoreCase);
             var batchNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
@@ -748,81 +789,98 @@ namespace TM.Modules.Design.Elements.CharacterRules
                 .Select(e => new TM.Framework.Common.Services.BatchEntityReader(e).GetString("Name"))
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var candidateCharacterNames = dbNames
+                .Concat(allBatchCharacterNames)
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
+            var candidateCharacterIds = allExistingCharacters
+                .Select(c => c.Id)
+                .Where(id => !string.IsNullOrWhiteSpace(id))
+                .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var entity in entities)
+            Service.BeginBatchSave();
+            try
             {
-                try
+                foreach (var entity in entities)
                 {
-                    var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
-                    var name = reader.GetString("Name");
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = $"角色_{DateTime.Now:HHmmss}_{result.Count + 1}";
-
-                    var baseName = name;
-
-                    if (dbNames.Contains(baseName))
+                    try
                     {
-                        TM.App.Log($"[CharacterRulesViewModel] 跳过已存在角色: {baseName}");
-                        continue;
+                        var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
+                        var name = reader.GetString("Name");
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = $"角色_{DateTime.Now:HHmmss}_{result.Count + 1}";
+
+                        var baseName = name;
+
+                        if (dbNames.Contains(baseName))
+                        {
+                            TM.App.Log($"[CharacterRulesViewModel] 跳过已存在角色: {baseName}");
+                            continue;
+                        }
+
+                        int suffix = 1;
+                        while (batchNames.Contains(name))
+                        {
+                            name = $"{baseName}_{suffix++}";
+                        }
+                        batchNames.Add(name);
+                        dbNames.Add(name);
+
+                        var characterType = NormalizeFieldValue("CharacterType", reader.GetString("CharacterType"));
+                        var targetCharacterName = NormalizeTargetCharacterName(
+                            reader.GetString("TargetCharacterName"),
+                            name,
+                            candidateCharacterNames,
+                            candidateCharacterIds);
+                        var data = new CharacterRulesData
+                        {
+                            Id = ShortIdGenerator.New("D"),
+                            Name = name,
+                            Category = categoryName,
+                            IsEnabled = true,
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now,
+                            CharacterType = characterType,
+                            Gender = reader.GetString("Gender"),
+                            Age = reader.GetString("Age"),
+                            Identity = reader.GetString("Identity"),
+                            Race = reader.GetString("Race"),
+                            Appearance = reader.GetString("Appearance"),
+                            Personality = reader.GetString("Personality"),
+                            Want = reader.GetString("Want"),
+                            Need = reader.GetString("Need"),
+                            FlawBelief = reader.GetString("FlawBelief"),
+                            GrowthPath = reader.GetString("GrowthPath"),
+                            TargetCharacterName = targetCharacterName,
+                            RelationshipType = reader.GetString("RelationshipType"),
+                            EmotionDynamic = reader.GetString("EmotionDynamic"),
+                            Relationships = reader.GetString("Relationships"),
+                            CombatSkills = reader.GetString("CombatSkills"),
+                            NonCombatSkills = reader.GetString("NonCombatSkills"),
+                            SpecialAbilities = reader.GetString("SpecialAbilities"),
+                            SignatureItems = reader.GetString("SignatureItems"),
+                            CommonItems = reader.GetString("CommonItems"),
+                            PersonalAssets = reader.GetString("PersonalAssets"),
+                            DependencyModuleVersions = versionSnapshot ?? new()
+                        };
+
+                        entity["Name"] = name;
+                        entity["CharacterType"] = characterType;
+                        await Service.AddCharacterRuleAsync(data);
+                        result.Add(entity);
                     }
-
-                    int suffix = 1;
-                    while (batchNames.Contains(name))
+                    catch (Exception ex)
                     {
-                        name = $"{baseName}_{suffix++}";
+                        TM.App.Log($"[CharacterRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
                     }
-                    batchNames.Add(name);
-                    dbNames.Add(name);
-
-                    var characterType = NormalizeFieldValue("CharacterType", reader.GetString("CharacterType"));
-                    var rawTarget = reader.GetString("TargetCharacterName")?.Trim() ?? string.Empty;
-                    var targetCharacterName = string.IsNullOrWhiteSpace(rawTarget)
-                        ? string.Empty
-                        : (dbNames.Contains(rawTarget) || allBatchCharacterNames.Contains(rawTarget))
-                            ? rawTarget
-                            : string.Empty;
-                    var data = new CharacterRulesData
-                    {
-                        Id = ShortIdGenerator.New("D"),
-                        Name = name,
-                        Category = categoryName,
-                        IsEnabled = true,
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        CharacterType = characterType,
-                        Gender = reader.GetString("Gender"),
-                        Age = reader.GetString("Age"),
-                        Identity = reader.GetString("Identity"),
-                        Race = reader.GetString("Race"),
-                        Appearance = reader.GetString("Appearance"),
-                        Want = reader.GetString("Want"),
-                        Need = reader.GetString("Need"),
-                        FlawBelief = reader.GetString("FlawBelief"),
-                        GrowthPath = reader.GetString("GrowthPath"),
-                        TargetCharacterName = targetCharacterName,
-                        RelationshipType = reader.GetString("RelationshipType"),
-                        EmotionDynamic = reader.GetString("EmotionDynamic"),
-                        CombatSkills = reader.GetString("CombatSkills"),
-                        NonCombatSkills = reader.GetString("NonCombatSkills"),
-                        SpecialAbilities = reader.GetString("SpecialAbilities"),
-                        SignatureItems = reader.GetString("SignatureItems"),
-                        CommonItems = reader.GetString("CommonItems"),
-                        PersonalAssets = reader.GetString("PersonalAssets")
-                    };
-
-                    entity["Name"] = name;
-                    entity["CharacterType"] = characterType;
-                    await Service.AddCharacterRuleAsync(data);
-                    result.Add(entity);
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[CharacterRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
-                }
+
+                TM.App.Log($"[CharacterRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
+                return result;
             }
-
-            TM.App.Log($"[CharacterRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
-            return result;
+            finally
+            {
+                Service.EndBatchSave();
+            }
         }
 
         private async System.Threading.Tasks.Task<string> GetEnhancedCharacterContextAsync()
@@ -837,7 +895,7 @@ namespace TM.Modules.Design.Elements.CharacterRules
             }
             var availableChars = AvailableCharacters.Where(c => !string.IsNullOrEmpty(c)).ToList();
             sb.AppendLine("<section name=\"available_characters\">");
-            if (availableChars.Any())
+            if (availableChars.Count > 0)
             {
                 sb.AppendLine("已有角色（关联角色姓名可从以下已有角色中选择）：");
                 sb.AppendLine(string.Join("、", availableChars));

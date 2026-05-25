@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using System.Threading;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.Common.Helpers.MVVM
@@ -44,7 +45,15 @@ namespace TM.Framework.Common.Helpers.MVVM
 
         protected TData Data { get; set; } = default!;
 
+        protected virtual void SetData(TData data) { Data = data; }
+
         protected string FilePath { get; set; } = string.Empty;
+
+        private System.Threading.Tasks.Task? _initialLoadTask;
+
+        private int _dataMutationVersion;
+
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
 
         protected abstract string GetFilePath();
 
@@ -59,125 +68,92 @@ namespace TM.Framework.Common.Helpers.MVVM
             FilePath = GetFilePath();
             Data = CreateDefaultData();
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher != null && dispatcher.CheckAccess())
+            if (dispatcher != null)
             {
-                _ = LoadDataOnBackgroundAsync();
+                _initialLoadTask = LoadDataOnBackgroundAsync();
             }
             else
             {
-                LoadData();
+                _initialLoadTask = LoadDataAsync();
             }
         }
 
         private async System.Threading.Tasks.Task LoadDataOnBackgroundAsync()
         {
+            var loadVersion = Volatile.Read(ref _dataMutationVersion);
+
             string? json = null;
             bool fileExists = false;
             try
             {
                 var path = FilePath;
-                (fileExists, json) = await System.Threading.Tasks.Task.Run(() =>
+                if (File.Exists(path))
                 {
-                    if (!File.Exists(path)) return (false, (string?)null);
-                    return (true, File.ReadAllText(path, Encoding.UTF8));
-                }).ConfigureAwait(false);
+                    json = await File.ReadAllTextAsync(path, Encoding.UTF8).ConfigureAwait(false);
+                    fileExists = true;
+                }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[{GetLogTag()}] 后台读取文件失败: {ex.Message}");
             }
 
-            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            TData? loadedData = null;
+            if (fileExists && json != null)
             {
                 try
                 {
-                    if (fileExists && json != null)
-                    {
-                        var loadedData = JsonSerializer.Deserialize<TData>(json, _readOptions);
-                        if (loadedData != null)
-                        {
-                            Data = loadedData;
-                            OnDataLoaded();
-                            TM.App.Log($"[{GetLogTag()}] 数据已延迟加载: {FilePath}");
-                        }
-                        else
-                        {
-                            TM.App.Log($"[{GetLogTag()}] 反序列化为null，使用默认数据");
-                            Data = CreateDefaultData();
-                            OnDataLoaded();
-                        }
-                    }
+                    loadedData = JsonSerializer.Deserialize<TData>(json, _readOptions);
                 }
                 catch (Exception ex)
                 {
-                    TM.App.Log($"[{GetLogTag()}] 延迟加载失败: {ex.Message}");
-                    Data = CreateDefaultData();
-                    OnLoadFailed(ex);
+                    TM.App.Log($"[{GetLogTag()}] 后台反序列化失败: {ex.Message}");
                 }
-                OnPropertyChanged(null);
-            });
+            }
+
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null)
+            {
+                await dispatcher.InvokeAsync(() =>
+                {
+                    try
+                    {
+                        if (loadVersion != Volatile.Read(ref _dataMutationVersion))
+                            return;
+                        if (fileExists)
+                        {
+                            if (loadedData != null)
+                            {
+                                SetData(loadedData);
+                                OnDataLoaded();
+                                TM.App.Log($"[{GetLogTag()}] 数据已延迟加载: {FilePath}");
+                            }
+                            else
+                            {
+                                TM.App.Log($"[{GetLogTag()}] 反序列化为null，使用默认数据");
+                                SetData(CreateDefaultData());
+                                OnDataLoaded();
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[{GetLogTag()}] 延迟加载失败: {ex.Message}");
+                        SetData(CreateDefaultData());
+                        OnLoadFailed(ex);
+                    }
+                    OnPropertyChanged(null);
+                }, System.Windows.Threading.DispatcherPriority.Background);
+            }
         }
 
         #endregion
 
         #region 序列化/反序列化
 
-        public virtual void LoadData()
-        {
-            try
-            {
-                if (File.Exists(FilePath))
-                {
-                    var json = File.ReadAllText(FilePath, Encoding.UTF8);
-                    var loadedData = JsonSerializer.Deserialize<TData>(json, _readOptions);
-                    if (loadedData != null)
-                    {
-                        Data = loadedData;
-                        OnDataLoaded();
-                    }
-                    else
-                    {
-                        Data = CreateDefaultData();
-                        OnDataLoaded();
-                    }
-                }
-                else
-                {
-                    Data = CreateDefaultData();
-                    OnDataLoaded();
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetLogTag()}] 加载失败: {ex.Message}");
-                Data = CreateDefaultData();
-                OnLoadFailed(ex);
-            }
-        }
-
         public virtual void SaveData()
         {
-            try
-            {
-                var directory = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var json = JsonSerializer.Serialize(Data, _writeOptions);
-                var tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                File.WriteAllText(tmp, json, Encoding.UTF8);
-                File.Move(tmp, FilePath, overwrite: true);
-
-                OnDataSaved();
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[{GetLogTag()}] 保存失败: {ex.Message}");
-                OnSaveFailed(ex);
-                throw;
-            }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[BaseSettings] 保存失败: {ex.Message}"));
         }
 
         public virtual async System.Threading.Tasks.Task LoadDataAsync()
@@ -186,8 +162,8 @@ namespace TM.Framework.Common.Helpers.MVVM
             {
                 if (File.Exists(FilePath))
                 {
-                    var json = await File.ReadAllTextAsync(FilePath, Encoding.UTF8);
-                    var loadedData = JsonSerializer.Deserialize<TData>(json, _readOptions);
+                    await using var stream = File.OpenRead(FilePath);
+                    var loadedData = await JsonSerializer.DeserializeAsync<TData>(stream, _readOptions);
                     if (loadedData != null)
                     {
                         Data = loadedData;
@@ -215,6 +191,25 @@ namespace TM.Framework.Common.Helpers.MVVM
 
         public virtual async System.Threading.Tasks.Task SaveDataAsync()
         {
+            var pending = _initialLoadTask;
+            if (pending != null)
+            {
+                try { await pending.ConfigureAwait(false); } catch { }
+                _initialLoadTask = null;
+            }
+
+            byte[] jsonBytes;
+            try
+            {
+                jsonBytes = JsonSerializer.SerializeToUtf8Bytes(Data, _writeOptions);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[{GetLogTag()}] 序列化失败: {ex.Message}");
+                return;
+            }
+
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var directory = Path.GetDirectoryName(FilePath);
@@ -223,18 +218,20 @@ namespace TM.Framework.Common.Helpers.MVVM
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(Data, _writeOptions);
                 var tmp = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                await File.WriteAllTextAsync(tmp, json, Encoding.UTF8);
+                await File.WriteAllBytesAsync(tmp, jsonBytes).ConfigureAwait(false);
                 File.Move(tmp, FilePath, overwrite: true);
 
                 OnDataSaved();
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[{GetLogTag()}] 异步保存失败: {ex.Message}");
+                TM.App.Log($"[{GetLogTag()}] 异步保存失败: {ex.Message} (path={FilePath})");
                 OnSaveFailed(ex);
-                throw;
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
 
@@ -274,6 +271,8 @@ namespace TM.Framework.Common.Helpers.MVVM
 
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
+            if (propertyName != null)
+                Interlocked.Increment(ref _dataMutationVersion);
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 

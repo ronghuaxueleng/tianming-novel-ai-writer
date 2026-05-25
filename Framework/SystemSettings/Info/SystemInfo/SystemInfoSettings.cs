@@ -1,13 +1,14 @@
 using System;
 using System.IO;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
+using System.Threading;
 
 namespace TM.Framework.SystemSettings.Info.SystemInfo
 {
     public class SystemInfoSettings
     {
         private static readonly object _lock = new object();
+        private int _settingsVersion;
 
         private readonly string _settingsFilePath;
 
@@ -28,25 +29,32 @@ namespace TM.Framework.SystemSettings.Info.SystemInfo
                 "SystemSettings/Info/SystemInfo",
                 "settings.json"
             );
-            LoadSettings();
+            _ = System.Threading.Tasks.Task.Run(async () => await LoadSettingsInternalAsync().ConfigureAwait(false));
         }
 
-        public void LoadSettings()
+        private async System.Threading.Tasks.Task LoadSettingsInternalAsync()
         {
+            var loadVersion = Volatile.Read(ref _settingsVersion);
             try
             {
                 if (File.Exists(_settingsFilePath))
                 {
-                    var json = File.ReadAllText(_settingsFilePath);
+                    var json = await File.ReadAllTextAsync(_settingsFilePath).ConfigureAwait(false);
                     var dto = JsonSerializer.Deserialize<SystemInfoSettingsDto>(json);
                     if (dto != null)
                     {
-                        AutoRefreshIntervalSeconds = dto.AutoRefreshIntervalSeconds;
-                        EnableAutoRefresh = dto.EnableAutoRefresh;
-                        StorageSizeUnit = dto.StorageSizeUnit ?? "GB";
-                        ShowDetailedInfo = dto.ShowDetailedInfo;
-                        LastRefreshTime = dto.LastRefreshTime;
-
+                        if (loadVersion != Volatile.Read(ref _settingsVersion))
+                            return;
+                        lock (_lock)
+                        {
+                            if (loadVersion != Volatile.Read(ref _settingsVersion))
+                                return;
+                            AutoRefreshIntervalSeconds = dto.AutoRefreshIntervalSeconds;
+                            EnableAutoRefresh = dto.EnableAutoRefresh;
+                            StorageSizeUnit = dto.StorageSizeUnit ?? "GB";
+                            ShowDetailedInfo = dto.ShowDetailedInfo;
+                            LastRefreshTime = dto.LastRefreshTime;
+                        }
                         TM.App.Log("[SystemInfoSettings] 设置已加载");
                     }
                 }
@@ -66,46 +74,22 @@ namespace TM.Framework.SystemSettings.Info.SystemInfo
             [System.Text.Json.Serialization.JsonPropertyName("LastRefreshTime")] public DateTime LastRefreshTime { get; set; } = DateTime.Now;
         }
 
-        public void SaveSettings()
-        {
-            try
-            {
-                lock (_lock)
-                {
-                    var json = JsonSerializer.Serialize(this, JsonHelper.CnDefault);
-
-                    var directory = Path.GetDirectoryName(_settingsFilePath);
-                    if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                    {
-                        Directory.CreateDirectory(directory);
-                    }
-
-                    var tmpSis = _settingsFilePath + ".tmp";
-                    File.WriteAllText(tmpSis, json);
-                    File.Move(tmpSis, _settingsFilePath, overwrite: true);
-                    TM.App.Log("[SystemInfoSettings] 设置已保存");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SystemInfoSettings] 保存设置失败: {ex.Message}");
-            }
-        }
-
         public async System.Threading.Tasks.Task SaveSettingsAsync()
         {
             try
             {
-                var json = JsonSerializer.Serialize(this, JsonHelper.CnDefault);
-
                 var directory = Path.GetDirectoryName(_settingsFilePath);
                 if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
                 {
                     Directory.CreateDirectory(directory);
                 }
 
-                var tmpSisA = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpSisA, json);
+                Interlocked.Increment(ref _settingsVersion);
+                var tmpSisA = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpSisA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, this, JsonHelper.CnDefault);
+                }
                 File.Move(tmpSisA, _settingsFilePath, overwrite: true);
                 TM.App.Log("[SystemInfoSettings] 设置已异步保存");
             }

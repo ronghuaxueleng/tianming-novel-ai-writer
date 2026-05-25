@@ -5,16 +5,17 @@ using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text;
-using System.Windows;
+using System.Threading.Tasks;
 using System.Windows.Media;
+using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using Microsoft.Win32;
 using TM.Framework.Appearance.ThemeManagement;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ImageColorPickerViewModel : INotifyPropertyChanged
     {
         private readonly ThemeManager _themeManager;
@@ -65,7 +66,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
 
         public ObservableCollection<ExtractedColorCard> ExtractedColors { get; } = new();
 
-        public RelayCommand UploadImageCommand { get; }
+        public ICommand UploadImageCommand { get; }
         public RelayCommand ClearRecordsCommand { get; }
         public RelayCommand GenerateThemeCommand { get; }
         public RelayCommand AddThemeCommand { get; }
@@ -76,13 +77,13 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
         public ImageColorPickerViewModel(ThemeManager themeManager)
         {
             _themeManager = themeManager;
-            UploadImageCommand = new RelayCommand(UploadImage);
+            UploadImageCommand = new AsyncRelayCommand(UploadImage);
             ClearRecordsCommand = new RelayCommand(ClearRecords);
             GenerateThemeCommand = new RelayCommand(GenerateThemeAuto);
-            AddThemeCommand = new RelayCommand(AddTheme);
+            AddThemeCommand = new RelayCommand(() => AddTheme().SafeFireAndForget(ex => TM.App.Log($"[ImageColorPickerViewModel] {ex.Message}")));
         }
 
-        private void UploadImage()
+        private async Task UploadImage()
         {
             var dialog = new OpenFileDialog
             {
@@ -92,46 +93,47 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
 
             if (dialog.ShowDialog() == true)
             {
+                var filePath = dialog.FileName;
                 try
                 {
-                    var bitmap = new BitmapImage();
-                    bitmap.BeginInit();
-                    bitmap.UriSource = new Uri(dialog.FileName);
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.EndInit();
+                    var bitmap = await Task.Run(() =>
+                    {
+                        var bmp = new BitmapImage();
+                        bmp.BeginInit();
+                        bmp.UriSource = new Uri(filePath);
+                        bmp.CacheOption = BitmapCacheOption.OnLoad;
+                        bmp.EndInit();
+                        bmp.Freeze();
+                        return bmp;
+                    });
 
                     CurrentImage = bitmap;
                     HasImage = true;
 
-                    var fileInfo = new FileInfo(dialog.FileName);
+                    var fileInfo = new FileInfo(filePath);
                     var fileSize = fileInfo.Length / 1024.0;
                     ImageInfo = $"{fileInfo.Name} | {bitmap.PixelWidth}×{bitmap.PixelHeight} | {fileSize:F1} KB";
 
-                    ExtractColors(bitmap);
+                    var (colors, imgAnalysis) = await Task.Run(() =>
+                        (ColorExtractor.ExtractPalette(bitmap, 5), ImageAnalyzer.Analyze(bitmap)));
+                    ExtractColors(colors);
+                    AnalyzeImage(imgAnalysis);
 
-                    AnalyzeImage(bitmap);
-
-                    TM.App.Log($"[ImageColorPicker] 图片加载成功: {dialog.FileName}");
+                    TM.App.Log($"[ImageColorPicker] 图片加载成功: {filePath}");
                 }
                 catch (Exception ex)
                 {
-                    StandardDialog.ShowError(
-                        $"图片加载失败：{ex.Message}",
-                        "错误",
-                        null
-                    );
+                    StandardDialog.ShowError($"图片加载失败：{ex.Message}", "加载失败", null);
                     TM.App.Log($"[ImageColorPicker] 图片加载失败: {ex.Message}");
                 }
             }
         }
 
-        private void ExtractColors(BitmapImage bitmap)
+        private void ExtractColors(System.Collections.Generic.List<Color> colors)
         {
             try
             {
                 ExtractedColors.Clear();
-
-                var colors = ColorExtractor.ExtractPalette(bitmap, 5);
 
                 for (int i = 0; i < colors.Count; i++)
                 {
@@ -145,7 +147,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
                         ImagePath = null
                     };
 
-                    colorCard.GenerateCommand = new RelayCommand(() => GenerateTheme(colorCard));
+                    colorCard.GenerateCommand = new RelayCommand(() => GenerateTheme(colorCard).SafeFireAndForget(ex => TM.App.Log($"[ImageColorPickerViewModel] {ex.Message}")));
 
                     ExtractedColors.Add(colorCard);
                 }
@@ -158,21 +160,19 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
         }
 
-        private void AnalyzeImage(BitmapImage bitmap)
+        private void AnalyzeImage(ImageAnalysisResult analysis)
         {
             try
             {
-                var analysis = ImageAnalyzer.Analyze(bitmap);
-
                 var sb = new StringBuilder();
-                sb.AppendLine("📊 图片分析结果");
+                sb.AppendLine("图片分析结果");
                 sb.AppendLine();
                 sb.AppendLine($"• 平均亮度：{analysis.AvgBrightness:F1} / 255");
                 sb.AppendLine($"• 图片类型：{(analysis.IsDark ? "暗色图片" : "亮色图片")}");
                 sb.AppendLine($"• 建议主题：{analysis.ThemeType.ToUpper()} 主题");
                 sb.AppendLine($"• 文字颜色：{analysis.TextColor}");
                 sb.AppendLine();
-                sb.AppendLine("💡 建议：");
+                sb.AppendLine("[建议] 建议：");
                 sb.AppendLine(analysis.Notes);
 
                 AnalysisText = sb.ToString();
@@ -186,20 +186,20 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
         }
 
-        private async void GenerateTheme(ExtractedColorCard colorCard)
+        private async Task GenerateTheme(ExtractedColorCard colorCard)
         {
             try
             {
-            if (CurrentImage == null)
-            {
-                ToastNotification.ShowWarning("请先上传图片", "");
-                return;
-            }
+                if (CurrentImage == null)
+                {
+                    ToastNotification.ShowWarning("请先上传图片", "");
+                    return;
+                }
 
                 var timestamp = DateTime.Now.ToString("HHmmss");
                 var themeName = $"ImageColor_{colorCard.Index}_{timestamp}";
 
-                var themeColors = GenerateThemeColors(colorCard.Color, CurrentImage);
+                var themeColors = await Task.Run(() => GenerateThemeColors(colorCard.Color, CurrentImage!));
 
                 await SaveThemeAsync(themeName, themeColors);
 
@@ -211,11 +211,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
             catch (Exception ex)
             {
-                StandardDialog.ShowError(
-                    $"生成主题失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"生成主题失败：{ex.Message}", "生成失败", null);
                 TM.App.Log($"[ImageColorPicker] 主题生成失败: {ex.Message}");
             }
         }
@@ -250,7 +246,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             var filePath = Path.Combine(themesPath, $"{themeName}Theme.xaml");
 
             var xamlContent = GenerateThemeXaml(themeName, colors);
-            var tmpIcp = filePath + ".tmp";
+            var tmpIcp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
             await File.WriteAllTextAsync(tmpIcp, xamlContent, Encoding.UTF8);
             File.Move(tmpIcp, filePath, overwrite: true);
 
@@ -365,28 +361,25 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
             catch (Exception ex)
             {
-                StandardDialog.ShowError(
-                    $"清除记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"清除记录失败：{ex.Message}", "清除失败", null);
                 TM.App.Log($"[ImageColorPicker] 清除记录失败: {ex.Message}");
             }
         }
 
-        private void GenerateThemeAuto()
+        private async void GenerateThemeAuto()
         {
             try
             {
-            if (ExtractedColors.Count == 0 || CurrentImage == null)
-            {
-                ToastNotification.ShowWarning("请先提取颜色", "请先上传图片并提取颜色");
-                return;
-            }
+                if (ExtractedColors.Count == 0 || CurrentImage == null)
+                {
+                    ToastNotification.ShowWarning("请先提取颜色", "请先上传图片并提取颜色");
+                    return;
+                }
 
                 var primaryColor = ExtractedColors[0].Color;
+                var currentImage = CurrentImage;
 
-                _generatedTheme = GenerateThemeColors(primaryColor, CurrentImage);
+                _generatedTheme = await Task.Run(() => GenerateThemeColors(primaryColor, currentImage));
 
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 _generatedThemeName = $"AutoTheme_{timestamp}";
@@ -397,24 +390,20 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
             catch (Exception ex)
             {
-                StandardDialog.ShowError(
-                    $"生成主题失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"生成主题失败：{ex.Message}", "生成失败", null);
                 TM.App.Log($"[ImageColorPicker] 生成主题失败: {ex.Message}");
             }
         }
 
-        private async void AddTheme()
+        private async Task AddTheme()
         {
             try
             {
-            if (_generatedTheme == null || string.IsNullOrEmpty(_generatedThemeName))
-            {
-                ToastNotification.ShowWarning("请先生成主题", "点击「生成主题」按钮后才能加入主题库");
-                return;
-            }
+                if (_generatedTheme == null || string.IsNullOrEmpty(_generatedThemeName))
+                {
+                    ToastNotification.ShowWarning("请先生成主题", "点击「生成主题」按钮后才能加入主题库");
+                    return;
+                }
 
                 await SaveThemeAsync(_generatedThemeName, _generatedTheme);
 
@@ -426,11 +415,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
             }
             catch (Exception ex)
             {
-                StandardDialog.ShowError(
-                    $"加入主题失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"加入主题失败：{ex.Message}", "加入失败", null);
                 TM.App.Log($"[ImageColorPicker] 加入主题失败: {ex.Message}");
             }
         }
@@ -442,24 +427,72 @@ namespace TM.Framework.Appearance.IntelligentGeneration.ImageColorPicker
         }
     }
 
-    public class ExtractedColorCard
+    public class ExtractedColorCard : INotifyPropertyChanged
     {
-        public Color Color { get; set; }
+        private Color _color;
+
+        public Color Color
+        {
+            get => _color;
+            set
+            {
+                if (_color == value)
+                {
+                    return;
+                }
+
+                _color = value;
+                HexColor = $"#{value.R:X2}{value.G:X2}{value.B:X2}";
+                RgbColor = $"RGB({value.R},{value.G},{value.B})";
+                _colorBrush = null;
+                _buttonForeground = null;
+                OnPropertyChanged(nameof(Color));
+                OnPropertyChanged(nameof(HexColor));
+                OnPropertyChanged(nameof(RgbColor));
+                OnPropertyChanged(nameof(ColorBrush));
+                OnPropertyChanged(nameof(ButtonBackground));
+                OnPropertyChanged(nameof(ButtonForeground));
+            }
+        }
         public string HexColor { get; set; } = string.Empty;
         public string RgbColor { get; set; } = string.Empty;
         public int Index { get; set; }
         public string? ImagePath { get; set; }
         public RelayCommand? GenerateCommand { get; set; }
 
-        public SolidColorBrush ColorBrush => new SolidColorBrush(Color);
-        public SolidColorBrush ButtonBackground => new SolidColorBrush(Color);
+        private SolidColorBrush? _colorBrush;
+        private SolidColorBrush? _buttonForeground;
+
+        public SolidColorBrush ColorBrush
+        {
+            get
+            {
+                if (_colorBrush != null) return _colorBrush;
+                _colorBrush = new SolidColorBrush(Color);
+                _colorBrush.Freeze();
+                return _colorBrush;
+            }
+        }
+
+        public SolidColorBrush ButtonBackground => ColorBrush;
+
         public SolidColorBrush ButtonForeground
         {
             get
             {
+                if (_buttonForeground != null) return _buttonForeground;
                 var brightness = (Color.R + Color.G + Color.B) / 3.0;
-                return new SolidColorBrush(brightness < 128 ? Colors.White : Colors.Black);
+                _buttonForeground = new SolidColorBrush(brightness < 128 ? Colors.White : Colors.Black);
+                _buttonForeground.Freeze();
+                return _buttonForeground;
             }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+
+        private void OnPropertyChanged(string propertyName)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
 

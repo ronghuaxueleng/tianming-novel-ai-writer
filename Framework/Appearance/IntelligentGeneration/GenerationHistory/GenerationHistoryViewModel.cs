@@ -9,17 +9,20 @@ using System.Text;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
+using System.Threading.Tasks;
 
 namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class GenerationHistoryViewModel : INotifyPropertyChanged
     {
         private readonly GenerationHistorySettings _historySettings;
-        private ObservableCollection<HistoryRecord> _historyRecords = new();
+        private readonly RangeObservableCollection<HistoryRecord> _historyRecords = new();
         private HistoryRecord? _selectedRecord = null;
         private string _searchKeyword = string.Empty;
+        private System.Windows.Threading.DispatcherTimer? _searchDebounceTimer;
         private string _selectedFilter = "全部";
 
         private static readonly object _debugLogLock = new();
@@ -43,15 +46,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             System.Diagnostics.Debug.WriteLine($"[GenerationHistory] {key}: {ex.Message}");
         }
 
-        public ObservableCollection<HistoryRecord> HistoryRecords
-        {
-            get => _historyRecords;
-            set
-            {
-                _historyRecords = value;
-                OnPropertyChanged(nameof(HistoryRecords));
-            }
-        }
+        public RangeObservableCollection<HistoryRecord> HistoryRecords => _historyRecords;
 
         public HistoryRecord? SelectedRecord
         {
@@ -70,7 +65,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             {
                 _searchKeyword = value;
                 OnPropertyChanged(nameof(SearchKeyword));
-                ApplyFilter();
+                ScheduleFilterUpdate();
             }
         }
 
@@ -106,7 +101,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             ClearAllCommand = new RelayCommand(ClearAllHistory);
             ApplyRecordCommand = new RelayCommand(p => ApplyRecord(p as HistoryRecord));
             DeleteRecordCommand = new RelayCommand(p => DeleteRecord(p as HistoryRecord));
-            ExportRecordCommand = new RelayCommand(p => ExportRecord(p as HistoryRecord));
+            ExportRecordCommand = new RelayCommand(p => ExportRecord(p as HistoryRecord).SafeFireAndForget(ex => TM.App.Log($"[GenerationHistoryViewModel] {ex.Message}")));
             ToggleFavoriteCommand = new RelayCommand(p => ToggleFavorite(p as HistoryRecord));
 
             LoadHistory();
@@ -154,12 +149,26 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 加载历史失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"加载历史记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"加载历史记录失败\n\n错误详情：{ex.Message}", "加载失败", null);
             }
+        }
+
+        private void ScheduleFilterUpdate()
+        {
+            if (_searchDebounceTimer == null)
+            {
+                _searchDebounceTimer = new System.Windows.Threading.DispatcherTimer
+                {
+                    Interval = System.TimeSpan.FromMilliseconds(200)
+                };
+                _searchDebounceTimer.Tick += (_, _) =>
+                {
+                    _searchDebounceTimer.Stop();
+                    ApplyFilter();
+                };
+            }
+            _searchDebounceTimer.Stop();
+            _searchDebounceTimer.Start();
         }
 
         private void ApplyFilter()
@@ -202,18 +211,17 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
                 TM.App.Log($"[GenerationHistory] 应用关键词搜索: {SearchKeyword}");
             }
 
-            var filteredList = filtered.ToList();
+            var filteredList = filtered.Take(50).ToList();
             TM.App.Log($"[GenerationHistory] 筛选后得到 {filteredList.Count} 条记录");
 
-            HistoryRecords.Clear();
-            foreach (var record in filteredList)
-            {
-                HistoryRecords.Add(record);
-                TM.App.Log($"[GenerationHistory] 添加记录: {record.Name} ({record.Type}) - {record.Timestamp}");
-            }
+            _historyRecords.ReplaceAll(filteredList);
 
             TM.App.Log($"[GenerationHistory] ApplyFilter完成：HistoryRecords最终数量={HistoryRecords.Count}");
         }
+
+        private static SolidColorBrush FrozenBrush(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
+        private const string HistoryApplyTag = "_HistoryApplyTag";
 
         private void ApplyRecord(HistoryRecord? record)
         {
@@ -221,36 +229,47 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
 
             try
             {
-                var app = Application.Current;
-
                 var isLight = GetColorBrightness(record.BackgroundColor) > 128;
 
-                app.Resources["UnifiedBackground"] = new SolidColorBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -10 : 10));
-                app.Resources["ContentBackground"] = new SolidColorBrush(record.BackgroundColor);
-                app.Resources["Surface"] = new SolidColorBrush(record.BackgroundColor);
-                app.Resources["ContentHighlight"] = new SolidColorBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? 5 : -5));
+                var dict = new ResourceDictionary();
 
-                app.Resources["WindowBorder"] = new SolidColorBrush(isLight ? Color.FromRgb(203, 213, 225) : Color.FromRgb(51, 65, 85));
-                app.Resources["BorderBrush"] = new SolidColorBrush(isLight ? Color.FromRgb(226, 232, 240) : Color.FromRgb(71, 85, 105));
+                dict["UnifiedBackground"] = FrozenBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -10 : 10));
+                dict["ContentBackground"] = FrozenBrush(record.BackgroundColor);
+                dict["Surface"] = FrozenBrush(record.BackgroundColor);
+                dict["ContentHighlight"] = FrozenBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? 5 : -5));
 
-                app.Resources["TextPrimary"] = new SolidColorBrush(record.TextColor);
-                app.Resources["TextSecondary"] = new SolidColorBrush(AdjustColorBrightness(record.TextColor, isLight ? 40 : -40));
-                app.Resources["TextTertiary"] = new SolidColorBrush(AdjustColorBrightness(record.TextColor, isLight ? 70 : -70));
-                app.Resources["TextDisabled"] = new SolidColorBrush(AdjustColorBrightness(record.TextColor, isLight ? 100 : -100));
+                dict["WindowBorder"] = FrozenBrush(isLight ? Color.FromRgb(203, 213, 225) : Color.FromRgb(51, 65, 85));
+                dict["BorderBrush"] = FrozenBrush(isLight ? Color.FromRgb(226, 232, 240) : Color.FromRgb(71, 85, 105));
 
-                app.Resources["HoverBackground"] = new SolidColorBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -15 : 15));
-                app.Resources["ActiveBackground"] = new SolidColorBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -25 : 25));
-                app.Resources["SelectedBackground"] = new SolidColorBrush(BlendColors(record.PrimaryColor, record.BackgroundColor, 0.2));
+                dict["TextPrimary"] = FrozenBrush(record.TextColor);
+                dict["TextSecondary"] = FrozenBrush(AdjustColorBrightness(record.TextColor, isLight ? 40 : -40));
+                dict["TextTertiary"] = FrozenBrush(AdjustColorBrightness(record.TextColor, isLight ? 70 : -70));
+                dict["TextDisabled"] = FrozenBrush(AdjustColorBrightness(record.TextColor, isLight ? 100 : -100));
 
-                app.Resources["PrimaryColor"] = new SolidColorBrush(record.PrimaryColor);
-                app.Resources["PrimaryHover"] = new SolidColorBrush(AdjustColorBrightness(record.PrimaryColor, isLight ? -15 : 15));
-                app.Resources["PrimaryActive"] = new SolidColorBrush(AdjustColorBrightness(record.PrimaryColor, isLight ? -30 : 30));
+                dict["HoverBackground"] = FrozenBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -15 : 15));
+                dict["ActiveBackground"] = FrozenBrush(AdjustColorBrightness(record.BackgroundColor, isLight ? -25 : 25));
+                dict["SelectedBackground"] = FrozenBrush(BlendColors(record.PrimaryColor, record.BackgroundColor, 0.2));
 
-                app.Resources["SuccessColor"] = new SolidColorBrush(isLight ? Color.FromRgb(16, 185, 129) : Color.FromRgb(52, 211, 153));
-                app.Resources["WarningColor"] = new SolidColorBrush(isLight ? Color.FromRgb(245, 158, 11) : Color.FromRgb(251, 191, 36));
-                app.Resources["DangerColor"] = new SolidColorBrush(isLight ? Color.FromRgb(239, 68, 68) : Color.FromRgb(248, 113, 113));
-                app.Resources["DangerHover"] = new SolidColorBrush(isLight ? Color.FromRgb(220, 38, 38) : Color.FromRgb(239, 68, 68));
-                app.Resources["InfoColor"] = new SolidColorBrush(record.AccentColor);
+                dict["PrimaryColor"] = FrozenBrush(record.PrimaryColor);
+                dict["PrimaryHover"] = FrozenBrush(AdjustColorBrightness(record.PrimaryColor, isLight ? -15 : 15));
+                dict["PrimaryActive"] = FrozenBrush(AdjustColorBrightness(record.PrimaryColor, isLight ? -30 : 30));
+
+                dict["SuccessColor"] = FrozenBrush(isLight ? Color.FromRgb(16, 185, 129) : Color.FromRgb(52, 211, 153));
+                dict["WarningColor"] = FrozenBrush(isLight ? Color.FromRgb(245, 158, 11) : Color.FromRgb(251, 191, 36));
+                dict["DangerColor"] = FrozenBrush(isLight ? Color.FromRgb(239, 68, 68) : Color.FromRgb(248, 113, 113));
+                dict["DangerHover"] = FrozenBrush(isLight ? Color.FromRgb(220, 38, 38) : Color.FromRgb(239, 68, 68));
+                dict["InfoColor"] = FrozenBrush(record.AccentColor);
+
+                dict[HistoryApplyTag] = true;
+
+                var mergedDicts = Application.Current.Resources.MergedDictionaries;
+                ResourceDictionary? existing = null;
+                foreach (var d in mergedDicts)
+                {
+                    if (d.Contains(HistoryApplyTag)) { existing = d; break; }
+                }
+                mergedDicts.Insert(0, dict);
+                if (existing != null) mergedDicts.Remove(existing);
 
                 TM.App.Log($"[GenerationHistory] 已应用历史记录: {record.Name}");
 
@@ -259,11 +278,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 应用失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"应用历史记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"应用历史记录失败\n\n错误详情：{ex.Message}", "应用失败", null);
             }
         }
 
@@ -285,15 +300,11 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 删除失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"删除历史记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"删除历史记录失败\n\n错误详情：{ex.Message}", "删除失败", null);
             }
         }
 
-        private async void ExportRecord(HistoryRecord? record)
+        private async Task ExportRecord(HistoryRecord? record)
         {
             if (record == null) return;
 
@@ -309,7 +320,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
                 var filePath = Path.Combine(themesPath, fileName);
 
                 var xamlContent = GenerateThemeXaml(record, themeName);
-                var tmpGhv = filePath + ".tmp";
+                var tmpGhv = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
                 await File.WriteAllTextAsync(tmpGhv, xamlContent, Encoding.UTF8);
                 File.Move(tmpGhv, filePath, overwrite: true);
 
@@ -320,11 +331,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 导出失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"导出历史记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"导出历史记录失败\n\n错误详情：{ex.Message}", "导出失败", null);
             }
         }
 
@@ -344,11 +351,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 清空失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"清空历史记录失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"清空历史记录失败\n\n错误详情：{ex.Message}", "清空失败", null);
             }
         }
 
@@ -496,11 +499,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationHistory] 切换收藏失败: {ex.Message}");
-                StandardDialog.ShowError(
-                    $"切换收藏失败：{ex.Message}",
-                    "错误",
-                    null
-                );
+                StandardDialog.ShowError($"切换收藏失败\n\n错误详情：{ex.Message}", "操作失败", null);
             }
         }
 
@@ -512,6 +511,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class HistoryRecord : INotifyPropertyChanged
     {
         public string Id { get; set; } = string.Empty;
@@ -526,7 +526,7 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
         public string Harmony { get; set; } = string.Empty;
         public string Keywords { get; set; } = string.Empty;
 
-        private bool _isFavorite = false;
+        private bool _isFavorite;
         public bool IsFavorite
         {
             get => _isFavorite;
@@ -538,16 +538,70 @@ namespace TM.Framework.Appearance.IntelligentGeneration.GenerationHistory
             }
         }
 
-        public SolidColorBrush PrimaryBrush => new(PrimaryColor);
-        public SolidColorBrush SecondaryBrush => new(SecondaryColor);
-        public SolidColorBrush AccentBrush => new(AccentColor);
-        public SolidColorBrush BackgroundBrush => new(BackgroundColor);
-        public SolidColorBrush TextBrush => new(TextColor);
+        private SolidColorBrush? _primaryBrush;
+        public SolidColorBrush PrimaryBrush
+        {
+            get
+            {
+                if (_primaryBrush != null) return _primaryBrush;
+                _primaryBrush = new SolidColorBrush(PrimaryColor);
+                _primaryBrush.Freeze();
+                return _primaryBrush;
+            }
+        }
+
+        private SolidColorBrush? _secondaryBrush;
+        public SolidColorBrush SecondaryBrush
+        {
+            get
+            {
+                if (_secondaryBrush != null) return _secondaryBrush;
+                _secondaryBrush = new SolidColorBrush(SecondaryColor);
+                _secondaryBrush.Freeze();
+                return _secondaryBrush;
+            }
+        }
+
+        private SolidColorBrush? _accentBrush;
+        public SolidColorBrush AccentBrush
+        {
+            get
+            {
+                if (_accentBrush != null) return _accentBrush;
+                _accentBrush = new SolidColorBrush(AccentColor);
+                _accentBrush.Freeze();
+                return _accentBrush;
+            }
+        }
+
+        private SolidColorBrush? _backgroundBrush;
+        public SolidColorBrush BackgroundBrush
+        {
+            get
+            {
+                if (_backgroundBrush != null) return _backgroundBrush;
+                _backgroundBrush = new SolidColorBrush(BackgroundColor);
+                _backgroundBrush.Freeze();
+                return _backgroundBrush;
+            }
+        }
+
+        private SolidColorBrush? _textBrush;
+        public SolidColorBrush TextBrush
+        {
+            get
+            {
+                if (_textBrush != null) return _textBrush;
+                _textBrush = new SolidColorBrush(TextColor);
+                _textBrush.Freeze();
+                return _textBrush;
+            }
+        }
 
         public string PrimaryHex => $"#{PrimaryColor.R:X2}{PrimaryColor.G:X2}{PrimaryColor.B:X2}";
         public string FormattedTime => Timestamp.ToString("yyyy-MM-dd HH:mm:ss");
-        public string TypeIcon => Type == "图片取色" ? "🖼️" : "🎨";
-        public string FavoriteIcon => IsFavorite ? "⭐" : "☆";
+        public string TypeIcon => Type == "图片取色" ? "Icon.Image" : "Icon.Palette";
+        public string FavoriteIcon => IsFavorite ? "Icon.Star" : "Icon.Star";
 
         public ICommand? ApplyCommand { get; set; }
         public ICommand? DeleteCommand { get; set; }

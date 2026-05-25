@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using TM.Framework.Common.Helpers;
+using System.Text.RegularExpressions;
 using TM.Services.Modules.ProjectData.Implementations.Tracking.Rules;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -10,6 +10,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
     public class LedgerConsistencyChecker
     {
         private static readonly FactSnapshot StructuralValidationSnapshot = new();
+
+        private static readonly Regex TierNumberRegex = new(@"tier\s*[-_]?\s*(\d+)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex PlainDigitsRegex = new(@"\d+", RegexOptions.Compiled);
+        private static readonly Regex RomanNumeralRegex = new(@"\b[IVXLCDM]+\b", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex ChineseNumberRegex = new(@"[零一二三四五六七八九十百千万两]+", RegexOptions.IgnoreCase | RegexOptions.Compiled);
+        private static readonly Regex GradeLevelRegex = new(@"\b(SSS|SS|S|A|B|C|D|E|F)\b|(?i)(SSS|SS|S|A|B|C|D|E|F)\s*(级|阶|段)", RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
         #region 构造函数
 
@@ -51,13 +57,29 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             ValidateCharacterConsistency(changes, factSnapshot, result, ruleSet);
 
+            ValidatePledgeConstraintConsistency(changes, factSnapshot, result, ruleSet);
+
+            ValidateDeadlineConstraintConsistency(changes, factSnapshot, result, ruleSet);
+
             var chapterLocations = new HashSet<string>(
                 factSnapshot.LocationDescriptions?.Keys ?? Enumerable.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
 
+            foreach (var l in factSnapshot.LocationStates ?? new List<LocationStateSnapshot>())
+            {
+                if (!string.IsNullOrWhiteSpace(l.Id))
+                    chapterLocations.Add(l.Id);
+            }
+
             var chapterCharacters = new HashSet<string>(
                 factSnapshot.CharacterDescriptions?.Keys ?? Enumerable.Empty<string>(),
                 StringComparer.OrdinalIgnoreCase);
+
+            foreach (var c in factSnapshot.CharacterStates ?? new List<CharacterStateSnapshot>())
+            {
+                if (!string.IsNullOrWhiteSpace(c.Id))
+                    chapterCharacters.Add(c.Id);
+            }
 
             ValidateTimelineConsistency(changes, factSnapshot, result, chapterLocations);
 
@@ -234,22 +256,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 return "resolved";
             }
 
-            if (s.Contains("未") && (s.Contains("开始") || s.Contains("触发") || s.Contains("启动")))
+            if (s.Contains('未') && (s.Contains("开始") || s.Contains("触发") || s.Contains("启动") || s.Contains("发生")))
             {
                 return "pending";
             }
 
-            if (s.Contains("进行") || s.Contains("推进") || s.Contains("发展") || s.Contains("展开") || s.Contains("激活") || s.Contains("触发") || s.Contains("开启"))
+            if (s.Contains("进行") || s.Contains("推进") || s.Contains("发展") || s.Contains("展开") || s.Contains("激活") || s.Contains("触发") || s.Contains("开启") || s.Contains("进展") || s.Contains("持续") || s.Contains("继续") || s.Contains("升级"))
             {
                 return "active";
             }
 
-            if (s.Contains("高潮") || s.Contains("爆发") || s.Contains("决战") || s.Contains("决裂") || s.Contains("临界"))
+            if (s.Contains("高潮") || s.Contains("爆发") || s.Contains("决战") || s.Contains("决裂") || s.Contains("临界") || s.Contains("白热化") || s.Contains("最高点") || s.Contains("紧要关头") || s.Contains("危急"))
             {
                 return "climax";
             }
 
-            if (s.Contains("解决") || s.Contains("结束") || s.Contains("完结") || s.Contains("收束") || s.Contains("已结") || s.Contains("闭环"))
+            if (s.Contains("解决") || s.Contains("结束") || s.Contains("完结") || s.Contains("收束") || s.Contains("已结") || s.Contains("闭环") || s.Contains("落幕") || s.Contains("告终") || s.Contains("平息") || s.Contains("化解") || s.Contains("消弭") || s.Contains("了结"))
             {
                 return "resolved";
             }
@@ -423,7 +445,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             var text = level.Trim();
 
-            var tierMatch = System.Text.RegularExpressions.Regex.Match(text, @"tier\s*[-_]?\s*(\d+)", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var tierMatch = TierNumberRegex.Match(text);
             if (tierMatch.Success && int.TryParse(tierMatch.Groups[1].Value, out var tierNum))
             {
                 if (levelMap != null && levelMap.TryGetValue($"Tier-{tierNum}", out var tierValue))
@@ -431,22 +453,19 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 return tierNum;
             }
 
-            var match = System.Text.RegularExpressions.Regex.Match(text, @"\d+");
+            var match = PlainDigitsRegex.Match(text);
             if (match.Success && int.TryParse(match.Value, out var num))
                 return num;
 
-            var romanMatch = System.Text.RegularExpressions.Regex.Match(text, @"\b[IVXLCDM]+\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var romanMatch = RomanNumeralRegex.Match(text);
             if (romanMatch.Success && TryParseRomanNumeral(romanMatch.Value, out var romanNum))
                 return romanNum;
 
-            var chineseMatch = System.Text.RegularExpressions.Regex.Match(text, @"[零一二三四五六七八九十百千万两]+", System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var chineseMatch = ChineseNumberRegex.Match(text);
             if (chineseMatch.Success && TryParseChineseNumber(chineseMatch.Value, out var cnNum))
                 return cnNum;
 
-            var gradeMatch = System.Text.RegularExpressions.Regex.Match(
-                text,
-                @"\b(SSS|SS|S|A|B|C|D|E|F)\b|(?i)(SSS|SS|S|A|B|C|D|E|F)\s*(级|阶|段)",
-                System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+            var gradeMatch = GradeLevelRegex.Match(text);
             if (gradeMatch.Success)
             {
                 var g = (gradeMatch.Groups[1].Success ? gradeMatch.Groups[1].Value : gradeMatch.Groups[2].Value).ToUpperInvariant();
@@ -710,7 +729,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (changes.CharacterStateChanges == null || changes.CharacterStateChanges.Count == 0)
                 return;
 
-            var allyPairs  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var allyPairs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var enemyPairs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             foreach (var change in changes.CharacterStateChanges.Where(c => !string.IsNullOrWhiteSpace(c.CharacterId)))
@@ -725,7 +744,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         ? $"{change.CharacterId}|{targetId}"
                         : $"{targetId}|{change.CharacterId}";
 
-                    if (IsAllyRelation(rel))  allyPairs.Add(pairKey);
+                    if (IsAllyRelation(rel)) allyPairs.Add(pairKey);
                     if (IsEnemyRelation(rel)) enemyPairs.Add(pairKey);
                 }
             }
@@ -746,14 +765,144 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static bool IsAllyRelation(string relation) =>
             !string.IsNullOrWhiteSpace(relation) &&
             (relation.Contains("盟友") || relation.Contains("同盟") || relation.Contains("结盟") ||
-             relation.Contains("ally",   StringComparison.OrdinalIgnoreCase) ||
+             relation.Contains("挚友") || relation.Contains("知己") || relation.Contains("朋友") ||
+             relation.Contains("好友") || relation.Contains("友人") || relation.Contains("亲友") ||
+             relation.Contains("兄弟") || relation.Contains("姐妹") || relation.Contains("手足") ||
+             relation.Contains("恋人") || relation.Contains("爱人") || relation.Contains("夫妻") ||
+             relation.Contains("伙伴") || relation.Contains("同伴") || relation.Contains("战友") ||
+             relation.Contains("心腹") || relation.Contains("亲信") ||
+             relation.Contains("ally", StringComparison.OrdinalIgnoreCase) ||
              relation.Contains("friend", StringComparison.OrdinalIgnoreCase));
 
         private static bool IsEnemyRelation(string relation) =>
             !string.IsNullOrWhiteSpace(relation) &&
             (relation.Contains("仇敌") || relation.Contains("敌对") || relation.Contains("宿敌") ||
-             relation.Contains("enemy",   StringComparison.OrdinalIgnoreCase) ||
+             relation.Contains("敌人") || relation.Contains("死敌") || relation.Contains("仇人") ||
+             relation.Contains("对头") || relation.Contains("政敌") || relation.Contains("寇仇") ||
+             relation.Contains("冤家") || relation.Contains("反目") || relation.Contains("决裂") ||
+             relation.Contains("enemy", StringComparison.OrdinalIgnoreCase) ||
              relation.Contains("hostile", StringComparison.OrdinalIgnoreCase));
+
+        #endregion
+
+        #region V7
+
+        private static void ValidatePledgeConstraintConsistency(
+            ChapterChanges changes,
+            FactSnapshot factSnapshot,
+            ConsistencyResult result,
+            LedgerRuleSet ruleSet)
+        {
+            if (ruleSet == null || !ruleSet.EnablePledgeConstraintCheck) return;
+            if (changes.PledgeConstraintChanges == null || changes.PledgeConstraintChanges.Count == 0) return;
+
+            var activePledgeIds = new HashSet<string>(
+                factSnapshot.PledgeStates?.Select(p => p.Id).Where(id => !string.IsNullOrWhiteSpace(id)) ?? Enumerable.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
+
+            var terminalActions = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var pc in changes.PledgeConstraintChanges)
+            {
+                if (string.IsNullOrWhiteSpace(pc.PledgeId)) continue;
+                var action = pc.Action?.ToLowerInvariant() ?? string.Empty;
+
+                if (action == "create" && activePledgeIds.Contains(pc.PledgeId))
+                {
+                    result.AddIssue(new ConsistencyIssue
+                    {
+                        EntityId = pc.PledgeId,
+                        IssueType = "PledgeDuplicateCreate",
+                        Expected = "承诺/契约已存在于账本，不应重复 create",
+                        Actual = $"对已有承诺 {pc.PledgeId} 再次执行 create 动作"
+                    });
+                    continue;
+                }
+
+                if (action == "fulfill" || action == "break")
+                {
+                    if (!terminalActions.TryGetValue(pc.PledgeId, out var actionList))
+                    {
+                        actionList = new List<string>();
+                        terminalActions[pc.PledgeId] = actionList;
+                    }
+                    actionList.Add(action);
+                }
+            }
+
+            foreach (var (pledgeId, actions) in terminalActions)
+            {
+                if (actions.Count > 1)
+                {
+                    result.AddIssue(new ConsistencyIssue
+                    {
+                        EntityId = pledgeId,
+                        IssueType = "PledgeTerminalActionConflict",
+                        Expected = "同一章节承诺只能有一个终止动作（fulfill 或 break）",
+                        Actual = $"承诺 {pledgeId} 同章出现多个终止动作：[{string.Join(", ", actions)}]"
+                    });
+                }
+            }
+        }
+
+        #endregion
+
+        #region V8
+
+        private static void ValidateDeadlineConstraintConsistency(
+            ChapterChanges changes,
+            FactSnapshot factSnapshot,
+            ConsistencyResult result,
+            LedgerRuleSet ruleSet)
+        {
+            if (ruleSet == null || !ruleSet.EnableDeadlineConstraintCheck) return;
+            if (changes.DeadlineConstraintChanges == null || changes.DeadlineConstraintChanges.Count == 0) return;
+
+            var activeDeadlineIds = new HashSet<string>(
+                factSnapshot.DeadlineStates?.Select(d => d.Id).Where(id => !string.IsNullOrWhiteSpace(id)) ?? Enumerable.Empty<string>(),
+                StringComparer.OrdinalIgnoreCase);
+
+            var terminalActions = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+
+            foreach (var dc in changes.DeadlineConstraintChanges)
+            {
+                if (string.IsNullOrWhiteSpace(dc.DeadlineId)) continue;
+                var action = dc.Action?.ToLowerInvariant() ?? string.Empty;
+
+                if (action == "create" && activeDeadlineIds.Contains(dc.DeadlineId))
+                {
+                    result.AddIssue(new ConsistencyIssue
+                    {
+                        EntityId = dc.DeadlineId,
+                        IssueType = "DeadlineDuplicateCreate",
+                        Expected = "倒计时/时限已存在于账本，不应重复 create",
+                        Actual = $"对已有倒计时 {dc.DeadlineId} 再次执行 create 动作"
+                    });
+                    continue;
+                }
+
+                if (action == "trigger" || action == "expire" || action == "cancel")
+                {
+                    if (!terminalActions.ContainsKey(dc.DeadlineId))
+                        terminalActions[dc.DeadlineId] = new List<string>();
+                    terminalActions[dc.DeadlineId].Add(action);
+                }
+            }
+
+            foreach (var (deadlineId, actions) in terminalActions)
+            {
+                if (actions.Count > 1)
+                {
+                    result.AddIssue(new ConsistencyIssue
+                    {
+                        EntityId = deadlineId,
+                        IssueType = "DeadlineTerminalActionConflict",
+                        Expected = "同一章节倒计时只能有一个终止动作（trigger / expire / cancel）",
+                        Actual = $"倒计时 {deadlineId} 同章出现多个终止动作：[{string.Join(", ", actions)}]"
+                    });
+                }
+            }
+        }
 
         #endregion
     }

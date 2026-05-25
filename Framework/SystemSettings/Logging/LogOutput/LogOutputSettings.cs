@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text.Json.Serialization;
+using System.Windows.Media;
 
 namespace TM.Framework.SystemSettings.Logging.LogOutput
 {
@@ -64,7 +65,11 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
         [JsonPropertyName("AverageResponseTime")] public long AverageResponseTime { get; set; }
         [JsonPropertyName("TotalBytes")] public long TotalBytes { get; set; }
         [JsonPropertyName("LastUpdateTime")] public DateTime LastUpdateTime { get; set; }
-        public string StatusIcon => SuccessRate >= 90 ? "✅" : SuccessRate >= 70 ? "⚠️" : "❌";
+        public ImageSource? StatusIcon => SuccessRate >= 90
+            ? IconHelper.TryGet("Icon.CheckCircle")
+            : SuccessRate >= 70
+                ? IconHelper.TryGet("Icon.Warning")
+                : IconHelper.TryGet("Icon.Error");
     }
 
     public class RetryConfig

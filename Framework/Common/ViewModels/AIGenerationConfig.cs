@@ -34,8 +34,10 @@ namespace TM.Framework.Common.ViewModels
 
         public string? SequenceFieldName { get; set; }
 
-        public Func<string?, string, int>? GetCurrentMaxSequence { get; set; }
+        public Func<string, int>? GetCurrentMaxSequence { get; set; }
 
         public List<string>? BatchIndexFields { get; set; }
+
+        public string? ActiveModuleHint { get; set; }
     }
 }

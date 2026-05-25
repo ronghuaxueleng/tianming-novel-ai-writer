@@ -1,11 +1,11 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Collections.Generic;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.Notifications.Sound.SoundScheme
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundSchemeSettingsData
     {
         [System.Text.Json.Serialization.JsonPropertyName("ActiveSchemeId")] public string ActiveSchemeId { get; set; } = "default";
@@ -14,6 +14,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundSchemeSettings : BaseSettings<SoundSchemeSettings, SoundSchemeSettingsData>
     {
         public SoundSchemeSettings(IStoragePathHelper storagePathHelper, IObjectFactory objectFactory)
@@ -28,7 +29,10 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
         public Dictionary<string, string> EventSoundMappings { get => Data.EventSoundMappings; set { Data.EventSoundMappings = value; OnPropertyChanged(); } }
         public List<string> CustomSoundFiles { get => Data.CustomSoundFiles; set { Data.CustomSoundFiles = value; OnPropertyChanged(); } }
 
-        public void LoadSettings() => LoadData();
+        public void LoadSettings()
+        {
+        }
+        public System.Threading.Tasks.Task LoadSettingsAsync() => LoadDataAsync();
         public void SaveSettings() => SaveData();
     }
 }

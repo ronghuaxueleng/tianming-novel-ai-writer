@@ -1,20 +1,18 @@
-using System;
+﻿using System;
 using System.Reflection;
+using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Services;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.User.Account.AccountBinding;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.AccountBinding
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class AccountBindingViewModel : INotifyPropertyChanged
     {
         private readonly AccountBindingService _bindingService;
@@ -99,51 +97,34 @@ namespace TM.Framework.User.Account.AccountBinding
 
         private void InitializePlatforms()
         {
+            var iconMap = new Dictionary<PlatformType, string>
+            {
+                [PlatformType.WeChat] = "weixin.png",
+                [PlatformType.QQ] = "qq.png",
+                [PlatformType.GitHub] = "Github.png",
+                [PlatformType.Google] = "Google.png",
+                [PlatformType.Microsoft] = "Microsoft.png",
+                [PlatformType.Baidu] = "Baidu.png"
+            };
+
             var platforms = new[]
             {
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.WeChat, 
-                    PlatformName = "微信", 
-                    PlatformIcon = "💬",
-                    LogoImage = AccountIconHelper.GetIcon("weixin.jpg")
-                },
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.QQ, 
-                    PlatformName = "QQ", 
-                    PlatformIcon = "🐧",
-                    LogoImage = AccountIconHelper.GetIcon("qq.png")
-                },
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.GitHub, 
-                    PlatformName = "GitHub", 
-                    PlatformIcon = "🐙",
-                    LogoImage = AccountIconHelper.GetIcon("Github.png")
-                },
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.Google, 
-                    PlatformName = "Google", 
-                    PlatformIcon = "🔍",
-                    LogoImage = AccountIconHelper.GetIcon("Google.png")
-                },
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.Microsoft, 
-                    PlatformName = "Microsoft", 
-                    PlatformIcon = "🪟",
-                    LogoImage = AccountIconHelper.GetIcon("Microsoft.png")
-                },
-                new AccountBindingModel 
-                { 
-                    Platform = PlatformType.Baidu, 
-                    PlatformName = "百度", 
-                    PlatformIcon = "🔍",
-                    LogoImage = AccountIconHelper.GetIcon("Baidu.png")
-                }
+                new AccountBindingModel { Platform = PlatformType.WeChat, PlatformName = "微信", PlatformIcon = IconHelper.TryGet("Icon.Chat") },
+                new AccountBindingModel { Platform = PlatformType.QQ, PlatformName = "QQ", PlatformIcon = IconHelper.TryGet("Icon.Chat") },
+                new AccountBindingModel { Platform = PlatformType.GitHub, PlatformName = "GitHub", PlatformIcon = IconHelper.TryGet("Icon.Globe") },
+                new AccountBindingModel { Platform = PlatformType.Google, PlatformName = "Google", PlatformIcon = IconHelper.TryGet("Icon.Search") },
+                new AccountBindingModel { Platform = PlatformType.Microsoft, PlatformName = "Microsoft", PlatformIcon = IconHelper.TryGet("Icon.Monitor") },
+                new AccountBindingModel { Platform = PlatformType.Baidu, PlatformName = "百度", PlatformIcon = IconHelper.TryGet("Icon.Search") }
             };
+
+            _ = AccountIconHelper.WarmUpAsync(iconMap.Values).ContinueWith(_ =>
+            {
+                foreach (var p in platforms)
+                {
+                    if (iconMap.TryGetValue(p.Platform, out var icon))
+                        p.LogoImage = AccountIconHelper.GetIcon(icon);
+                }
+            }, System.Threading.Tasks.TaskScheduler.FromCurrentSynchronizationContext());
 
             foreach (var platform in platforms)
             {
@@ -201,7 +182,8 @@ namespace TM.Framework.User.Account.AccountBinding
 
                 if (!authResult.Success)
                 {
-                    GlobalToast.Error("授权失败", authResult.ErrorMessage ?? "获取授权码失败");
+                    TM.App.Log($"[AccountBindingViewModel] 授权失败: {authResult.ErrorMessage}");
+                    GlobalToast.Error("授权失败", $"授权失败：{authResult.ErrorMessage ?? "未知原因"}");
                     return;
                 }
 
@@ -212,7 +194,8 @@ namespace TM.Framework.User.Account.AccountBinding
 
                 if (!result.Success)
                 {
-                    GlobalToast.Error("绑定账号", result.ErrorMessage ?? "绑定失败");
+                    TM.App.Log($"[AccountBindingViewModel] 绑定账号失败: {result.ErrorMessage}");
+                    GlobalToast.Error("绑定账号", $"绑定失败：{result.ErrorMessage ?? "未知原因"}");
                     return;
                 }
 
@@ -240,7 +223,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountBindingViewModel] 绑定账号失败: {ex.Message}");
-                GlobalToast.Error("绑定账号", $"操作失败: {ex.Message}");
+                GlobalToast.Error("绑定账号", $"操作失败：{ex.Message}");
             }
         }
 
@@ -251,7 +234,7 @@ namespace TM.Framework.User.Account.AccountBinding
                 var platformModel = AvailablePlatforms.FirstOrDefault(p => p.Platform == platform);
                 if (platformModel == null) return;
 
-                var result = StandardDialog.ShowConfirm("解绑账号", 
+                var result = StandardDialog.ShowConfirm("解绑账号",
                     $"确定要解绑{platformModel.PlatformName}账号({platformModel.Nickname})吗？\n\n解绑后将无法使用该账号快速登录。");
 
                 if (result == true)
@@ -262,7 +245,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountBindingViewModel] 解绑账号失败: {ex.Message}");
-                GlobalToast.Error("解绑账号", $"操作失败: {ex.Message}");
+                GlobalToast.Error("解绑账号", $"操作失败：{ex.Message}");
             }
         }
 
@@ -273,7 +256,8 @@ namespace TM.Framework.User.Account.AccountBinding
                 var result = await _bindingService.UnbindAccountAsync(platform);
                 if (!result.Success)
                 {
-                    GlobalToast.Error("解绑账号", result.ErrorMessage ?? "解绑失败");
+                    TM.App.Log($"[AccountBindingViewModel] 解绑账号失败: {result.ErrorMessage}");
+                    GlobalToast.Error("解绑账号", $"解绑失败：{result.ErrorMessage ?? "未知原因"}");
                     return;
                 }
 
@@ -293,7 +277,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountBindingViewModel] 解绑账号失败: {ex.Message}");
-                GlobalToast.Error("解绑账号", $"操作失败: {ex.Message}");
+                GlobalToast.Error("解绑账号", $"操作失败：{ex.Message}");
             }
         }
 
@@ -320,7 +304,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountBindingViewModel] 查看详情失败: {ex.Message}");
-                GlobalToast.Error("查看详情", $"操作失败: {ex.Message}");
+                GlobalToast.Error("查看详情", $"操作失败：{ex.Message}");
             }
         }
 
@@ -365,7 +349,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountBindingViewModel] 同步失败: {ex.Message}");
-                GlobalToast.Error("数据同步", $"操作失败: {ex.Message}");
+                GlobalToast.Error("数据同步", $"操作失败：{ex.Message}");
             }
         }
 

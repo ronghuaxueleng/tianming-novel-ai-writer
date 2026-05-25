@@ -1,9 +1,9 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using System.Collections.Generic;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace TM.Services.Framework.Settings
 {
@@ -47,16 +47,16 @@ namespace TM.Services.Framework.Settings
             _configDirectory = Path.GetDirectoryName(_configFile) ?? "";
 
             _settings = new Dictionary<string, object>();
-            LoadSettings();
+            _ = LoadSettingsAsync();
         }
 
-        private void LoadSettings()
+        private async Task LoadSettingsAsync()
         {
             try
             {
                 if (File.Exists(_configFile))
                 {
-                    string json = File.ReadAllText(_configFile);
+                    string json = await File.ReadAllTextAsync(_configFile).ConfigureAwait(false);
                     var settings = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
 
                     if (settings != null)
@@ -72,11 +72,11 @@ namespace TM.Services.Framework.Settings
             }
             catch (Exception ex)
             {
-                DebugLogOnce("LoadSettings", ex);
+                DebugLogOnce("LoadSettingsAsync", ex);
             }
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             var acquired = false;
             try
@@ -91,12 +91,12 @@ namespace TM.Services.Framework.Settings
 
                 var options = JsonHelper.Default;
 
-                string json;
+                byte[] jsonBytes;
                 lock (_settingsLock)
-                    json = JsonSerializer.Serialize(_settings, options);
+                    jsonBytes = JsonSerializer.SerializeToUtf8Bytes(_settings, options);
 
-                var tmp = _configFile + ".tmp";
-                await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                var tmp = _configFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllBytesAsync(tmp, jsonBytes).ConfigureAwait(false);
                 File.Move(tmp, _configFile, overwrite: true);
             }
             catch (Exception ex)
@@ -122,7 +122,18 @@ namespace TM.Services.Framework.Settings
                 {
                     if (value is JsonElement jsonElement)
                     {
-                        return JsonSerializer.Deserialize<T>(jsonElement.GetRawText()) ?? defaultValue;
+                        var deserialized = JsonSerializer.Deserialize<T>(jsonElement.GetRawText());
+                        if (deserialized != null)
+                        {
+                            lock (_settingsLock)
+                            {
+                                if (_settings.TryGetValue(key, out var current) && current is not JsonElement)
+                                    return (T)current;
+                                _settings[key] = deserialized;
+                            }
+                            return deserialized;
+                        }
+                        return defaultValue;
                     }
                     return (T)value;
                 }
@@ -140,7 +151,7 @@ namespace TM.Services.Framework.Settings
             {
                 lock (_settingsLock)
                     _settings[key] = value ?? throw new ArgumentNullException(nameof(value));
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[SettingsManager] {ex.Message}"));
             }
             catch (Exception ex)
             {
@@ -158,7 +169,7 @@ namespace TM.Services.Framework.Settings
 
                 if (removed)
                 {
-                    SaveSettings();
+                    SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[SettingsManager] {ex.Message}"));
                 }
             }
             catch (Exception ex)
@@ -177,7 +188,7 @@ namespace TM.Services.Framework.Settings
         {
             lock (_settingsLock)
                 _settings.Clear();
-            SaveSettings();
+            SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[SettingsManager] {ex.Message}"));
         }
     }
 }

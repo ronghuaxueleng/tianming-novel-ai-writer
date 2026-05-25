@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,17 +6,18 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using TM.Framework.Appearance.ThemeManagement;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.Appearance.AutoTheme.TimeBased
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class TimeBasedViewModel : INotifyPropertyChanged
     {
         private readonly TimeScheduleService _service;
         private readonly HolidayLibrary _holidayLibrary;
         private TimeBasedSettings _settings = null!;
+        private static readonly System.Net.Http.HttpClient _httpClient = new() { Timeout = TimeSpan.FromSeconds(10) };
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -67,7 +68,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             set { if (_nightTheme != value) { _nightTheme = value; OnPropertyChanged(); } }
         }
 
-        public ObservableCollection<TimeScheduleItem> Schedules { get; set; } = null!;
+        public RangeObservableCollection<TimeScheduleItem> Schedules { get; set; } = null!;
 
         private double _latitude;
         public double Latitude
@@ -132,8 +133,8 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             set { if (_useBuiltInHolidays != value) { _useBuiltInHolidays = value; OnPropertyChanged(); LoadBuiltInHolidays(); } }
         }
 
-        public ObservableCollection<DateTime> CustomHolidays { get; set; } = null!;
-        public ObservableCollection<HolidayInfo> BuiltInHolidays { get; set; } = null!;
+        public RangeObservableCollection<DateTime> CustomHolidays { get; set; } = null!;
+        public RangeObservableCollection<HolidayInfo> BuiltInHolidays { get; set; } = null!;
 
         private HolidayThemeOverride _holidayThemeOverride = HolidayThemeOverride.NoChange;
         public HolidayThemeOverride HolidayThemeOverride
@@ -177,7 +178,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             set { if (_recordHistory != value) { _recordHistory = value; OnPropertyChanged(); } }
         }
 
-        public ObservableCollection<SwitchHistoryRecord> SwitchHistory { get; set; } = null!;
+        public RangeObservableCollection<SwitchHistoryRecord> SwitchHistory { get; set; } = null!;
 
         private string _currentActiveSchedule = "未检测";
         public string CurrentActiveSchedule
@@ -228,15 +229,18 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             _service = service;
             _holidayLibrary = holidayLibrary;
 
-            Schedules = new ObservableCollection<TimeScheduleItem>();
-            CustomHolidays = new ObservableCollection<DateTime>();
-            SwitchHistory = new ObservableCollection<SwitchHistoryRecord>();
+            Schedules = new RangeObservableCollection<TimeScheduleItem>();
+            CustomHolidays = new RangeObservableCollection<DateTime>();
+            SwitchHistory = new RangeObservableCollection<SwitchHistoryRecord>();
             ConflictsList = new ObservableCollection<TimeConflictInfo>();
-            BuiltInHolidays = new ObservableCollection<HolidayInfo>();
+            BuiltInHolidays = new RangeObservableCollection<HolidayInfo>();
 
             AsyncSettingsLoader.RunOrDefer(() =>
             {
                 var s = _service.GetSettings();
+                var scheduleItems = s.Schedules.Select(sc => new TimeScheduleItem { StartTime = sc.StartTime, EndTime = sc.EndTime, TargetTheme = sc.TargetTheme, EnabledWeekdays = sc.EnabledWeekdays, UseTransition = sc.UseTransition, Description = sc.Description, Priority = sc.Priority }).ToList();
+                var customHolidays = s.CustomHolidays.ToList();
+                var switchHistory = s.History.TakeLast(20).ToList();
                 return () =>
                 {
                     _settings = s;
@@ -250,13 +254,9 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                     _holidayTheme = s.HolidayTheme; _temporaryDisabled = s.TemporaryDisabled;
                     _disabledUntil = s.DisabledUntil; _recordHistory = s.RecordHistory;
                     _priority = s.Priority;
-                    Schedules.Clear();
-                    foreach (var sc in s.Schedules)
-                        Schedules.Add(new TimeScheduleItem { StartTime = sc.StartTime, EndTime = sc.EndTime, TargetTheme = sc.TargetTheme, EnabledWeekdays = sc.EnabledWeekdays, UseTransition = sc.UseTransition, Description = sc.Description, Priority = sc.Priority });
-                    CustomHolidays.Clear();
-                    foreach (var h in s.CustomHolidays) CustomHolidays.Add(h);
-                    SwitchHistory.Clear();
-                    foreach (var r in s.History.TakeLast(20)) SwitchHistory.Add(r);
+                    Schedules.ReplaceAll(scheduleItems);
+                    CustomHolidays.ReplaceAll(customHolidays);
+                    SwitchHistory.ReplaceAll(switchHistory);
                     if (_useBuiltInHolidays) LoadBuiltInHolidays();
                     OnPropertyChanged(string.Empty);
                     CalculateSunTimes();
@@ -300,17 +300,15 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
         private void LoadBuiltInHolidays()
         {
-            BuiltInHolidays.Clear();
-
-            if (!UseBuiltInHolidays) return;
+            if (!UseBuiltInHolidays)
+            {
+                BuiltInHolidays.ReplaceAll(Array.Empty<HolidayInfo>());
+                return;
+            }
 
             var currentYear = DateTime.Now.Year;
             var holidays = _holidayLibrary.GetHolidaysByYear(currentYear);
-
-            foreach (var holiday in holidays)
-            {
-                BuiltInHolidays.Add(holiday);
-            }
+            BuiltInHolidays.ReplaceAll(holidays);
 
             TM.App.Log($"[TimeBasedViewModel] 已加载{currentYear}年内置节假日{holidays.Count}个");
         }
@@ -424,7 +422,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             catch (Exception ex)
             {
                 TM.App.Log($"[TimeBasedViewModel] 检测冲突失败: {ex.Message}");
-                StandardDialog.ShowError($"检测冲突失败: {ex.Message}", "错误", null);
+                StandardDialog.ShowError($"检测冲突失败：{ex.Message}", "检测失败", null);
             }
         }
 
@@ -456,31 +454,30 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                 ToastNotification.ShowInfo("正在获取位置", "请稍候...");
                 TM.App.Log("[TimeBasedViewModel] 开始获取地理位置");
 
-                using var client = new System.Net.Http.HttpClient();
-                client.Timeout = TimeSpan.FromSeconds(10);
+                var client = _httpClient;
 
                 var response = await client.GetStringAsync("https://ipapi.co/json/");
 
                 var json = System.Text.Json.JsonDocument.Parse(response);
                 var root = json.RootElement;
 
-                if (root.TryGetProperty("latitude", out var latProp) && 
+                if (root.TryGetProperty("latitude", out var latProp) &&
                     root.TryGetProperty("longitude", out var lonProp))
                 {
                     var lat = latProp.GetDouble();
                     var lon = lonProp.GetDouble();
 
-                    string city = root.TryGetProperty("city", out var cityProp) 
-                        ? cityProp.GetString() ?? "未知" 
+                    string city = root.TryGetProperty("city", out var cityProp)
+                        ? cityProp.GetString() ?? "未知"
                         : "未知";
-                    string country = root.TryGetProperty("country_name", out var countryProp) 
-                        ? countryProp.GetString() ?? "未知" 
+                    string country = root.TryGetProperty("country_name", out var countryProp)
+                        ? countryProp.GetString() ?? "未知"
                         : "未知";
 
                     Latitude = lat;
                     Longitude = lon;
 
-                    ToastNotification.ShowSuccess("位置获取成功", 
+                    ToastNotification.ShowSuccess("位置获取成功",
                         $"{city}, {country}\n纬度: {lat:F4}°, 经度: {lon:F4}°");
                     TM.App.Log($"[TimeBasedViewModel] 位置获取成功: {city}, {country} ({lat:F4}, {lon:F4})");
 
@@ -517,13 +514,13 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
             if (TemporaryDisabled)
             {
-            DisabledUntil = DateTime.Now.AddHours(1);
-            ToastNotification.ShowSuccess("临时禁用", "已禁用1小时");
+                DisabledUntil = DateTime.Now.AddHours(1);
+                ToastNotification.ShowSuccess("临时禁用", "已禁用1小时");
             }
             else
             {
-            DisabledUntil = null;
-            ToastNotification.ShowSuccess("取消禁用", "已取消临时禁用");
+                DisabledUntil = null;
+                ToastNotification.ShowSuccess("取消禁用", "已取消临时禁用");
             }
         }
 
@@ -604,14 +601,14 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
                 _settings.CustomHolidays = CustomHolidays.ToList();
 
-            _service.UpdateSettings(_settings);
+                _service.UpdateSettings(_settings);
 
-            ToastNotification.ShowSuccess("保存成功", "设置已保存");
+                ToastNotification.ShowSuccess("保存成功", "设置已保存");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[TimeBasedViewModel] 应用设置失败: {ex.Message}");
-                StandardDialog.ShowError($"保存设置失败: {ex.Message}", "错误", null);
+                StandardDialog.ShowError($"保存设置失败：{ex.Message}", "保存失败", null);
             }
         }
     }
@@ -627,14 +624,6 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
         public int Priority { get; set; } = 5;
 
         public string DisplayText => $"{StartTime:hh\\:mm} - {EndTime:hh\\:mm}: {TargetTheme} ({Description}) [优先级:{Priority}]";
-    }
-
-    public class HolidayItem
-    {
-        public DateTime Date { get; set; }
-        public string Description { get; set; } = string.Empty;
-
-        public string DisplayText => $"{Date:yyyy-MM-dd}: {Description}";
     }
 
     public class TimeConflictInfo

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 
@@ -8,7 +9,7 @@ public class UserConfigurationData : IDataItem
 {
     [JsonPropertyName("Id")] public string Id { get; set; } = string.Empty;
     [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
-    [JsonPropertyName("Icon")] public string Icon { get; set; } = "🤖";
+    [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.Robot";
     [JsonPropertyName("Category")] public string Category { get; set; } = string.Empty;
     [JsonPropertyName("CategoryId")] public string CategoryId { get; set; } = string.Empty;
     [JsonPropertyName("IsEnabled")] public bool IsEnabled { get; set; } = true;
@@ -30,10 +31,11 @@ public class UserConfigurationData : IDataItem
     [JsonPropertyName("SupportedFeatures")] public string SupportedFeatures { get; set; } = string.Empty;
 
     [JsonPropertyName("Temperature")] public double Temperature { get; set; } = 0.7;
-    [JsonPropertyName("MaxTokens")] public int MaxTokens { get; set; } = 4096;
+    [JsonPropertyName("MaxTokens")] public int MaxTokens { get; set; } = 0;
     [JsonPropertyName("TopP")] public double TopP { get; set; } = 1.0;
-    [JsonPropertyName("FrequencyPenalty")] public double FrequencyPenalty { get; set; } = 0.0;
+    [JsonPropertyName("FrequencyPenalty")] public double FrequencyPenalty { get; set; } = 0.1;
     [JsonPropertyName("PresencePenalty")] public double PresencePenalty { get; set; } = 0.0;
+    [JsonPropertyName("BatchTier")] public string BatchTier { get; set; } = "64K";
     [JsonPropertyName("RateLimitRPM")] public int RateLimitRPM { get; set; } = 0;
     [JsonPropertyName("RateLimitTPM")] public int RateLimitTPM { get; set; } = 0;
     [JsonPropertyName("MaxConcurrency")] public int MaxConcurrency { get; set; } = 5;
@@ -42,5 +44,23 @@ public class UserConfigurationData : IDataItem
 
     [JsonPropertyName("RetryCount")] public int RetryCount { get; set; } = 3;
     [JsonPropertyName("TimeoutSeconds")] public int TimeoutSeconds { get; set; } = 30;
-    [JsonPropertyName("EnableStreaming")] public bool EnableStreaming { get; set; } = true;
+
+    [JsonPropertyName("AutoDisabledBySystem")] public bool AutoDisabledBySystem { get; set; }
+
+    [JsonPropertyName("ThinkingEnabled")] public bool? ThinkingEnabled { get; set; }
+    [JsonPropertyName("ReasoningEffort")] public string ReasoningEffort { get; set; } = string.Empty;
+    [JsonPropertyName("EnableLongContext")] public bool? EnableLongContext { get; set; }
+
+    [JsonPropertyName("SupportsReasoningEffort")] public bool SupportsReasoningEffort { get; set; }
+
+    [JsonPropertyName("SupportedEffortLevels")] public List<string>? SupportedEffortLevels { get; set; }
+    [JsonPropertyName("SupportsThinking")] public bool SupportsThinking { get; set; }
+    [JsonPropertyName("SupportsLongContext")] public bool SupportsLongContext { get; set; }
+    [JsonPropertyName("LongContextWindow")] public int LongContextWindow { get; set; } = 1_000_000;
+    [JsonPropertyName("ThinkingPassthrough")] public bool? ThinkingPassthrough { get; set; }
+    [JsonPropertyName("SupportsVision")] public bool SupportsVision { get; set; }
+    [JsonPropertyName("SupportsImageGeneration")] public bool SupportsImageGeneration { get; set; }
+    [JsonPropertyName("SupportsTools")] public bool SupportsTools { get; set; }
+    [JsonPropertyName("SupportsStreaming")] public bool SupportsStreaming { get; set; }
+    [JsonPropertyName("CapabilitiesDetected")] public bool CapabilitiesDetected { get; set; }
 }

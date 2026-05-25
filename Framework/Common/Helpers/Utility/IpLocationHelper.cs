@@ -36,42 +36,31 @@ namespace TM.Framework.Common.Helpers.Utility
 
         private static Searcher? GetSearcher()
         {
-            if (_searcher != null)
-                return _searcher;
+            if (_searcher != null) return _searcher;
+            if (_initAttempted) return null;
 
-            if (_initAttempted)
-                return null;
+            var xdbPath = Path.Combine(
+                AppContext.BaseDirectory,
+                "Framework", "Common", "Resources", "IpLocation", "ip2region_v4.xdb");
+            Searcher? newSearcher = null;
+            bool fileExists = File.Exists(xdbPath);
+            if (fileExists)
+            {
+                try { newSearcher = new Searcher(CachePolicy.Content, xdbPath); }
+                catch (Exception ex) { TM.App.Log($"[IpLocationHelper] 初始化失败: {ex.Message}"); DebugLogOnce(nameof(GetSearcher), ex); }
+            }
 
             lock (_initLock)
             {
-                if (_searcher != null)
-                    return _searcher;
-
-                if (_initAttempted)
-                    return null;
-
+                if (_initAttempted) return _searcher;
                 _initAttempted = true;
-
-                try
+                if (!fileExists) { TM.App.Log($"[IpLocationHelper] ip2region_v4.xdb 未找到: {xdbPath}"); return null; }
+                if (newSearcher != null)
                 {
-                    var xdbPath = StoragePathHelper.GetFilePath("Framework", "Common/IpLocation", "ip2region_v4.xdb");
-
-                    if (!File.Exists(xdbPath))
-                    {
-                        TM.App.Log($"[IpLocationHelper] ip2region_v4.xdb 未找到: {xdbPath}");
-                        return null;
-                    }
-
-                    _searcher = new Searcher(CachePolicy.Content, xdbPath);
+                    _searcher = newSearcher;
                     TM.App.Log("[IpLocationHelper] IP2Region 初始化成功");
-                    return _searcher;
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[IpLocationHelper] IP2Region 初始化失败: {ex.Message}");
-                    DebugLogOnce(nameof(GetSearcher), ex);
-                    return null;
-                }
+                return _searcher;
             }
         }
 
@@ -142,10 +131,10 @@ namespace TM.Framework.Common.Helpers.Utility
             if (ipAddress == "127.0.0.1" || ipAddress == "::1" || ipAddress == "0.0.0.0")
                 return true;
 
-            if (ipAddress.StartsWith("192.168.") || ipAddress.StartsWith("10."))
+            if (ipAddress.StartsWith("192.168.", StringComparison.Ordinal) || ipAddress.StartsWith("10.", StringComparison.Ordinal))
                 return true;
 
-            if (ipAddress.StartsWith("172."))
+            if (ipAddress.StartsWith("172.", StringComparison.Ordinal))
             {
                 var segments = ipAddress.Split('.');
                 if (segments.Length >= 2 && int.TryParse(segments[1], out var second))

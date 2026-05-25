@@ -1,7 +1,6 @@
 using System;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
-using TM.Framework.Common.Services;
 using TM.Framework.Common.Services.Factories;
 using TM.Framework.User.Account.Login;
 
@@ -28,17 +27,17 @@ namespace TM
             services.AddTransient<MainWindow>();
 
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GuideContextService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IWorkScopeService, 
-                Services.Modules.ProjectData.Implementations.WorkScopeService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IFocusContextService, 
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IGuideContextService>(sp =>
+                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.GuideContextService>());
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IFocusContextService,
                 Services.Modules.ProjectData.Implementations.FocusContextService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IChangeDetectionService, 
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IChangeDetectionService,
                 Services.Modules.ProjectData.Implementations.ChangeDetectionService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IPublishService, 
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IPublishService,
                 Services.Modules.ProjectData.Implementations.PublishService>();
             services.AddSingleton<Services.Modules.ProjectData.Interfaces.IPackageHistoryService,
                 Services.Modules.ProjectData.Implementations.PackageHistoryService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IModuleEnabledService, 
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IModuleEnabledService,
                 Services.Modules.ProjectData.Implementations.ModuleEnabledService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ValidationSummaryService>();
             services.AddSingleton<Services.Modules.ProjectData.Interfaces.IValidationSummaryService>(sp =>
@@ -48,15 +47,23 @@ namespace TM
             services.AddSingleton<Services.Framework.AI.Interfaces.Prompts.IPromptRepository>(sp =>
                 sp.GetRequiredService<Modules.AIAssistant.PromptTools.PromptManagement.Services.PromptService>());
             services.AddSingleton<Modules.AIAssistant.ModelIntegration.ModelManagement.Services.ModelService>();
+            services.AddSingleton<Services.Framework.AI.Core.ModelDisableCoordinator>();
+            services.AddSingleton<Modules.AIAssistant.ModelIntegration.Alert.Services.INotificationChannel,
+                Modules.AIAssistant.ModelIntegration.Alert.Services.Channels.EmailChannel>();
+            services.AddSingleton<Modules.AIAssistant.ModelIntegration.Alert.Services.AlertService>();
             services.AddSingleton<Modules.AIAssistant.PromptTools.VersionTesting.Services.VersionTestingService>();
 
             services.AddSingleton<Modules.Design.SmartParsing.BookAnalysis.Services.BookAnalysisService>();
             services.AddSingleton<Modules.Design.Templates.CreativeMaterials.Services.CreativeMaterialsService>();
+            services.AddSingleton<Modules.Design.Templates.OneClickGenerate.ShortStoryBlueprint.Services.ShortStoryBlueprintService>();
             services.AddSingleton<Modules.Design.GlobalSettings.WorldRules.Services.WorldRulesService>();
             services.AddSingleton<Modules.Design.Elements.CharacterRules.Services.CharacterRulesService>();
             services.AddSingleton<Modules.Design.Elements.FactionRules.Services.FactionRulesService>();
             services.AddSingleton<Modules.Design.Elements.LocationRules.Services.LocationRulesService>();
             services.AddSingleton<Modules.Design.Elements.PlotRules.Services.PlotRulesService>();
+            services.AddSingleton<Modules.Design.SmartParsing.ContentRefinery.Services.ContentRefineryService>();
+            services.AddSingleton<Modules.Design.SmartParsing.ContentRefinery.Services.RefineryHistoryService>();
+            services.AddSingleton<Modules.Design.SmartParsing.ContentRefinery.Services.RefineryWorkStateService>();
 
             services.AddSingleton<Modules.Validate.ValidationSummary.ValidationResult.ChapterRepairService>();
 
@@ -99,31 +106,86 @@ namespace TM
                 sp.GetRequiredService<Services.Framework.AI.Core.AIService>());
             services.AddSingleton<Services.Framework.AI.Interfaces.AI.IAILibraryService>(sp =>
                 sp.GetRequiredService<Services.Framework.AI.Core.AIService>());
+            services.AddSingleton<Services.Framework.AI.BuiltInConfigSyncService>();
+            services.AddSingleton<Services.Framework.AI.WritingConfig.WritingSettingsService>();
+            services.AddSingleton<Services.Framework.AI.WritingConfig.WritingApiRouter>();
             services.AddSingleton<Services.Framework.AI.Monitoring.StatisticsService>();
             services.AddSingleton<Services.Framework.AI.Interfaces.AI.IAIUsageStatisticsService>(sp =>
                 sp.GetRequiredService<Services.Framework.AI.Monitoring.StatisticsService>());
+            services.AddSingleton<Services.Framework.AI.RateLimiting.ApiRateLimiter>();
             services.AddSingleton<Services.Framework.AI.SemanticKernel.ChatPromptBridge>();
             services.AddSingleton<Services.Framework.AI.SemanticKernel.Plugins.AutoRewriteEngine>();
             services.AddSingleton<Services.Framework.AI.SemanticKernel.Plugins.LayeredPromptBuilder>();
+            services.AddTransient<Services.Framework.AI.SemanticKernel.Plugins.WriterPlugin>();
             services.AddSingleton<Services.Framework.AI.QueryRouting.QueryRouter>();
             services.AddSingleton<Services.Framework.AI.QueryRouting.QueryRoutingService>();
             services.AddSingleton<Services.Framework.AI.SemanticKernel.SessionManager>();
             services.AddSingleton<Services.Framework.AI.SemanticKernel.SKChatService>();
-            services.AddSingleton<Services.Framework.AI.SemanticKernel.VectorSearchService>();
             services.AddSingleton<Services.Framework.SystemIntegration.GlobalCleanupService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.CharacterStateService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ConflictProgressService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.DataIndexService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.FactSnapshotExtractor>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ForeshadowingStatusService>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.EntityOmissionDetector>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.EntityDriftFallbackPatcher>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GenerationGate>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.Generation.ContentPolisher>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GenerationStatisticsService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GuideManager>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ChapterSummaryStore>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ChapterMilestoneStore>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Guides.ChapterChangesWalStore>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Guides.ChapterKeyEventStore>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.VolumeFactArchiveStore>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.KeywordChapterIndexService>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.ContentChunkSearchService>();
+
+            services.AddSingleton<Services.Framework.AI.Embedding.BgeSmallZhEmbeddingService>(sp =>
+            {
+                var svc = new Services.Framework.AI.Embedding.BgeSmallZhEmbeddingService
+                {
+                    IdleMinutesProvider = () => Services.Modules.ProjectData.Implementations.LayeredContextConfig.EmbeddingIdleReleaseMinutes
+                };
+                return svc;
+            });
+            services.AddSingleton<Services.Framework.AI.Embedding.IMicroEmbeddingService>(sp =>
+                sp.GetRequiredService<Services.Framework.AI.Embedding.BgeSmallZhEmbeddingService>());
+
+            services.AddSingleton<Services.Framework.AI.Mlm.RobertaTinyMlmService>(sp =>
+            {
+                var svc = new Services.Framework.AI.Mlm.RobertaTinyMlmService
+                {
+                    IdleMinutesProvider = () => Services.Modules.ProjectData.Implementations.LayeredContextConfig.EmbeddingIdleReleaseMinutes
+                };
+                return svc;
+            });
+            services.AddSingleton<Services.Framework.AI.Mlm.IMicroMlmService>(sp =>
+                sp.GetRequiredService<Services.Framework.AI.Mlm.RobertaTinyMlmService>());
+
+            services.AddSingleton<Services.Framework.AI.SemanticGuard.ISemanticGuard>(sp =>
+                new Services.Framework.AI.SemanticGuard.SemanticGuard(
+                    sp.GetRequiredService<Services.Framework.AI.Embedding.IMicroEmbeddingService>()));
+
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Indexing.ChapterEmbeddingIndex>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Indexing.ChunkEmbeddingIndex>();
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IChunkEmbeddingIndex>(sp =>
+                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.Indexing.ChunkEmbeddingIndex>());
+
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Indexing.EntityFirstChapterIndex>(sp =>
+            {
+                var svc = new Services.Modules.ProjectData.Implementations.Indexing.EntityFirstChapterIndex(
+                    sp.GetRequiredService<Services.Framework.AI.Embedding.IMicroEmbeddingService>(),
+                    sp.GetRequiredService<Services.Modules.ProjectData.Interfaces.IChunkEmbeddingIndex>())
+                {
+                    ThresholdProvider = () => Services.Modules.ProjectData.Implementations.LayeredContextConfig.FirstDescriptionThreshold
+                };
+                return svc;
+            });
+            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IEntityFirstChapterIndex>(sp =>
+                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.Indexing.EntityFirstChapterIndex>());
+
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.Generation.EntityRebuildSubscription>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.LedgerConsistencyChecker>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.Tracking.Rules.LedgerRuleSetProvider>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.PlotPointsIndexService>();
@@ -131,6 +193,9 @@ namespace TM
             services.AddSingleton<Services.Modules.ProjectData.Implementations.FactionStateService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.TimelineService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ItemStateService>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.SecretRevealService>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.PledgeConstraintService>();
+            services.AddSingleton<Services.Modules.ProjectData.Implementations.DeadlineConstraintService>();
             services.AddSingleton<Services.Modules.VersionTracking.VersionTrackingService>();
 
             services.AddSingleton<Framework.Appearance.Animation.ThemeTransition.ThemeTransitionService>();
@@ -157,7 +222,7 @@ namespace TM
             services.AddSingleton<Framework.Appearance.Font.Services.OpenTypeFeaturesService>();
             services.AddSingleton<Framework.Appearance.Font.Services.ScenePresetService>();
             services.AddSingleton<Framework.Appearance.ThemeManagement.ThemeManager>();
-            services.AddSingleton<Framework.Common.Services.StandardFormOptionsService>();
+
             services.AddSingleton<Framework.Notifications.Sound.Services.AudioEqualizerService>();
             services.AddSingleton<Framework.Notifications.Sound.VolumeAndDevice.AudioDeviceManager>();
             services.AddSingleton<Framework.Notifications.Sound.VolumeAndDevice.SystemVolumeController>();
@@ -230,12 +295,12 @@ namespace TM
 
             services.AddTransient<Framework.UI.Workspace.Common.Controls.ProjectSpecPanelViewModel>();
             services.AddTransient<Framework.UI.Workspace.CenterPanel.ChapterEditor.PlanViewModel>();
-            services.AddTransient<Framework.UI.Workspace.CenterPanel.Controls.VersionHistoryPanelViewModel>();
             services.AddTransient<Framework.UI.Workspace.RightPanel.Controls.ReferenceDropdownViewModel>();
             services.AddTransient<Framework.UI.Windows.UnifiedWindowViewModel>();
-            services.AddTransient<Framework.UI.Workspace.Common.Controls.ProjectSelectorViewModel>();
 
             services.AddTransient<Framework.SystemSettings.DataCleanup.DataCleanupViewModel>();
+            services.AddSingleton<Framework.SystemSettings.DataBackup.Services.ProjectBackupService>();
+            services.AddTransient<Framework.SystemSettings.DataBackup.DataBackupViewModel>();
             services.AddTransient<Framework.SystemSettings.Info.SystemInfo.SystemInfoViewModel>();
             services.AddTransient<Framework.SystemSettings.Logging.LogFormat.LogFormatViewModel>();
             services.AddTransient<Framework.SystemSettings.Logging.LogLevel.LogLevelViewModel>();
@@ -264,12 +329,9 @@ namespace TM
 
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GeneratedContentService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ContextService>();
-            services.AddSingleton<Services.Modules.ProjectData.Implementations.ValidationReportService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.UnifiedValidationService>();
             services.AddSingleton<Services.Modules.ProjectData.Interfaces.IUnifiedValidationService>(sp =>
                 sp.GetRequiredService<Services.Modules.ProjectData.Implementations.UnifiedValidationService>());
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IValidationReportService>(sp =>
-                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.ValidationReportService>());
             services.AddSingleton<Services.Modules.ProjectData.Interfaces.IContextService>(sp =>
                 sp.GetRequiredService<Services.Modules.ProjectData.Implementations.ContextService>());
             services.AddSingleton<Services.Modules.ProjectData.Interfaces.IGeneratedContentService>(sp =>
@@ -278,13 +340,8 @@ namespace TM
             services.AddSingleton<Services.Modules.ProjectData.Implementations.LedgerTrimService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.ContentGenerationCallback>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.IndexService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IIndexService>(sp =>
-                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.IndexService>());
             services.AddSingleton<Services.Modules.ProjectData.Implementations.RelationStrengthService>();
-            services.AddSingleton<Services.Modules.ProjectData.Implementations.ProgressiveSummaryService>();
             services.AddSingleton<Services.Modules.ProjectData.Implementations.GlobalSummaryService>();
-            services.AddSingleton<Services.Modules.ProjectData.Interfaces.IGlobalSummaryService>(sp =>
-                sp.GetRequiredService<Services.Modules.ProjectData.Implementations.GlobalSummaryService>());
             services.AddSingleton<Modules.Generate.Content.Services.ContentConfigService>();
             services.AddSingleton<Modules.Design.SmartParsing.BookAnalysis.Services.NovelCrawlerService>();
             services.AddSingleton<Framework.UI.Workspace.Services.ChapterVersionService>();
@@ -298,9 +355,9 @@ namespace TM
 
             services.AddTransient<Modules.AIAssistant.ModelIntegration.ModelManagement.ModelManagementViewModel>();
             services.AddTransient<Modules.AIAssistant.ModelIntegration.UsageStatistics.UsageStatisticsViewModel>();
+            services.AddTransient<Modules.AIAssistant.ModelIntegration.Alert.AlertViewModel>();
             services.AddTransient<Modules.AIAssistant.PromptTools.PromptManagement.PromptManagementViewModel>();
             services.AddTransient<Modules.AIAssistant.PromptTools.VersionTesting.VersionTestingViewModel>();
-            services.AddTransient<Modules.AIAssistant.MemoryManagement.MemoryManagementViewModel>();
             services.AddTransient<Modules.Validate.ValidationSummary.ValidationResult.ValidationResultViewModel>();
             services.AddTransient<Modules.Generate.GlobalSettings.Outline.OutlineViewModel>();
             services.AddTransient<Modules.Generate.Elements.VolumeDesign.VolumeDesignViewModel>();
@@ -310,17 +367,19 @@ namespace TM
             services.AddTransient<Modules.Generate.Content.ContentViewModel>();
             services.AddTransient<Modules.Design.SmartParsing.BookAnalysis.BookAnalysisViewModel>();
             services.AddTransient<Modules.Design.Templates.CreativeMaterials.CreativeMaterialsViewModel>();
+            services.AddTransient<Modules.Design.Templates.OneClickGenerate.ShortStoryBlueprint.ShortStoryBlueprintViewModel>();
             services.AddTransient<Modules.Design.GlobalSettings.WorldRules.WorldRulesViewModel>();
             services.AddTransient<Modules.Design.Elements.CharacterRules.CharacterRulesViewModel>();
             services.AddTransient<Modules.Design.Elements.FactionRules.FactionRulesViewModel>();
             services.AddTransient<Modules.Design.Elements.LocationRules.LocationRulesViewModel>();
             services.AddTransient<Modules.Design.Elements.PlotRules.PlotRulesViewModel>();
+            services.AddTransient<Modules.Design.SmartParsing.ContentRefinery.ContentRefineryViewModel>();
 
             services.AddTransient<Modules.AIAssistant.ModelIntegration.ModelManagement.ModelManagementView>();
             services.AddTransient<Modules.AIAssistant.ModelIntegration.UsageStatistics.UsageStatisticsView>();
+            services.AddTransient<Modules.AIAssistant.ModelIntegration.Alert.AlertView>();
             services.AddTransient<Modules.AIAssistant.PromptTools.PromptManagement.PromptManagementView>();
             services.AddTransient<Modules.AIAssistant.PromptTools.VersionTesting.VersionTestingView>();
-            services.AddTransient<Modules.AIAssistant.MemoryManagement.MemoryManagementView>();
             services.AddTransient<Modules.Validate.ValidationSummary.ValidationResult.ValidationResultView>();
             services.AddTransient<Modules.Validate.ValidationIntro.WorldviewIntro.WorldviewIntroView>();
             services.AddTransient<Modules.Validate.ValidationIntro.CharacterIntro.CharacterIntroView>();
@@ -336,35 +395,40 @@ namespace TM
             services.AddTransient<Modules.Generate.Content.ContentView>();
             services.AddTransient<Modules.Design.SmartParsing.BookAnalysis.BookAnalysisView>();
             services.AddTransient<Modules.Design.Templates.CreativeMaterials.CreativeMaterialsView>();
+            services.AddTransient<Modules.Design.Templates.OneClickGenerate.ShortStoryBlueprint.ShortStoryBlueprintView>();
             services.AddTransient<Modules.Design.GlobalSettings.WorldRules.WorldRulesView>();
             services.AddTransient<Modules.Design.Elements.CharacterRules.CharacterRulesView>();
             services.AddTransient<Modules.Design.Elements.FactionRules.FactionRulesView>();
             services.AddTransient<Modules.Design.Elements.LocationRules.LocationRulesView>();
             services.AddTransient<Modules.Design.Elements.PlotRules.PlotRulesView>();
+            services.AddTransient<Modules.Design.SmartParsing.ContentRefinery.ContentRefineryView>();
 
             _serviceProvider = services.BuildServiceProvider();
             if (!ServiceLocator.IsInitialized)
                 ServiceLocator.Initialize(_serviceProvider);
+
+            _ = _serviceProvider.GetRequiredService<Services.Modules.ProjectData.Implementations.Generation.EntityRebuildSubscription>();
+            _ = _serviceProvider.GetRequiredService<Modules.AIAssistant.ModelIntegration.Alert.Services.AlertService>();
 
             return _serviceProvider;
         }
 
         public static async Task InitializeServicesAsync(IServiceProvider serviceProvider)
         {
-            serviceProvider.GetRequiredService<Framework.UI.Workspace.Services.ProjectManager>();
-
-            serviceProvider.GetRequiredService<Services.Modules.ProjectData.Implementations.GuideManager>().RecoverPendingFlush();
+            await serviceProvider.GetRequiredService<Framework.UI.Workspace.Services.ProjectManager>().InitializeAsync();
 
             serviceProvider.GetRequiredService<Framework.UI.Workspace.Services.CurrentChapterPersistenceService>();
 
+            var aiServiceInstance = serviceProvider.GetRequiredService<Services.Framework.AI.Core.AIService>();
+
             var initTasks = new[]
             {
-                Task.Run(() => serviceProvider.GetRequiredService<Services.Framework.AI.Core.AIService>()),
+                aiServiceInstance.InitializedAsync,
                 serviceProvider.GetRequiredService<Modules.AIAssistant.PromptTools.PromptManagement.Services.PromptService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.AIAssistant.ModelIntegration.ModelManagement.Services.ModelService>().InitializeAsync(),
-                serviceProvider.GetRequiredService<Services.Modules.ProjectData.Interfaces.IWorkScopeService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.Design.SmartParsing.BookAnalysis.Services.BookAnalysisService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.Design.Templates.CreativeMaterials.Services.CreativeMaterialsService>().InitializeAsync(),
+                serviceProvider.GetRequiredService<Modules.Design.Templates.OneClickGenerate.ShortStoryBlueprint.Services.ShortStoryBlueprintService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.Design.GlobalSettings.WorldRules.Services.WorldRulesService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.Design.Elements.CharacterRules.Services.CharacterRulesService>().InitializeAsync(),
                 serviceProvider.GetRequiredService<Modules.Design.Elements.FactionRules.Services.FactionRulesService>().InitializeAsync(),

@@ -1,17 +1,16 @@
 <ResourceDictionary xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
                     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
                     xmlns:tree="clr-namespace:TM.Framework.Common.Controls"
-                    xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI"
-                    xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+                    xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI">
 
     <Style x:Key="TreeComboBoxStyle" TargetType="ComboBox">
         <Setter Property="Padding" Value="12,8,36,8"/>
         <Setter Property="FontFamily" Value="{DynamicResource GlobalFontFamily}"/>
         <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Background" Value="{DynamicResource ContentBackground}"/>
+        <Setter Property="Background" Value="{DynamicResource ContentBackgroundGlass}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="HorizontalContentAlignment" Value="Left"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="helpers:ComboBoxHelper.AutoDetectTreeMode" Value="True"/>
@@ -19,6 +18,7 @@
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
                     <Grid>
+
                         <ToggleButton x:Name="toggleButton"
                                     Grid.Column="0"
                                     Grid.ColumnSpan="2"
@@ -41,6 +41,7 @@
                                                 <ColumnDefinition/>
                                                 <ColumnDefinition Width="36"/>
                                             </Grid.ColumnDefinitions>
+
                                             <Path x:Name="arrow"
                                                  Grid.Column="1"
                                                  Data="M 0 0 L 4 4 L 8 0 Z"
@@ -69,24 +70,25 @@
                                    VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
                                    Margin="{TemplateBinding Padding}"
                                    IsHitTestVisible="False">
-                            <emoji:TextBlock x:Name="displayIcon"
-                                            FontSize="14"
-                                            Margin="0,0,8,0"
-                                            VerticalAlignment="Center">
-                                <emoji:TextBlock.Style>
-                                    <Style TargetType="emoji:TextBlock">
-                                        <Setter Property="Text" Value="{Binding Path=(helpers:ComboBoxHelper.DisplayIcon), RelativeSource={RelativeSource TemplatedParent}}"/>
+
+                            <Image x:Name="displayIcon"
+                                   Width="16" Height="16"
+                                   Margin="0,0,8,0"
+                                   VerticalAlignment="Center">
+                                <Image.Style>
+                                    <Style TargetType="Image">
+                                        <Setter Property="Source" Value="{Binding Path=(helpers:ComboBoxHelper.DisplayIcon), RelativeSource={RelativeSource TemplatedParent}}"/>
                                         <Style.Triggers>
                                             <DataTrigger Binding="{Binding Path=(helpers:ComboBoxHelper.DisplayText), RelativeSource={RelativeSource TemplatedParent}}" Value="">
-                                                <Setter Property="Text" Value="🏠"/>
+                                                <Setter Property="Source" Value="{DynamicResource Icon.Home}"/>
                                             </DataTrigger>
                                             <DataTrigger Binding="{Binding Path=(helpers:ComboBoxHelper.DisplayText), RelativeSource={RelativeSource TemplatedParent}}" Value="{x:Null}">
-                                                <Setter Property="Text" Value="🏠"/>
+                                                <Setter Property="Source" Value="{DynamicResource Icon.Home}"/>
                                             </DataTrigger>
                                         </Style.Triggers>
                                     </Style>
-                                </emoji:TextBlock.Style>
-                            </emoji:TextBlock>
+                                </Image.Style>
+                            </Image>
 
                             <TextBlock x:Name="displayText"
                                       Foreground="{TemplateBinding Foreground}"
@@ -95,6 +97,7 @@
                                     <Style TargetType="TextBlock">
                                         <Setter Property="Text" Value="{Binding Path=(helpers:ComboBoxHelper.DisplayText), RelativeSource={RelativeSource TemplatedParent}}"/>
                                         <Style.Triggers>
+
                                             <DataTrigger Binding="{Binding Path=(helpers:ComboBoxHelper.DisplayText), RelativeSource={RelativeSource TemplatedParent}}" Value="">
                                                 <Setter Property="Text" Value="选择分类..."/>
                                                 <Setter Property="Foreground" Value="{DynamicResource TextTertiary}"/>
@@ -115,8 +118,8 @@
                               IsOpen="{TemplateBinding IsDropDownOpen}"
                               Focusable="False"
                               PopupAnimation="Slide">
-                            <Border Background="{DynamicResource ContentBackground}"
-                                   BorderBrush="{DynamicResource BorderBrush}"
+                            <Border Background="{DynamicResource DialogGlass}"
+                                   BorderBrush="{DynamicResource GlassBorderBrush}"
                                    BorderThickness="1"
                                    CornerRadius="8"
                                    MaxHeight="400"
@@ -129,12 +132,14 @@
                                                      BlurRadius="12"
                                                      Opacity="0.2"
                                                      Color="#000000"
-                                                     RenderingBias="Quality"/>
+                                                     RenderingBias="Performance"/>
                                 </Border.Effect>
+
                                 <tree:DataTreeView ItemsSource="{TemplateBinding ItemsSource}"
                                                   MaxLevel="{Binding (helpers:ComboBoxHelper.MaxLevel), RelativeSource={RelativeSource TemplatedParent}}"
                                                   ParentClickMode="Toggle"
                                                   Level1HorizontalAlignment="Left"
+                                                  SelectOnDoubleClickOnly="{Binding (helpers:ComboBoxHelper.SelectOnDoubleClickOnly), RelativeSource={RelativeSource TemplatedParent}}"
                                                   NodeDoubleClickCommand="{Binding (helpers:ComboBoxHelper.NodeDoubleClickCommand), RelativeSource={RelativeSource TemplatedParent}}"/>
                             </Border>
                         </Popup>

@@ -1,7 +1,6 @@
 using System;
 using SystemVisibility = System.Windows.Visibility;
 using System.Globalization;
-using System.Windows;
 using System.Windows.Data;
 
 namespace TM.Framework.Common.Converters.Visibility

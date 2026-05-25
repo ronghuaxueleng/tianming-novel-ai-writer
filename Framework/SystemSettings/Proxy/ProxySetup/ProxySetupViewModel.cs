@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,17 +6,16 @@ using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Proxy.Services;
 
 namespace TM.Framework.SystemSettings.Proxy.ProxySetup
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ProxySetupViewModel : INotifyPropertyChanged
     {
         private readonly string _settingsFile;
@@ -43,10 +42,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             ProxyType.SOCKS4
         };
 
-        public ObservableCollection<string> BypassList { get; } = new();
+        public RangeObservableCollection<string> BypassList { get; } = new();
 
-        public ObservableCollection<ProxyConfigHistory> History { get; } = new();
-        public ObservableCollection<ProxyConfigPreset> Presets { get; } = new();
+        public RangeObservableCollection<ProxyConfigHistory> History { get; } = new();
+        public RangeObservableCollection<ProxyConfigPreset> Presets { get; } = new();
         public ObservableCollection<ProxyRecommendation> Recommendations { get; } = new();
         public ProxyUsageStatistics Statistics { get; private set; } = new();
         public ProxyConfigComparison? CurrentComparison { get; private set; }
@@ -133,7 +132,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             _proxyTestService = proxyTestService;
             _settingsFile = StoragePathHelper.GetFilePath("Framework", "Network/Proxy/ProxySetup", "setup_settings.json");
 
-            SaveCommand = new RelayCommand(Save);
+            SaveCommand = new AsyncRelayCommand(SaveAsync);
             TestCommand = new RelayCommand(Test);
             AddBypassCommand = new RelayCommand(AddBypass);
             RemoveBypassCommand = new RelayCommand<string>(RemoveBypass);
@@ -147,32 +146,30 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             DeletePresetCommand = new RelayCommand<ProxyConfigPreset>(DeletePreset);
             CompareConfigsCommand = new RelayCommand(CompareConfigs);
             GenerateRecommendationCommand = new RelayCommand(GenerateRecommendation);
-            ExportReportCommand = new RelayCommand(ExportReport);
+            ExportReportCommand = new RelayCommand(() => ExportReport().SafeFireAndForget(ex => TM.App.Log($"[ProxySetupViewModel] {ex.Message}")));
 
             AsyncSettingsLoader.LoadOrDefer<ProxySetupSettings>(_settingsFile, s =>
             {
                 _settings = s;
-                History.Clear();
-                foreach (var item in _settings.History.OrderByDescending(h => h.Timestamp).Take(50))
-                    History.Add(item);
-                Presets.Clear();
-                foreach (var preset in _settings.Presets.OrderByDescending(p => p.IsFavorite).ThenByDescending(p => p.LastUsedTime))
-                    Presets.Add(preset);
+                History.ReplaceAll(_settings.History.OrderByDescending(h => h.Timestamp).Take(50).ToList());
+                Presets.ReplaceAll(_settings.Presets.OrderByDescending(p => p.IsFavorite).ThenByDescending(p => p.LastUsedTime).ToList());
                 Statistics = _settings.Statistics;
                 OnPropertyChanged(nameof(Statistics));
                 LoadConfig();
             }, "ProxySetup");
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
                 _settings.LastUpdated = DateTime.Now;
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.CnDefault);
-                var tmpPsv = _settingsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpPsv, json);
+                var tmpPsv = _settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpPsv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.CnDefault);
+                }
                 File.Move(tmpPsv, _settingsFile, overwrite: true);
             }
             catch (Exception ex)
@@ -197,26 +194,19 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
                 PACEnabled = config.PACEnabled;
                 PACScript = config.PACScript;
 
-                BypassList.Clear();
-                foreach (var item in config.BypassList)
-                {
-                    BypassList.Add(item);
-                }
-
-                if (!BypassList.Any())
-                {
-                    BypassList.Add("localhost");
-                    BypassList.Add("127.0.0.1");
-                    BypassList.Add("*.local");
-                }
+                var bypassItems = config.BypassList.Count > 0
+                    ? config.BypassList
+                    : new List<string> { "localhost", "127.0.0.1", "*.local" };
+                BypassList.ReplaceAll(bypassItems);
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("加载失败", $"加载配置失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 加载配置失败: {ex.Message}");
+                GlobalToast.Error("加载失败", $"加载配置失败：{ex.Message}");
             }
         }
 
-        private void Save()
+        private async System.Threading.Tasks.Task SaveAsync()
         {
             try
             {
@@ -274,8 +264,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
 
                 OnPropertyChanged(nameof(Statistics));
 
-                _proxyService.SaveConfig(config);
-                SaveSettings();
+                await _proxyService.SaveConfigAsync(config).ConfigureAwait(true);
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxySetupViewModel] {ex.Message}"));
 
                 if (config.Type == ProxyType.SOCKS4 || config.Type == ProxyType.SOCKS5)
                 {
@@ -290,7 +280,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("保存失败", $"保存配置失败: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存配置失败：{ex.Message}");
                 TM.App.Log($"[ProxySetup] 保存失败: {ex.Message}");
             }
         }
@@ -344,7 +334,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("测试失败", $"测试过程出错: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 测试失败: {ex.Message}");
+                GlobalToast.Error("测试失败", $"测试失败：{ex.Message}");
             }
         }
 
@@ -391,7 +382,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
 
         private void ViewHistory()
         {
-            if (!History.Any())
+            if (History.Count == 0)
             {
                 GlobalToast.Info("无历史记录", "暂无配置变更历史");
                 return;
@@ -421,11 +412,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
                         PACEnabled = config.PACEnabled;
                         PACScript = config.PACScript;
 
-                        BypassList.Clear();
-                        foreach (var item in config.BypassList)
-                        {
-                            BypassList.Add(item);
-                        }
+                        BypassList.ReplaceAll(config.BypassList);
 
                         GlobalToast.Success("恢复成功", "配置已恢复，请保存生效");
                         TM.App.Log($"[ProxySetup] 配置已恢复到: {history.Timestamp}");
@@ -434,7 +421,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("恢复失败", $"恢复配置失败: {ex.Message}");
+                GlobalToast.Error("恢复失败", $"恢复配置失败：{ex.Message}");
                 TM.App.Log($"[ProxySetup] 恢复配置失败: {ex.Message}");
             }
         }
@@ -481,14 +468,15 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
 
                 _settings.Presets.Add(preset);
                 Presets.Insert(0, preset);
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxySetupViewModel] {ex.Message}"));
 
                 GlobalToast.Success("保存成功", $"预设方案 '{name}' 已保存");
                 TM.App.Log($"[ProxySetup] 预设方案已保存: {name}");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("保存失败", $"保存预设失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 保存预设失败: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存预设失败：{ex.Message}");
             }
         }
 
@@ -509,22 +497,19 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
                 PACEnabled = config.PACEnabled;
                 PACScript = config.PACScript;
 
-                BypassList.Clear();
-                foreach (var item in config.BypassList)
-                {
-                    BypassList.Add(item);
-                }
+                BypassList.ReplaceAll(config.BypassList);
 
                 preset.LastUsedTime = DateTime.Now;
                 preset.UsageCount++;
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxySetupViewModel] {ex.Message}"));
 
                 GlobalToast.Success("应用成功", $"已应用预设方案 '{preset.Name}'");
                 TM.App.Log($"[ProxySetup] 应用预设: {preset.Name}");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("应用失败", $"应用预设失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 应用预设失败: {ex.Message}");
+                GlobalToast.Error("应用失败", $"应用预设失败：{ex.Message}");
             }
         }
 
@@ -536,7 +521,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             {
                 _settings.Presets.Remove(preset);
                 Presets.Remove(preset);
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxySetupViewModel] {ex.Message}"));
 
                 GlobalToast.Success("删除成功", "预设已删除");
             }
@@ -606,7 +591,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("对比失败", $"配置对比失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 配置对比失败: {ex.Message}");
+                GlobalToast.Error("对比失败", $"对比失败：{ex.Message}");
             }
         }
 
@@ -656,11 +642,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("生成失败", $"生成推荐失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 生成推荐失败: {ex.Message}");
+                GlobalToast.Error("生成失败", $"生成失败：{ex.Message}");
             }
         }
 
-        private async void ExportReport()
+        private async Task ExportReport()
         {
             try
             {
@@ -686,10 +673,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
                 {
                     var json = JsonSerializer.Serialize(report, JsonHelper.CnDefault);
                     var filePath = dialog.FileName;
-                    await Task.Run(() =>
+                    await Task.Run(async () =>
                     {
                         var tmp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(tmp, json);
+                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
                         File.Move(tmp, filePath, overwrite: true);
                     });
 
@@ -699,43 +686,9 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("导出失败", $"导出报告失败: {ex.Message}");
+                TM.App.Log($"[ProxySetup] 导出报告失败: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
-        }
-
-        private void CreateDefaultPresets()
-        {
-            _settings.Presets = new List<ProxyConfigPreset>
-            {
-                new ProxyConfigPreset
-                {
-                    Name = "家庭网络",
-                    Description = "适合家庭网络环境的默认配置",
-                    Icon = "🏠",
-                    Config = new ProxyConfig { Type = ProxyType.HTTP, Server = "127.0.0.1", Port = 8080 }
-                },
-                new ProxyConfigPreset
-                {
-                    Name = "办公室",
-                    Description = "适合办公环境的代理配置",
-                    Icon = "🏢",
-                    Config = new ProxyConfig { Type = ProxyType.HTTP, Server = "proxy.company.com", Port = 8080, RequiresAuth = true }
-                },
-                new ProxyConfigPreset
-                {
-                    Name = "公共WiFi",
-                    Description = "公共场所WiFi的安全配置",
-                    Icon = "📶",
-                    Config = new ProxyConfig { Type = ProxyType.SOCKS5, Server = "127.0.0.1", Port = 1080 }
-                }
-            };
-
-            foreach (var preset in _settings.Presets)
-            {
-                Presets.Add(preset);
-            }
-
-            SaveSettings();
         }
 
         private int CalculateHealthScore()
@@ -768,7 +721,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxySetup
                 issues.Add("平均延迟过高");
             }
 
-            if (!History.Any())
+            if (History.Count == 0)
             {
                 issues.Add("暂无配置变更历史");
             }

@@ -1,5 +1,3 @@
-using System;
-
 namespace TM.Framework.SystemSettings.Info.RuntimeEnv
 {
     public class RuntimeEnvSettings

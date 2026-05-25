@@ -1,4 +1,4 @@
-namespace TM.Framework.Notifications.Sound.SoundScheme
+﻿namespace TM.Framework.Notifications.Sound.SoundScheme
 {
     public class SoundEffectInfo
     {

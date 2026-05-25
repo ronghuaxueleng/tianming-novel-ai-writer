@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
@@ -28,13 +27,15 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (string.IsNullOrWhiteSpace(change.ItemId)) return;
 
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<ItemStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<ItemStateGuide>(volFile).ConfigureAwait(false);
 
             var systemId = FindExistingItemId(guide, change.ItemId, change.ItemName);
 
             if (systemId == null)
             {
-                systemId = ShortIdGenerator.New("I");
+                systemId = ShortIdGenerator.IsLikelyId(change.ItemId)
+                    ? change.ItemId
+                    : ShortIdGenerator.New("I");
                 var displayName = !string.IsNullOrWhiteSpace(change.ItemName) ? change.ItemName : change.ItemId;
                 if (!guide.Items.ContainsKey(systemId))
                 {
@@ -48,7 +49,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
-            var entry = guide.Items[systemId];
+            var entry = guide.Items[systemId!];
 
             if (!string.IsNullOrWhiteSpace(change.ItemName))
                 entry.Name = change.ItemName;
@@ -68,11 +69,20 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Holder = !string.IsNullOrWhiteSpace(change.ToHolder) ? change.ToHolder : entry.CurrentHolder,
                 Status = !string.IsNullOrWhiteSpace(change.NewStatus) ? change.NewStatus : entry.CurrentStatus,
                 Event = change.Event,
-                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance
+                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance,
+                CausedBy = change.CausedBy ?? string.Empty
             });
 
             _guideManager.MarkDirty(volFile);
-            TM.App.Log($"[ItemState] 已更新 {systemId} 在 {chapterId}: {change.FromHolder} → {change.ToHolder}, 状态={change.NewStatus}");
+            var fromText = string.IsNullOrWhiteSpace(change.FromHolder) ? "(未指定)" : change.FromHolder;
+            var toText = string.IsNullOrWhiteSpace(change.ToHolder) ? "(未指定)" : change.ToHolder;
+            var statusText = !string.IsNullOrWhiteSpace(change.NewStatus) ? change.NewStatus
+                            : !string.IsNullOrWhiteSpace(entry.CurrentStatus) ? entry.CurrentStatus
+                            : "(未知)";
+            var holderSegment = (fromText == "(未指定)" && toText == "(未指定)")
+                ? string.Empty
+                : $" 持有者 {fromText} → {toText},";
+            TM.App.Log($"[ItemState] 已更新 {systemId} 在 {chapterId}:{holderSegment} 状态={statusText}");
         }
 
         private static string? FindExistingItemId(ItemStateGuide guide, string aiItemId, string? aiItemName)
@@ -95,7 +105,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<ItemStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<ItemStateGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Items)
@@ -131,14 +141,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<Dictionary<string, ItemStateEntry>> GetAllItemStatesAsync()
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<ItemStateGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var merged = new Dictionary<string, ItemStateEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<ItemStateGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 foreach (var (id, entry) in guide.Items)
                     merged[id] = entry;
-            }
             return merged;
         }
     }

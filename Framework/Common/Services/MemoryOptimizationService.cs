@@ -15,13 +15,17 @@ namespace TM.Framework.Common.Services
 
         private const int GCIntervalMinutes = 5;
         private const int CacheCleanupIntervalMinutes = 10;
-        private const long MemoryThresholdMB = 300;
-        private const long CriticalMemoryThresholdMB = 600;
-        private const int IdleThresholdSeconds = 60;
+        private const long MemoryThresholdMB = 350;
+        private const long CriticalMemoryThresholdMB = 1024;
+        private const long GenerationMemoryCapMB = 2048;
+        private const int IdleThresholdSeconds = 120;
 
         private DateTime _lastUserActivity = DateTime.Now;
         private DateTime _startTime = DateTime.Now;
         private int _gcCount = 0;
+
+        private static int _activeGeneratingCount;
+        private static bool _isActivelyGenerating;
 
         private readonly List<Action> _cacheCleanupCallbacks = new();
 
@@ -33,8 +37,8 @@ namespace TM.Framework.Common.Services
 
                 _startTime = DateTime.Now;
 
-                _gcTimer = new Timer(OnGCTimerCallback, null, 
-                    TimeSpan.FromMinutes(GCIntervalMinutes), 
+                _gcTimer = new Timer(OnGCTimerCallback, null,
+                    TimeSpan.FromMinutes(GCIntervalMinutes),
                     TimeSpan.FromMinutes(GCIntervalMinutes));
 
                 _cacheCleanupTimer = new Timer(OnCacheCleanupCallback, null,
@@ -113,9 +117,60 @@ namespace TM.Framework.Common.Services
             _lastUserActivity = DateTime.Now;
         }
 
+        public static void SetGeneratingState(bool isGenerating)
+        {
+            if (isGenerating)
+            {
+                System.Threading.Interlocked.Increment(ref _activeGeneratingCount);
+            }
+            else
+            {
+                var remaining = System.Threading.Interlocked.Decrement(ref _activeGeneratingCount);
+                if (remaining < 0)
+                    System.Threading.Interlocked.Exchange(ref _activeGeneratingCount, 0);
+            }
+            var wasGenerating = _isActivelyGenerating;
+            _isActivelyGenerating = System.Threading.Volatile.Read(ref _activeGeneratingCount) > 0;
+
+            if (!wasGenerating && _isActivelyGenerating)
+            {
+                try
+                {
+                    if (GCSettings.LatencyMode != GCLatencyMode.SustainedLowLatency)
+                        GCSettings.LatencyMode = GCLatencyMode.SustainedLowLatency;
+                }
+                catch { }
+            }
+
+            if (wasGenerating && !_isActivelyGenerating)
+            {
+                try
+                {
+                    GCSettings.LatencyMode = GCLatencyMode.Interactive;
+                }
+                catch { }
+
+                _ = Task.Run(() =>
+                {
+                    try
+                    {
+                        var before = GC.GetTotalMemory(false) / 1024 / 1024;
+                        if (before > 500)
+                            System.Runtime.GCSettings.LargeObjectHeapCompactionMode = System.Runtime.GCLargeObjectHeapCompactionMode.CompactOnce;
+                        GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
+                        var after = GC.GetTotalMemory(false) / 1024 / 1024;
+                        var freed = before - after;
+                        if (freed >= 2)
+                            TM.App.Log($"[MemoryOptimization] 生成结束清理: {before}MB → {after}MB (释放 {freed}MB)");
+                    }
+                    catch { }
+                });
+            }
+        }
+
         public void OptimizeNow(bool aggressive = false)
         {
-            Task.Run(() =>
+            _ = Task.Run(() =>
             {
                 try
                 {
@@ -124,14 +179,14 @@ namespace TM.Framework.Common.Services
                     if (aggressive)
                     {
                         GCSettings.LargeObjectHeapCompactionMode = GCLargeObjectHeapCompactionMode.CompactOnce;
-                        GC.Collect(2, GCCollectionMode.Forced, blocking: true);
+                        GC.Collect(2, GCCollectionMode.Optimized, blocking: false);
                     }
                     else
                     {
                         GC.Collect(1, GCCollectionMode.Optimized, false);
                     }
 
-                    var after = GC.GetTotalMemory(true) / 1024 / 1024;
+                    var after = GC.GetTotalMemory(false) / 1024 / 1024;
                     var freed = before - after;
 
                     if (freed > 10)
@@ -153,9 +208,24 @@ namespace TM.Framework.Common.Services
                 var currentMemoryMB = GC.GetTotalMemory(false) / 1024 / 1024;
                 var idleSeconds = (DateTime.Now - _lastUserActivity).TotalSeconds;
 
+                if (_isActivelyGenerating)
+                {
+                    if (currentMemoryMB > GenerationMemoryCapMB)
+                    {
+                        TM.App.Log($"[MemoryOptimization] [!] 生成中内存 {currentMemoryMB}MB 超过安全上限 {GenerationMemoryCapMB}MB，轻量清理");
+                        _ = Task.Run(() =>
+                        {
+                            try { GC.Collect(0, GCCollectionMode.Optimized, blocking: false); }
+                            catch (Exception ex) { TM.App.Log($"[MemoryOptimization] Gen0 GC 失败: {ex.Message}"); }
+                        });
+                        _gcCount++;
+                    }
+                    return;
+                }
+
                 if (currentMemoryMB > CriticalMemoryThresholdMB)
                 {
-                    TM.App.Log($"[MemoryOptimization] ⚠️ 内存使用 {currentMemoryMB}MB 超过临界阈值，紧急清理");
+                    TM.App.Log($"[MemoryOptimization] [!] 内存使用 {currentMemoryMB}MB 超过临界阈值，紧急清理");
                     OptimizeNow(aggressive: true);
                     _gcCount++;
                     return;
@@ -206,7 +276,7 @@ namespace TM.Framework.Common.Services
         public int Gen1Collections { get; set; }
         public int Gen2Collections { get; set; }
 
-        public override string ToString() => 
+        public override string ToString() =>
             $"托管: {ManagedMemoryMB}MB, 工作集: {WorkingSetMB}MB, GC次数: G0={Gen0Collections}, G1={Gen1Collections}, G2={Gen2Collections}";
     }
 }

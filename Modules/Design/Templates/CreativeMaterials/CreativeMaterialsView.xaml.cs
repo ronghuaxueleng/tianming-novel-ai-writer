@@ -1,9 +1,10 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows.Controls;
 
 namespace TM.Modules.Design.Templates.CreativeMaterials
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class CreativeMaterialsView : UserControl
     {
         public CreativeMaterialsView(CreativeMaterialsViewModel viewModel)

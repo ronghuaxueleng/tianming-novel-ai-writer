@@ -1,10 +1,11 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.ComponentModel;
 
 namespace TM.Framework.Notifications.SystemNotifications.SystemIntegration
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SystemIntegrationViewModel : INotifyPropertyChanged
     {
         private readonly SystemIntegrationSettings _settings;

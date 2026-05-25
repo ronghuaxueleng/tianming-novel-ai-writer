@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -12,12 +13,17 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         #region 构造函数
 
-        public GenerationStatisticsService() 
+        public GenerationStatisticsService()
         {
-            LoadStatistics();
+            LoadStatisticsAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationStats] 初始化失败: {ex.Message}"));
             try
             {
-                StoragePathHelper.CurrentProjectChanged += (_, _) => LoadStatistics();
+                StoragePathHelper.CurrentProjectChanged += (_, _) =>
+                {
+                    Interlocked.Increment(ref _statisticsEpoch);
+                    ResetInMemoryStatistics();
+                    LoadStatisticsAsync().SafeFireAndForget(ex => TM.App.Log($"[GenerationStats] 项目切换重载失败: {ex.Message}"));
+                };
             }
             catch (Exception ex)
             {
@@ -33,6 +39,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private readonly List<GenerationRecord> _recentRecords = new();
         private readonly object _statisticsLock = new();
         private readonly object _recordsLock = new();
+        private readonly SemaphoreSlim _saveLock = new(1, 1);
+        private int _statisticsEpoch;
         private const int MaxRecentRecords = 100;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
@@ -229,53 +237,100 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private void LoadStatistics()
+        private async Task LoadStatisticsAsync()
         {
-            lock (_recordsLock)
-            {
-                _recentRecords.Clear();
-            }
+            var acquired = false;
+            var epoch = Volatile.Read(ref _statisticsEpoch);
             try
             {
+                await _saveLock.WaitAsync().ConfigureAwait(false);
+                acquired = true;
+
                 var path = GetStatisticsFilePath();
+                GenerationStatistics loaded;
                 if (File.Exists(path))
                 {
-                    var json = File.ReadAllText(path);
-                    var loaded = JsonSerializer.Deserialize<GenerationStatistics>(json, JsonOptions)
+                    var json = await File.ReadAllTextAsync(path).ConfigureAwait(false);
+                    loaded = JsonSerializer.Deserialize<GenerationStatistics>(json, JsonOptions)
                         ?? new GenerationStatistics();
-                    lock (_statisticsLock) { _statistics = loaded; }
-                    TM.App.Log($"[GenerationStats] 已加载统计数据: {GetStatisticsSummary()}");
                 }
                 else
                 {
-                    lock (_statisticsLock) { _statistics = new GenerationStatistics(); }
+                    loaded = new GenerationStatistics();
+                }
+
+                if (epoch == Volatile.Read(ref _statisticsEpoch))
+                {
+                    lock (_statisticsLock) { _statistics = loaded; }
+                    TM.App.Log($"[GenerationStats] 已加载统计数据: {GetStatisticsSummary()}");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationStats] 加载统计数据失败: {ex.Message}");
-                lock (_statisticsLock) { _statistics = new GenerationStatistics(); }
+                if (epoch == Volatile.Read(ref _statisticsEpoch))
+                    ResetInMemoryStatistics();
+            }
+            finally
+            {
+                if (acquired)
+                    _saveLock.Release();
+            }
+        }
+
+        private void ResetInMemoryStatistics()
+        {
+            lock (_statisticsLock)
+            {
+                _statistics = new GenerationStatistics();
+            }
+
+            lock (_recordsLock)
+            {
+                _recentRecords.Clear();
             }
         }
 
         private async Task SaveStatisticsAsync()
         {
+            var acquired = false;
             try
             {
+                await _saveLock.WaitAsync().ConfigureAwait(false);
+                acquired = true;
+
+                var epoch = Volatile.Read(ref _statisticsEpoch);
                 var path = GetStatisticsFilePath();
                 var dir = Path.GetDirectoryName(path);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
 
                 string json;
-                lock (_statisticsLock) { json = JsonSerializer.Serialize(_statistics, JsonOptions); }
-                var tmp = path + ".tmp";
-                await File.WriteAllTextAsync(tmp, json);
-                File.Move(tmp, path, overwrite: true);
+                lock (_statisticsLock)
+                {
+                    json = JsonSerializer.Serialize(_statistics, JsonOptions);
+                }
+
+                if (epoch != Volatile.Read(ref _statisticsEpoch))
+                    return;
+
+                var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmp))
+                {
+                    await using var writer = new StreamWriter(stream);
+                    await writer.WriteAsync(json).ConfigureAwait(false);
+                }
+                if (epoch == Volatile.Read(ref _statisticsEpoch))
+                    File.Move(tmp, path, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[GenerationStats] 保存统计数据失败: {ex.Message}");
+            }
+            finally
+            {
+                if (acquired)
+                    _saveLock.Release();
             }
         }
 

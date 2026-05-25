@@ -1,16 +1,11 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.Content;
 using TM.Modules.Generate.Content.Services;
 using TM.Modules.Generate.Content.Views;
@@ -19,32 +14,36 @@ using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.ChangeDetection;
 using TM.Services.Framework.SystemIntegration;
+using TM.Framework.Common.Constants;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.UI.Workspace.Services;
 
 namespace TM.Modules.Generate.Content
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ContentViewModel : INotifyPropertyChanged
     {
         private readonly IChangeDetectionService _changeDetectionService;
         private readonly IPublishService _publishService;
         private readonly IModuleEnabledService _moduleEnabledService;
         private readonly ContentConfigService _configService;
+        private readonly PanelCommunicationService _panelCommunicationService;
         private bool _isLoading;
         private string _statusSummary = string.Empty;
         private string _lastPublishTime = "从未打包";
         private int _changedCount;
 
-        public ContentViewModel(IChangeDetectionService changeDetectionService, IPublishService publishService, IModuleEnabledService moduleEnabledService, ContentConfigService configService)
+        public ContentViewModel(IChangeDetectionService changeDetectionService, IPublishService publishService, IModuleEnabledService moduleEnabledService, ContentConfigService configService, PanelCommunicationService panelCommunicationService)
         {
             _changeDetectionService = changeDetectionService;
             _publishService = publishService;
             _moduleEnabledService = moduleEnabledService;
             _configService = configService;
+            _panelCommunicationService = panelCommunicationService;
 
-            ModuleGroups = new ObservableCollection<ModuleGroupInfo>();
+            ModuleGroups = new RangeObservableCollection<ModuleGroupInfo>();
 
-            RefreshCommand = new AsyncRelayCommand(RefreshAllAsync);
             PublishCommand = new AsyncRelayCommand(PublishAsync);
             ClearPackageCommand = new AsyncRelayCommand(ClearPackageAsync);
             ShowHistoryCommand = new RelayCommand(_ => ShowHistory());
@@ -52,14 +51,13 @@ namespace TM.Modules.Generate.Content
             RefreshModuleCommand = new RelayCommand(RefreshSingleModule);
             ToggleModuleEnabledCommand = new AsyncRelayCommand(ToggleModuleEnabledAsync);
             GlobalCleanupCommand = new RelayCommand(_ => ExecuteGlobalCleanup());
-            BusinessCleanupCommand = new RelayCommand(_ => ExecuteBusinessCleanup());
 
             _ = InitializeAsync();
         }
 
-        public ObservableCollection<ModuleGroupInfo> ModuleGroups { get; }
+        public RangeObservableCollection<ModuleGroupInfo> ModuleGroups { get; }
 
-        public ObservableCollection<ModuleCardInfo> AllCards { get; } = new();
+        public RangeObservableCollection<ModuleCardInfo> AllCards { get; } = new RangeObservableCollection<ModuleCardInfo>();
 
         public bool IsLoading
         {
@@ -85,7 +83,6 @@ namespace TM.Modules.Generate.Content
             set { _changedCount = value; OnPropertyChanged(); }
         }
 
-        public ICommand RefreshCommand { get; }
         public ICommand PublishCommand { get; }
         public ICommand ClearPackageCommand { get; }
         public ICommand ShowHistoryCommand { get; }
@@ -93,7 +90,6 @@ namespace TM.Modules.Generate.Content
         public ICommand RefreshModuleCommand { get; }
         public ICommand ToggleModuleEnabledCommand { get; }
         public ICommand GlobalCleanupCommand { get; }
-        public ICommand BusinessCleanupCommand { get; }
 
         private async Task InitializeAsync()
         {
@@ -114,7 +110,7 @@ namespace TM.Modules.Generate.Content
 
                 UpdateStatusSummary();
 
-                var manifest = _publishService.GetManifest();
+                var manifest = await _publishService.GetManifestAsync().ConfigureAwait(true);
                 if (manifest != null)
                 {
                     LastPublishTime = manifest.PublishTime.ToString("yyyy-MM-dd HH:mm");
@@ -123,7 +119,7 @@ namespace TM.Modules.Generate.Content
             catch (Exception ex)
             {
                 TM.App.Log($"[ContentViewModel] 刷新失败: {ex.Message}");
-                GlobalToast.Error("刷新失败", ex.Message);
+                GlobalToast.Error("刷新失败", $"刷新失败：{ex.Message}");
             }
             finally
             {
@@ -131,76 +127,91 @@ namespace TM.Modules.Generate.Content
             }
         }
 
-        private static readonly (string ModuleType, string SubModule, string DisplayName, string GroupName, string GroupIcon)[] PackageModuleAllowlist =
+        private static readonly Dictionary<string, (string GroupName, string GroupIcon)> _moduleGroupMeta = new()
         {
-            ("Design", "GlobalSettings", "全局设定", "设计模块", "📋"),
-            ("Design", "Elements", "设计元素", "设计模块", "📋"),
-            ("Generate", "GlobalSettings", "全书设定", "生成模块", "📋"),
-            ("Generate", "Elements", "创作元素", "生成模块", "📋")
+            ["Design"] = ("设计模块", ""),
+            ["Generate"] = ("生成模块", "")
         };
 
         private void BuildModuleGroups()
         {
-            ModuleGroups.Clear();
-
             var groups = new Dictionary<string, ModuleGroupInfo>();
 
-            foreach (var (moduleType, subModule, displayName, groupName, groupIcon) in PackageModuleAllowlist)
+            foreach (var (moduleType, allowedNames) in PackagingAllowlist.SubModules)
             {
-                if (moduleType == "Generate" && subModule == "Content")
-                    continue;
+                if (!_moduleGroupMeta.TryGetValue(moduleType, out var meta)) continue;
 
-                if (!groups.TryGetValue(moduleType, out var group))
+                var subModules = NavigationConfigParser.GetSubModules(moduleType)
+                    .Where(sm => allowedNames.Contains(sm.DisplayName))
+                    .ToList();
+
+                foreach (var (subModule, displayName) in subModules)
                 {
-                    group = new ModuleGroupInfo
+                    if (moduleType == "Generate" && subModule == "Content")
+                        continue;
+
+                    if (!groups.TryGetValue(moduleType, out var group))
                     {
+                        group = new ModuleGroupInfo
+                        {
+                            ModuleType = moduleType,
+                            DisplayName = meta.GroupName,
+                            Icon = meta.GroupIcon
+                        };
+                        groups[moduleType] = group;
+                    }
+
+                    var modulePath = $"{moduleType}/{subModule}";
+                    var status = _changeDetectionService.GetStatus(modulePath);
+
+                    var isEnabled = _configService.IsModuleEnabled(modulePath);
+
+                    var card = new ModuleCardInfo
+                    {
+                        ModulePath = modulePath,
                         ModuleType = moduleType,
-                        DisplayName = groupName,
-                        Icon = groupIcon
+                        SubModuleName = subModule,
+                        DisplayName = displayName,
+                        Icon = GetModuleIcon(moduleType, subModule),
+                        IsEnabled = isEnabled,
+                        HasChanges = status.Status == ChangeStatusType.Changed || status.Status == ChangeStatusType.Never,
+                        ItemCountText = $"{status.ItemCount}项"
                     };
-                    groups[moduleType] = group;
+
+                    _changeDetectionService.MarkModuleEnabled(modulePath, isEnabled);
+
+                    card.PropertyChanged += OnCardPropertyChanged;
+
+                    group.Cards.Add(card);
                 }
-
-                var modulePath = $"{moduleType}/{subModule}";
-                var status = _changeDetectionService.GetStatus(modulePath);
-
-                var isEnabled = _configService.IsModuleEnabled(modulePath);
-
-                var card = new ModuleCardInfo
-                {
-                    ModulePath = modulePath,
-                    ModuleType = moduleType,
-                    SubModuleName = subModule,
-                    DisplayName = displayName,
-                    Icon = GetModuleIcon(moduleType, subModule),
-                    IsEnabled = isEnabled,
-                    HasChanges = status.Status == ChangeStatusType.Changed || status.Status == ChangeStatusType.Never,
-                    ItemCountText = $"{status.ItemCount}项"
-                };
-
-                _changeDetectionService.MarkModuleEnabled(modulePath, isEnabled);
-
-                card.PropertyChanged += OnCardPropertyChanged;
-
-                group.Cards.Add(card);
             }
 
+            var newGroups = new List<ModuleGroupInfo>();
             foreach (var group in groups.Values)
             {
                 if (group.Cards.Count > 0)
                 {
-                    ModuleGroups.Add(group);
+                    newGroups.Add(group);
                 }
             }
 
-            AllCards.Clear();
-            foreach (var group in ModuleGroups)
+            ReplaceCollection(ModuleGroups, newGroups);
+
+            var allCards = new List<ModuleCardInfo>();
+            foreach (var group in newGroups)
             {
                 foreach (var card in group.Cards)
                 {
-                    AllCards.Add(card);
+                    allCards.Add(card);
                 }
             }
+
+            ReplaceCollection(AllCards, allCards);
+        }
+
+        private static void ReplaceCollection<T>(RangeObservableCollection<T> target, IEnumerable<T> items)
+        {
+            target.ReplaceAll(items is IList<T> list ? list : items.ToList());
         }
 
         private string GetModuleIcon(string moduleType, string subModule)
@@ -208,9 +219,9 @@ namespace TM.Modules.Generate.Content
             var functions = NavigationConfigParser.GetFunctionsBySubModule(moduleType, subModule);
             if (functions.Count > 0)
             {
-                return functions[0].Icon ?? "📁";
+                return functions[0].Icon ?? "";
             }
-            return "📁";
+            return "";
         }
 
         private void OnCardPropertyChanged(object? sender, PropertyChangedEventArgs e)
@@ -272,16 +283,14 @@ namespace TM.Modules.Generate.Content
                 }
                 else
                 {
-                    var errorText = !string.IsNullOrWhiteSpace(result.ErrorDetail)
-                        ? result.ErrorDetail
-                        : (result.Message ?? "未知错误");
-                    GlobalToast.Error("打包失败", errorText);
+                    TM.App.Log($"[ContentViewModel] 打包失败: {result.ErrorDetail ?? result.Message}");
+                    GlobalToast.Error("打包失败", $"打包失败：{result.ErrorDetail ?? result.Message ?? "未知原因"}");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ContentViewModel] 打包失败: {ex.Message}");
-                GlobalToast.Error("打包失败", ex.Message);
+                GlobalToast.Error("打包失败", $"打包失败：{ex.Message}");
             }
             finally
             {
@@ -315,7 +324,7 @@ namespace TM.Modules.Generate.Content
             catch (Exception ex)
             {
                 TM.App.Log($"[ContentViewModel] 清除打包失败: {ex.Message}");
-                GlobalToast.Error("清除失败", ex.Message);
+                GlobalToast.Error("清除失败", $"清除失败：{ex.Message}");
             }
             finally
             {
@@ -344,54 +353,13 @@ namespace TM.Modules.Generate.Content
                 }
                 else
                 {
-                    GlobalToast.Warning("清理失败", "清理过程中遇到问题，请查看日志");
+                    GlobalToast.Warning("清理失败", "清理未完全成功，请稍后重试");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ContentViewModel] 全局清理异常: {ex.Message}");
-                GlobalToast.Error("清理失败", ex.Message);
-            }
-        }
-
-        private void ExecuteBusinessCleanup()
-        {
-            if (!StandardDialog.ShowConfirm(
-                "业务清理将清除【设计】和【创作】模块所有已生成的数据，包括：\n\n" +
-                "• 设计：智能拆书、创作模板、世界观规则、角色/势力/地点/剧情规则\n" +
-                "• 创作：大纲设计、分卷设计、章节设计、蓝图设计\n\n" +
-                "此操作不可恢复，确定要执行吗？",
-                "业务清理确认"))
-            {
-                return;
-            }
-
-            try
-            {
-                TM.App.Log("[ContentViewModel] 执行业务清理");
-
-                var (success, clearedCount, details) = BusinessCleanupService.Execute();
-
-                if (success)
-                {
-                    GlobalToast.Success("业务清理完成",
-                        clearedCount > 0
-                            ? $"已即时清空 {clearedCount} 条业务数据"
-                            : "当前无可清理业务数据");
-
-                    ServiceLocator.Get<PanelCommunicationService>().PublishBusinessDataCleared();
-
-                    _ = RefreshAllAsync();
-                }
-                else
-                {
-                    GlobalToast.Warning("清理失败", "清理过程中遇到问题，请查看日志");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ContentViewModel] 业务清理异常: {ex.Message}");
-                GlobalToast.Error("清理失败", ex.Message);
+                GlobalToast.Error("清理失败", $"清理失败：{ex.Message}");
             }
         }
 
@@ -406,11 +374,34 @@ namespace TM.Modules.Generate.Content
 
         private void NavigateToModule(object? parameter)
         {
-            if (parameter is string modulePath)
+            if (parameter is not string modulePath) return;
+
+            var parts = modulePath.Split('/');
+            if (parts.Length < 2) return;
+
+            var moduleType = parts[0];
+            var subModule = parts[1];
+
+            var moduleNav = NavigationDefinitions.GetModuleByName(moduleType);
+            if (moduleNav == null)
             {
-                TM.App.Log($"[ContentViewModel] 导航到模块: {modulePath}");
-                NavigationRequested?.Invoke(this, modulePath);
+                TM.App.Log($"[ContentViewModel] 导航失败：找不到模块 {moduleType}");
+                return;
             }
+
+            var subModuleDisplayName = NavigationConfigParser.GetSubModuleDisplayName(subModule);
+            var subModuleNav = moduleNav.SubModules
+                .FirstOrDefault(s => string.Equals(s.Name, subModuleDisplayName, StringComparison.Ordinal));
+            var viewType = subModuleNav?.Functions.FirstOrDefault()?.ViewType;
+
+            if (viewType == null)
+            {
+                TM.App.Log($"[ContentViewModel] 导航失败：找不到 {modulePath} 对应的视图类型");
+                return;
+            }
+
+            TM.App.Log($"[ContentViewModel] 导航到模块: {modulePath} -> {viewType.Name}");
+            _panelCommunicationService.PublishFunctionNavigationRequested(moduleType, subModule, viewType);
         }
 
         private void RefreshSingleModule(object? parameter)
@@ -436,8 +427,8 @@ namespace TM.Modules.Generate.Content
                     IsLoading = true;
 
                     var updatedCount = await _moduleEnabledService.SetModuleEnabledAsync(
-                        card.ModuleType, 
-                        card.SubModuleName, 
+                        card.ModuleType,
+                        card.SubModuleName,
                         newEnabled);
 
                     card.IsEnabled = newEnabled;
@@ -452,7 +443,7 @@ namespace TM.Modules.Generate.Content
                 catch (Exception ex)
                 {
                     TM.App.Log($"[ContentViewModel] 切换启用状态失败: {ex.Message}");
-                    GlobalToast.Error("操作失败", ex.Message);
+                    GlobalToast.Error("操作失败", $"操作失败：{ex.Message}");
                 }
                 finally
                 {
@@ -460,8 +451,6 @@ namespace TM.Modules.Generate.Content
                 }
             }
         }
-
-        public event EventHandler<string>? NavigationRequested;
 
         public event PropertyChangedEventHandler? PropertyChanged;
 

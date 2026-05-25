@@ -82,7 +82,9 @@ namespace TM.Framework.User.Services
         public const string SUBSCRIPTION_EXPIRED = "SUBSCRIPTION_EXPIRED";
 
         public const string NETWORK_ERROR = "NETWORK_ERROR";
+        public const string NETWORK_TIMEOUT = "NETWORK_TIMEOUT";
         public const string SERVER_ERROR = "SERVER_ERROR";
+        public const string SERVER_UNAVAILABLE = "SERVER_UNAVAILABLE";
         public const string INVALID_REQUEST = "INVALID_REQUEST";
     }
 
@@ -122,6 +124,8 @@ namespace TM.Framework.User.Services
         public string? Email { get; set; }
         [JsonPropertyName("cardKey")]
         public string CardKey { get; set; } = string.Empty;
+        [JsonPropertyName("inviteCode")]
+        public string? InviteCode { get; set; }
     }
 
     public class RegisterResult
@@ -138,6 +142,8 @@ namespace TM.Framework.User.Services
         public string SessionKey { get; set; } = string.Empty;
         [JsonPropertyName("expiresAt")]
         public DateTime ExpiresAt { get; set; }
+        [JsonPropertyName("inviteCode")]
+        public string? InviteCode { get; set; }
     }
 
     public class RefreshTokenRequest
@@ -210,6 +216,12 @@ namespace TM.Framework.User.Services
         public DateTime? Birthday { get; set; }
         [JsonPropertyName("gender")]
         public string? Gender { get; set; }
+        [JsonPropertyName("inviteCode")]
+        public string? InviteCode { get; set; }
+        [JsonPropertyName("inviteCount")]
+        public int InviteCount { get; set; }
+        [JsonPropertyName("inviteRewardDays")]
+        public int InviteRewardDays { get; set; }
     }
 
     #endregion
@@ -404,6 +416,38 @@ namespace TM.Framework.User.Services
     {
         [JsonPropertyName("records")]
         public List<ActivationHistoryItem> Records { get; set; } = new();
+    }
+
+    #endregion
+
+    #region 天命模型配置
+
+    public class BuiltInConfigsResponse
+    {
+        [JsonPropertyName("categoryId")]
+        public string CategoryId { get; set; } = "tm-premium";
+        [JsonPropertyName("categoryName")]
+        public string CategoryName { get; set; } = "天命模型";
+        [JsonPropertyName("providers")]
+        public List<BuiltInProviderItem> Providers { get; set; } = new();
+        [JsonPropertyName("paidPasswordRequired")]
+        public bool PaidPasswordRequired { get; set; }
+        [JsonPropertyName("publicPasswordRequired")]
+        public bool PublicPasswordRequired { get; set; }
+    }
+
+    public class BuiltInProviderItem
+    {
+        [JsonPropertyName("providerId")]
+        public string ProviderId { get; set; } = string.Empty;
+        [JsonPropertyName("displayName")]
+        public string DisplayName { get; set; } = string.Empty;
+        [JsonPropertyName("endpoint")]
+        public string Endpoint { get; set; } = string.Empty;
+        [JsonPropertyName("apiKey")]
+        public string ApiKey { get; set; } = string.Empty;
+        [JsonPropertyName("category")]
+        public string Category { get; set; } = "paid";
     }
 
     #endregion

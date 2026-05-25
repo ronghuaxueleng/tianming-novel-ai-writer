@@ -1,11 +1,9 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -18,7 +16,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static readonly string[] _escalationKeywords =
         {
             "首次", "第一次", "突破", "觉醒", "死亡", "牺牲", "背叛", "结盟",
-            "失忆", "失去", "变心", "决裂", "和解", "永久", "不可逆"
+            "失忆", "失去", "变心", "决裂", "和解", "永久", "不可逆",
+            "升级", "破境", "化神", "晋升", "晋级", "反目", "绝交", "重逢",
+            "拜师", "出师", "入门", "逐出", "认主", "解封", "归隐"
         };
 
         #region 构造函数
@@ -42,7 +42,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             foreach (var vol in volNumbers.Where(v => v <= targetVol).OrderByDescending(v => v))
             {
                 var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+                    GuideManager.GetVolumeFileName(BaseFileName, vol)).ConfigureAwait(false);
                 if (!guide.Characters.TryGetValue(characterId, out var entry) || entry.StateHistory.Count == 0)
                     continue;
                 var state = BinarySearchState(entry.StateHistory, chapterId);
@@ -83,19 +83,18 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task UpdateCharacterStateAsync(string chapterId, CharacterStateChange change)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(volFile).ConfigureAwait(false);
 
-            if (!guide.Characters.ContainsKey(change.CharacterId))
+            if (!guide.Characters.TryGetValue(change.CharacterId, out var characterEntry))
             {
-                var displayName = await TryResolveCharacterDisplayNameAsync(change.CharacterId) ?? change.CharacterId;
-                guide.Characters[change.CharacterId] = new CharacterStateEntry
+                var displayName = await TryResolveCharacterDisplayNameAsync(change.CharacterId).ConfigureAwait(false) ?? change.CharacterId;
+                characterEntry = new CharacterStateEntry
                 {
                     Name = displayName
                 };
+                guide.Characters[change.CharacterId] = characterEntry;
                 TM.App.Log($"[CharacterState] 自动注册新角色: {change.CharacterId} (Name={displayName})");
             }
-
-            var characterEntry = guide.Characters[change.CharacterId];
 
             var lastState = characterEntry.StateHistory.LastOrDefault();
             var newState = new CharacterState
@@ -107,7 +106,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Relationships = MergeRelationships(lastState?.Relationships, change.RelationshipChanges),
                 MentalState = !string.IsNullOrWhiteSpace(change.NewMentalState) ? change.NewMentalState : (lastState?.MentalState ?? ""),
                 KeyEvent = change.KeyEvent,
-                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance
+                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance,
+                CausedBy = change.CausedBy ?? string.Empty
             };
 
             if (string.Equals(newState.Importance, "normal", StringComparison.OrdinalIgnoreCase)
@@ -135,7 +135,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Characters)
@@ -167,7 +167,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var (vol, _) = ParseChapterId(chapterId);
             try
             {
-                var totalVols = ServiceLocator.Get<TM.Modules.Generate.Elements.VolumeDesign.Services.VolumeDesignService>().GetAllVolumeDesigns().Count;
+                var totalVols = ServiceLocator.Get<TM.Modules.Generate.Elements.VolumeDesign.Services.VolumeDesignService>()
+                    .GetAllVolumeDesigns()
+                    .Count();
                 if (totalVols <= 0) totalVols = 4;
                 var ratio = (float)vol / totalVols;
                 if (ratio <= 0.25f) return "起";
@@ -211,8 +213,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             Dictionary<string, RelationshipState>? existing,
             Dictionary<string, RelationshipChange>? changes)
         {
-            var result = existing != null 
-                ? new Dictionary<string, RelationshipState>(existing) 
+            var result = existing != null
+                ? new Dictionary<string, RelationshipState>(existing)
                 : new Dictionary<string, RelationshipState>();
 
             if (changes != null)
@@ -221,15 +223,19 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 {
                     if (result.ContainsKey(targetId))
                     {
-                        result[targetId].Relation = change.Relation;
+                        if (!string.IsNullOrWhiteSpace(change.Relation))
+                            result[targetId].Relation = change.Relation;
                         result[targetId].Trust += change.TrustDelta;
+                        if (!string.IsNullOrWhiteSpace(change.EmotionPhase))
+                            result[targetId].EmotionPhase = change.EmotionPhase;
                     }
                     else
                     {
                         result[targetId] = new RelationshipState
                         {
                             Relation = change.Relation,
-                            Trust = change.TrustDelta
+                            Trust = change.TrustDelta,
+                            EmotionPhase = change.EmotionPhase
                         };
                     }
                 }
@@ -246,7 +252,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
                 if (!File.Exists(elementsPath)) return null;
 
-                var json = await File.ReadAllTextAsync(elementsPath);
+                var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return null;
@@ -263,7 +269,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { TM.App.Log($"[CharacterState] 读取角色名失败: {ex.Message}"); }
             return null;
         }
     }

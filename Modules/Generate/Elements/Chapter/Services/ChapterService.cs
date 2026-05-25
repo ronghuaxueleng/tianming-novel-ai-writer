@@ -1,29 +1,58 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.ChapterPlanning;
-using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
 
 namespace TM.Modules.Generate.Elements.Chapter.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class ChapterService : ModuleServiceBase<ChapterCategory, ChapterData>
     {
         private readonly VolumeDesignService _volumeDesignService;
 
         public event EventHandler<EventArgs>? DataChanged;
 
+        private int _dataChangePending;
+
         private void RaiseDataChanged()
         {
-            try
+            if (System.Threading.Interlocked.Exchange(ref _dataChangePending, 1) == 1) return;
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null)
             {
-                DataChanged?.Invoke(this, EventArgs.Empty);
+                dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+                {
+                    try
+                    {
+                        DataChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[ChapterService] RaiseDataChanged 异常: {ex.Message}");
+                    }
+                    finally
+                    {
+                        System.Threading.Interlocked.Exchange(ref _dataChangePending, 0);
+                    }
+                }));
             }
-            catch (Exception ex)
+            else
             {
-                TM.App.Log($"[ChapterService] RaiseDataChanged 异常: {ex.Message}");
+                try
+                {
+                    DataChanged?.Invoke(this, EventArgs.Empty);
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[ChapterService] RaiseDataChanged 异常: {ex.Message}");
+                }
+                finally
+                {
+                    System.Threading.Interlocked.Exchange(ref _dataChangePending, 0);
+                }
             }
         }
 
@@ -38,12 +67,17 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
             _volumeDesignService.CategoryDeleted += OnVolumeCategoryDeleted;
         }
 
+        protected override string? GetEntityTypeKeyForPropagation() => "chapter";
+
         private void OnVolumeCategoryDeleted(object? sender, CategoryDeletedEventArgs e)
         {
             try
             {
                 var categoryName = e.CategoryName;
-                var dataToDelete = DataItems.Where(d => d.Category == categoryName).ToList();
+                var categoryId = e.CategoryId;
+                var dataToDelete = DataItems.Where(d =>
+                    (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName)).ToList();
 
                 if (dataToDelete.Count > 0)
                 {
@@ -64,6 +98,16 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
 
         public new List<ChapterCategory> GetAllCategories()
         {
+            var subscribed = GetSubscribedCategories();
+            var rewrite = GetRewriteCategories();
+            return subscribed
+                .Concat(rewrite.Where(r => !subscribed.Any(s => string.Equals(s.Name, r.Name, StringComparison.Ordinal))))
+                .OrderBy(c => c.Order)
+                .ToList();
+        }
+
+        public List<ChapterCategory> GetSubscribedCategories()
+        {
             _volumeDesignService.EnsureInitialized();
             return _volumeDesignService.GetAllVolumeDesigns()
                 .OrderBy(v => v.VolumeNumber)
@@ -71,11 +115,47 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
                 {
                     Id = v.Id,
                     Name = v.VolumeNumber > 0 ? $"第{v.VolumeNumber}卷 {v.VolumeTitle}".Trim() : v.Name,
-                    Icon = "📚",
+                    Icon = "Icon.Books",
                     Order = v.VolumeNumber,
-                    IsBuiltIn = false,
+                    IsBuiltIn = true,
                     IsEnabled = v.IsEnabled
                 }).ToList();
+        }
+
+        public List<ChapterCategory> GetRewriteCategories()
+        {
+            return Categories
+                .Where(c => !c.IsBuiltIn)
+                .OrderBy(c => c.Order)
+                .ToList();
+        }
+
+        public async System.Threading.Tasks.Task<bool> AddRewriteCategoryAsync(ChapterCategory category)
+        {
+            if (category == null) return false;
+
+            if (string.IsNullOrWhiteSpace(category.Id))
+                category.Id = ShortIdGenerator.New("C");
+
+            category.IsBuiltIn = false;
+
+            var subscribed = GetSubscribedCategories();
+            if (subscribed.Any(c => string.Equals(c.Name, category.Name, StringComparison.Ordinal)))
+            {
+                TM.App.Log($"[ChapterService] 仿写分类名称与订阅分卷冲突，禁止添加: {category.Name}");
+                return false;
+            }
+
+            var added = await base.AddCategoryAsync(category);
+            if (added)
+                RaiseDataChanged();
+            return added;
+        }
+
+        public async System.Threading.Tasks.Task DeleteRewriteCategoryAsync(string categoryName)
+        {
+            await base.DeleteCategoryAsync(categoryName);
+            RaiseDataChanged();
         }
 
         public override int SetCategoriesEnabled(IEnumerable<string> categoryNames, bool enabled)
@@ -152,17 +232,17 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
             try
             {
                 await _volumeDesignService.InitializeAsync();
-                var volumeCategories = GetAllCategories();
+                var allCategories = GetAllCategories();
 
                 Categories.Clear();
-                Categories.AddRange(volumeCategories);
+                Categories.AddRange(allCategories);
 
                 bool updated = false;
                 foreach (var data in DataItems)
                 {
                     if (!string.IsNullOrWhiteSpace(data.Category) && string.IsNullOrWhiteSpace(data.CategoryId))
                     {
-                        var matchedCategory = Categories.FirstOrDefault(c =>
+                        var matchedCategory = allCategories.FirstOrDefault(c =>
                             string.Equals(c.Name, data.Category, StringComparison.Ordinal));
                         if (matchedCategory != null && !string.IsNullOrWhiteSpace(matchedCategory.Id))
                         {
@@ -197,7 +277,8 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
             try
             {
                 _volumeDesignService.EnsureInitialized();
-                var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns();
+                var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns()
+                    .ToList();
 
                 var matchedVolume = volumeDesigns.FirstOrDefault(v =>
                 {
@@ -209,7 +290,8 @@ namespace TM.Modules.Generate.Elements.Chapter.Services
                 if (matchedVolume != null && !string.IsNullOrWhiteSpace(matchedVolume.Id))
                 {
                     data.CategoryId = matchedVolume.Id;
-                    TM.App.Log($"[ChapterService] 主动补全CategoryId: {data.Name} -> {matchedVolume.Id}");
+                    if (TM.App.IsDebugMode)
+                        TM.App.Log($"[ChapterService] 主动补全CategoryId: {data.Name} -> {matchedVolume.Id}");
                 }
             }
             catch (Exception ex)

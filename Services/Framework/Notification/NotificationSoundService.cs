@@ -3,14 +3,11 @@ using System.IO;
 using System.Speech.Synthesis;
 using System.Threading.Tasks;
 using NAudio.Wave;
-using TM.Framework.Common.Controls.Feedback;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Framework.Notifications.SystemNotifications.SystemIntegration;
 using TM.Framework.Notifications.Sound.SoundScheme;
 using TM.Framework.Notifications.Sound.VolumeAndDevice;
 using TM.Framework.Notifications.Sound.VoiceBroadcast;
 using TM.Framework.Notifications.Sound.Services;
-using TM.Framework.Common.Services;
 
 namespace TM.Services.Framework.Notification
 {
@@ -67,7 +64,7 @@ namespace TM.Services.Framework.Notification
 
         public async Task PlayNotificationSound(ToastType type, bool isHighPriority = false)
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 try
                 {
@@ -83,11 +80,11 @@ namespace TM.Services.Framework.Notification
                     }
 
                     var eventName = GetEventNameFromType(type);
-                    var soundPath = GetSoundPathForEvent(eventName);
+                    var soundPath = await GetSoundPathForEventAsync(eventName).ConfigureAwait(false);
 
                     if (!string.IsNullOrEmpty(soundPath) && File.Exists(soundPath))
                     {
-                        PlaySoundFile(soundPath);
+                        await PlaySoundFileAsync(soundPath).ConfigureAwait(false);
                     }
                     else
                     {
@@ -99,7 +96,7 @@ namespace TM.Services.Framework.Notification
                 {
                     App.Log($"[NotificationSoundService] 播放音效失败: {ex.Message}");
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
         public void PlayTestSound()
@@ -117,7 +114,7 @@ namespace TM.Services.Framework.Notification
 
         public async Task BroadcastNotification(string title, string message, bool isHighPriority = false)
         {
-            await Task.Run(() =>
+            await Task.Run(async () =>
             {
                 try
                 {
@@ -132,7 +129,7 @@ namespace TM.Services.Framework.Notification
                         return;
                     }
 
-                    _voiceSettings.LoadSettings();
+                    await _voiceSettings.LoadSettingsAsync().ConfigureAwait(false);
 
                     if (!_voiceSettings.IsEnabled)
                     {
@@ -148,10 +145,10 @@ namespace TM.Services.Framework.Notification
                 {
                     App.Log($"[NotificationSoundService] 语音播报失败: {ex.Message}");
                 }
-            });
+            }).ConfigureAwait(false);
         }
 
-        private void PlaySoundFile(string filePath)
+        private async System.Threading.Tasks.Task PlaySoundFileAsync(string filePath)
         {
             try
             {
@@ -160,11 +157,11 @@ namespace TM.Services.Framework.Notification
                 _audioFileReader = new AudioFileReader(filePath);
                 _waveOut = new WaveOutEvent();
 
-_volumeSettings.LoadSettings();
+                await _volumeSettings.LoadSettingsAsync().ConfigureAwait(false);
                 float volume = (float)(_volumeSettings.NotificationVolume / 100.0);
                 _audioFileReader.Volume = volume;
 
-if (_equalizerService.IsEnabled)
+                if (_equalizerService.IsEnabled)
                 {
                     var settings = _equalizerService.GetCurrentSettings();
                     App.Log($"[NotificationSoundService] 均衡器效果已启用 - 低音:{settings.bass}dB 中低:{settings.midBass}dB 中:{settings.mid}dB 中高:{settings.midTreble}dB 高:{settings.treble}dB");
@@ -194,10 +191,8 @@ if (_equalizerService.IsEnabled)
         {
             try
             {
-                if (!ServiceLocator.Get<SystemIntegrationSettings>().NotificationSound)
-                {
+                if (!_sysSettings.NotificationSound)
                     return;
-                }
 
                 switch (type)
                 {
@@ -251,11 +246,11 @@ if (_equalizerService.IsEnabled)
             };
         }
 
-        private string? GetSoundPathForEvent(string eventName)
+        private async System.Threading.Tasks.Task<string?> GetSoundPathForEventAsync(string eventName)
         {
             try
             {
-_schemeSettings.LoadSettings();
+                await _schemeSettings.LoadSettingsAsync().ConfigureAwait(false);
 
                 if (_schemeSettings.EventSoundMappings.TryGetValue(eventName, out var soundName))
                 {

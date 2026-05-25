@@ -1,27 +1,18 @@
 <UserControl x:Class="TM.Framework.UI.Windows.ThreeColumnLayout"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:workspace="clr-namespace:TM.Framework.UI.Workspace">
 
-    <UserControl.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="Theme.xaml"/>
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
-    </UserControl.Resources>
-
-    <Border Background="{DynamicResource UnifiedBackground}"
-            BorderBrush="{DynamicResource WindowBorder}"
+    <Border Background="{DynamicResource GradientBackground}"
+            BorderBrush="{DynamicResource GlassBorderBrush}"
             BorderThickness="{StaticResource StandardBorder}"
             CornerRadius="{StaticResource LargeRadius}">
         <Grid x:Name="MainGrid">
             <Grid.Clip>
-                <RectangleGeometry RadiusX="4" RadiusY="4" Rect="0,0,10000,10000"/>
+                <RectangleGeometry RadiusX="8" RadiusY="8" Rect="0,0,10000,10000"/>
             </Grid.Clip>
             <Grid.RowDefinitions>
-                <RowDefinition Height="42"/>
+                <RowDefinition Height="50"/>
                 <RowDefinition Height="Auto"/>
                 <RowDefinition Height="*"/>
                 <RowDefinition Height="30"/>
@@ -41,40 +32,26 @@
                         ClipToBounds="True"
                         VerticalAlignment="Center"
                         Margin="0,0,8,0"/>
-                <TextBlock Text="天命" 
+                <TextBlock Text="天命"
                            Style="{StaticResource TitleTextStyle}"/>
             </StackPanel>
 
-            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="0,0,5,0">
-                <Button x:Name="MultiWindowButton"
-                        Style="{StaticResource SettingsButtonStyle}"
-                        ToolTip="切换单/多窗口显示模式"
-                        Click="OnMultiWindowToggleClick">
-                    <StackPanel HorizontalAlignment="Center">
-                        <emoji:TextBlock Text="🏠" FontSize="13" HorizontalAlignment="Center"/>
-                        <TextBlock x:Name="MultiWindowButtonLabel" Text="单窗口" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
-                    </StackPanel>
-                </Button>
+            <StackPanel Grid.Column="2" Orientation="Horizontal">
 
-                <Border Width="1" 
-                        Height="20" 
-                        Background="{DynamicResource BorderBrush}"
-                        Margin="10,0"
-                        VerticalAlignment="Center"/>
-
-                <Button Style="{StaticResource SettingsButtonStyle}" 
-                        ToolTip="工具台（AI生成与个人设置）"
+                <Button x:Name="WorkbenchButton"
+                        Style="{StaticResource WindowButtonStyle}"
+                        ToolTip="切换到工作台"
                         Click="OnOpenWorkbench">
                     <StackPanel HorizontalAlignment="Center">
-                        <emoji:TextBlock Text="🎯" FontSize="13" HorizontalAlignment="Center"/>
-                        <TextBlock Text="工具台" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
+                        <Image Source="{DynamicResource Icon.Target}" Width="13" Height="13" HorizontalAlignment="Center"/>
+                        <TextBlock Text="工作台" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Button>
 
-                <Border Width="1" 
-                        Height="20" 
-                        Background="{DynamicResource BorderBrush}"
-                        Margin="10,0"
+                <Border Width="1"
+                        Height="20"
+                        Background="{DynamicResource GlassBorderBrush}"
+                        Margin="5,0"
                         VerticalAlignment="Center"/>
 
                 <Button x:Name="MainPinButton"
@@ -82,32 +59,37 @@
                         ToolTip="置顶"
                         Click="OnMainPinToggleClick">
                     <StackPanel x:Name="MainPinButtonContent" HorizontalAlignment="Center" Opacity="0.4">
-                        <emoji:TextBlock Text="📌" FontSize="13" HorizontalAlignment="Center"/>
+                        <Image Source="{DynamicResource Icon.MapPin}" Width="13" Height="13" HorizontalAlignment="Center"/>
                         <TextBlock Text="置顶" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Button>
 
                 <Button x:Name="MinimizeButton"
-                        Style="{StaticResource WindowButtonStyle}" 
+                        Style="{StaticResource WindowButtonStyle}"
                         ToolTip="最小化">
                     <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="—" FontSize="13" HorizontalAlignment="Center"/>
+                        <Image Source="{DynamicResource Icon.WindowMinimize}" Width="13" Height="13" HorizontalAlignment="Center"/>
                         <TextBlock Text="最小化" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Button>
                 <Button x:Name="MaximizeButton"
-                        Style="{StaticResource WindowButtonStyle}" 
+                        Style="{StaticResource WindowButtonStyle}"
                         ToolTip="最大化">
                     <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="□" FontSize="13" HorizontalAlignment="Center"/>
+                        <Image Source="{DynamicResource Icon.WindowMaximize}" Width="13" Height="13" HorizontalAlignment="Center"/>
                         <TextBlock Text="最大化" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Button>
                 <Button x:Name="CloseButton"
-                        Style="{StaticResource CloseButtonStyle}" 
+                        Style="{StaticResource CloseButtonStyle}"
                         ToolTip="关闭">
                     <StackPanel HorizontalAlignment="Center">
-                        <TextBlock Text="✕" FontSize="13" HorizontalAlignment="Center"/>
+                        <Rectangle Width="13" Height="13" HorizontalAlignment="Center"
+                                   Fill="{Binding Foreground, RelativeSource={RelativeSource AncestorType=Button}}">
+                            <Rectangle.OpacityMask>
+                                <ImageBrush ImageSource="{DynamicResource Icon.WindowClose}" Stretch="Uniform"/>
+                            </Rectangle.OpacityMask>
+                        </Rectangle>
                         <TextBlock Text="关闭" FontSize="13" HorizontalAlignment="Center" Margin="0"/>
                     </StackPanel>
                 </Button>
@@ -135,12 +117,13 @@
                 </Grid.RowDefinitions>
 
                 <StackPanel Grid.Row="0" VerticalAlignment="Top">
+
             </StackPanel>
 
             </Grid>
 
-            <Border Grid.Column="1" 
-                    Background="{DynamicResource ContentBackground}"
+            <Border Grid.Column="1"
+                    Background="Transparent"
                     Margin="1,0"
                     CornerRadius="{StaticResource SmallRadius}"
                     ClipToBounds="True">
@@ -154,22 +137,16 @@
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>
-                <ColumnDefinition Width="Auto"/>
             </Grid.ColumnDefinitions>
 
-            <TextBlock Grid.Column="0" 
+            <TextBlock Grid.Column="0"
                        x:Name="StatusText"
                        Text="就绪"
                        Style="{StaticResource StatusTextStyle}"
                        Margin="15,0,0,0"/>
 
-            <TextBlock Grid.Column="1" 
-                       x:Name="SystemInfo"
-                       Style="{StaticResource StatusTextStyle}"
-                       Margin="0,0,15,0"/>
-
-            <TextBlock Grid.Column="2" 
-                       x:Name="TimeDisplay"
+            <TextBlock Grid.Column="1"
+                       Text="作者：子夜-229164036，公益项目未收费"
                        Style="{StaticResource StatusTextStyle}"
                        Margin="0,0,15,0"/>
         </Grid>

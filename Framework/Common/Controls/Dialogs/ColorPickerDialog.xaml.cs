@@ -1,7 +1,6 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
-using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shapes;
@@ -9,6 +8,7 @@ using System.Windows.Shapes;
 namespace TM.Framework.Common.Controls.Dialogs
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ColorPickerDialog : Window
     {
         private double currentHue = 0;
@@ -16,6 +16,8 @@ namespace TM.Framework.Common.Controls.Dialogs
         private double currentValue = 1;
         private bool isMouseDownOnColorCanvas = false;
         private bool isMouseDownOnHueCanvas = false;
+        private GradientStop? _hueGradientStop;
+        private readonly SolidColorBrush _previewBrush;
 
         public Color SelectedColor { get; private set; }
 
@@ -24,10 +26,12 @@ namespace TM.Framework.Common.Controls.Dialogs
             InitializeComponent();
 
             SelectedColor = initialColor;
+            _previewBrush = new SolidColorBrush(initialColor);
             ColorToHSV(initialColor, out currentHue, out currentSaturation, out currentValue);
 
             Loaded += (s, e) =>
             {
+                PreviewBorder.Background = _previewBrush;
                 DrawColorCanvas();
                 DrawHueSlider();
                 UpdatePreview();
@@ -36,20 +40,27 @@ namespace TM.Framework.Common.Controls.Dialogs
 
         private void DrawColorCanvas()
         {
-            ColorCanvas.Children.Clear();
-
             int width = (int)ColorCanvas.ActualWidth;
             int height = (int)ColorCanvas.ActualHeight;
 
             if (width <= 0 || height <= 0) return;
 
+            Color hueColor = HSVToColor(currentHue, 1, 1);
+
+            if (_hueGradientStop != null)
+            {
+                _hueGradientStop.Color = hueColor;
+                return;
+            }
+
+            ColorCanvas.Children.Clear();
+
+            _hueGradientStop = new GradientStop(hueColor, 1);
             var saturationGradient = new LinearGradientBrush();
             saturationGradient.StartPoint = new Point(0, 0);
             saturationGradient.EndPoint = new Point(1, 0);
-
-            Color hueColor = HSVToColor(currentHue, 1, 1);
             saturationGradient.GradientStops.Add(new GradientStop(Colors.White, 0));
-            saturationGradient.GradientStops.Add(new GradientStop(hueColor, 1));
+            saturationGradient.GradientStops.Add(_hueGradientStop);
 
             var saturationRect = new Rectangle
             {
@@ -167,7 +178,7 @@ namespace TM.Framework.Common.Controls.Dialogs
         private void UpdatePreview()
         {
             SelectedColor = HSVToColor(currentHue, currentSaturation, currentValue);
-            PreviewBorder.Background = new SolidColorBrush(SelectedColor);
+            _previewBrush.Color = SelectedColor;
 
             RValue.Text = SelectedColor.R.ToString();
             GValue.Text = SelectedColor.G.ToString();

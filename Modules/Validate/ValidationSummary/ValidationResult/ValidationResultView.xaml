@@ -3,16 +3,15 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
              xmlns:visConverters="clr-namespace:TM.Framework.Common.Converters.Visibility">
     <UserControl.Resources>
         <visConverters:BoolToVisibilityConverter x:Key="BoolToVisibilityConverter"/>
     </UserControl.Resources>
 
     <dm:TwoColumnEditorLayout
-        LeftIcon="📋"
+        LeftIcon="{DynamicResource Icon.Clipboard}"
         LeftTitle="校验汇总"
-        RightIcon="📊"
+        RightIcon="{DynamicResource Icon.Chart}"
         RightTitle="校验详情"
         ItemsSource="{Binding TreeData}"
         ShowSearch="True"
@@ -36,7 +35,7 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="📋" Title="卷信息" Margin="0,0,0,10">
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Clipboard}" Title="卷信息" Margin="0,0,0,10">
                     <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
@@ -49,79 +48,81 @@
                             <RowDefinition Height="Auto"/>
                         </Grid.RowDefinitions>
 
-                        <TextBlock Grid.Row="0" Grid.Column="0" Text="卷号：" 
+                        <TextBlock Grid.Row="0" Grid.Column="0" Text="卷号："
                                    Foreground="{DynamicResource TextSecondary}" Margin="0,0,8,8"/>
-                        <TextBlock Grid.Row="0" Grid.Column="1" 
-                                   Text="{Binding SelectedData.TargetVolumeNumber}" 
+                        <TextBlock Grid.Row="0" Grid.Column="1"
+                                   Text="{Binding SelectedData.TargetVolumeNumber}"
                                    Foreground="{DynamicResource TextPrimary}" Margin="0,0,20,8"/>
 
-                        <TextBlock Grid.Row="0" Grid.Column="2" Text="抽样章节：" 
+                        <TextBlock Grid.Row="0" Grid.Column="2" Text="抽样章节："
                                    Foreground="{DynamicResource TextSecondary}" Margin="0,0,8,8"/>
-                        <TextBlock Grid.Row="0" Grid.Column="3" 
-                                   Text="{Binding SelectedData.SampledChapterCount}" 
+                        <TextBlock Grid.Row="0" Grid.Column="3"
+                                   Text="{Binding SelectedData.SampledChapterCount}"
                                    Foreground="{DynamicResource TextPrimary}" Margin="0,0,0,8"/>
 
-                        <TextBlock Grid.Row="1" Grid.Column="0" Text="最后校验：" 
+                        <TextBlock Grid.Row="1" Grid.Column="0" Text="最后校验："
                                    Foreground="{DynamicResource TextSecondary}" Margin="0,0,8,0"/>
                         <TextBlock Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="3"
-                                   Text="{Binding SelectedData.LastValidatedTime, StringFormat=yyyy-MM-dd HH:mm}" 
+                                   Text="{Binding SelectedData.LastValidatedTime, StringFormat=yyyy-MM-dd HH:mm}"
                                    Foreground="{DynamicResource TextPrimary}"/>
                     </Grid>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="📊" Title="校验统计" Margin="0,0,0,10">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Chart}" Title="校验统计" Margin="0,0,0,10">
                     <StackPanel>
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
-                            <TextBlock Text="总体状态：" Foreground="{DynamicResource TextSecondary}" 
+                            <TextBlock Text="总体状态：" Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <emoji:TextBlock Text="{Binding OverallResultIcon}" FontSize="18" 
+                            <Image Source="{Binding OverallResultIcon, Converter={StaticResource IconKeyToImageSourceConverter}}" Width="18" Height="18"
                                              VerticalAlignment="Center" Margin="0,0,8,0"/>
-                            <TextBlock Text="{Binding SelectedData.OverallResult}" 
+                            <TextBlock Text="{Binding SelectedData.OverallResult}"
                                        FontWeight="SemiBold" FontSize="16"
-                                       Foreground="{DynamicResource TextPrimary}" 
+                                       Foreground="{DynamicResource TextPrimary}"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
 
                         <StackPanel Orientation="Horizontal">
-                            <emoji:TextBlock Text="✅" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="通过：" Foreground="{DynamicResource TextSecondary}" 
+                            <Image Source="{DynamicResource Icon.CheckCircle}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="通过：" Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,4,0"/>
                             <TextBlock Text="{Binding PassedCount}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource SuccessColor}" 
+                                       Foreground="{DynamicResource SuccessColor}"
                                        VerticalAlignment="Center" Margin="0,0,20,0"/>
 
-                            <emoji:TextBlock Text="⚠️" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="警告：" Foreground="{DynamicResource TextSecondary}" 
+                            <Image Source="{DynamicResource Icon.Warning}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="警告：" Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,4,0"/>
                             <TextBlock Text="{Binding WarningCount}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource WarningColor}" 
+                                       Foreground="{DynamicResource WarningColor}"
                                        VerticalAlignment="Center" Margin="0,0,20,0"/>
 
-                            <emoji:TextBlock Text="❌" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="失败：" Foreground="{DynamicResource TextSecondary}" 
+                            <Image Source="{DynamicResource Icon.Forbidden}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="失败：" Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,4,0"/>
                             <TextBlock Text="{Binding FailedCount}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource ErrorColor}" 
+                                       Foreground="{DynamicResource ErrorColor}"
                                        VerticalAlignment="Center" Margin="0,0,20,0"/>
 
-                            <emoji:TextBlock Text="⏳" FontSize="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
-                            <TextBlock Text="未校验：" Foreground="{DynamicResource TextSecondary}" 
+                            <Image Source="{DynamicResource Icon.Clock}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                            <TextBlock Text="未校验：" Foreground="{DynamicResource TextSecondary}"
                                        VerticalAlignment="Center" Margin="0,0,4,0"/>
                             <TextBlock Text="{Binding NotValidatedCount}" FontWeight="SemiBold"
-                                       Foreground="{DynamicResource TextTertiary}" 
+                                       Foreground="{DynamicResource TextTertiary}"
                                        VerticalAlignment="Center"/>
                         </StackPanel>
                     </StackPanel>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="📝" Title="规则明细" VerticalContentAlignment="Stretch">
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Edit}" Title="规则明细" VerticalContentAlignment="Stretch">
                     <ListBox ItemsSource="{Binding SelectedData.ModuleResults}"
                              BorderThickness="0" Background="Transparent"
                              ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                             ScrollViewer.VerticalScrollBarVisibility="Auto">
+                             ScrollViewer.VerticalScrollBarVisibility="Auto"
+                             VirtualizingPanel.IsVirtualizing="True"
+                             VirtualizingPanel.VirtualizationMode="Recycling">
                         <ListBox.ItemTemplate>
                             <DataTemplate>
-                                <Border BorderBrush="{DynamicResource BorderBrush}" 
+                                <Border BorderBrush="{DynamicResource GlassBorderBrush}"
                                         BorderThickness="0,0,0,1" Padding="8,6">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -130,17 +131,17 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
 
-                                        <emoji:TextBlock Grid.Column="0" 
-                                                         Text="{Binding ResultIcon}" 
-                                                         FontSize="16" 
-                                                         VerticalAlignment="Center" 
+                                        <Image Grid.Column="0"
+                                                         Source="{Binding ResultIcon, Converter={StaticResource IconKeyToImageSourceConverter}}"
+                                                         Width="16" Height="16"
+                                                         VerticalAlignment="Center"
                                                          Margin="0,0,10,0"/>
-                                        <TextBlock Grid.Column="1" 
-                                                   Text="{Binding DisplayName}" 
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding DisplayName}"
                                                    Foreground="{DynamicResource TextPrimary}"
                                                    VerticalAlignment="Center"/>
-                                        <TextBlock Grid.Column="2" 
-                                                   Text="{Binding Result}" 
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding Result}"
                                                    Foreground="{DynamicResource TextSecondary}"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
@@ -153,14 +154,16 @@
         </dm:TwoColumnEditorLayout.EditAdditionalContent>
 
         <dm:TwoColumnEditorLayout.DetailsContent>
-            <layout:IconHeaderGroupBox Icon="⚠️" Title="问题清单" VerticalContentAlignment="Stretch">
+            <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Warning}" Title="问题清单" VerticalContentAlignment="Stretch">
                 <ListBox ItemsSource="{Binding ProblemItems}"
                          BorderThickness="0" Background="Transparent"
                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
-                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                         ScrollViewer.VerticalScrollBarVisibility="Auto"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling">
                     <ListBox.ItemTemplate>
                         <DataTemplate>
-                            <Border BorderBrush="{DynamicResource BorderBrush}" 
+                            <Border BorderBrush="{DynamicResource GlassBorderBrush}"
                                     BorderThickness="0,0,0,1" Padding="8,6">
                                 <Grid>
                                     <Grid.ColumnDefinitions>

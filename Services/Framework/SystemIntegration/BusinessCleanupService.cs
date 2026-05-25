@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
 using TM.Modules.Design.Elements.CharacterRules.Services;
 using TM.Modules.Design.Elements.FactionRules.Services;
 using TM.Modules.Design.Elements.LocationRules.Services;
@@ -18,7 +16,7 @@ namespace TM.Services.Framework.SystemIntegration
 {
     public static class BusinessCleanupService
     {
-        public static (bool Success, int ClearedCount, List<string> Details) Execute()
+        public static (bool Success, int ClearedCount, List<string> Details) Execute(bool includeBookAnalysis = true)
         {
             var details = new List<string>();
             var clearedCount = 0;
@@ -26,9 +24,10 @@ namespace TM.Services.Framework.SystemIntegration
 
             try
             {
-                TM.App.Log("[BusinessCleanupService] 开始执行业务清理...");
+                TM.App.Log($"[BusinessCleanupService] 开始执行业务清理 (includeBookAnalysis={includeBookAnalysis})...");
 
-                clearedCount += ClearModuleData("Design/SmartParsing/BookAnalysis", () => ServiceLocator.Get<BookAnalysisService>().ClearAllAnalysis(), details, ref hasErrors);
+                if (includeBookAnalysis)
+                    clearedCount += ClearModuleData("Design/SmartParsing/BookAnalysis", () => ServiceLocator.Get<BookAnalysisService>().ClearAllAnalysis(), details, ref hasErrors);
                 clearedCount += ClearModuleData("Design/Templates/CreativeMaterials", () => ServiceLocator.Get<CreativeMaterialsService>().ClearAllMaterials(), details, ref hasErrors);
                 clearedCount += ClearModuleData("Design/GlobalSettings/WorldRules", () => ServiceLocator.Get<WorldRulesService>().ClearAllWorldRules(), details, ref hasErrors);
                 clearedCount += ClearModuleData("Design/Elements/CharacterRules", () => ServiceLocator.Get<CharacterRulesService>().ClearAllCharacterRules(), details, ref hasErrors);

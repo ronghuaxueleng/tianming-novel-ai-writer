@@ -1,25 +1,32 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
+using System.Reflection;
 using System.Windows;
 using System.Windows.Input;
+using System.Windows.Threading;
 using TM.Framework.Common.Helpers.Id;
 using TM.Services.Framework.AI.Core;
-using TM.Framework.Common.Helpers;
 
 namespace TM.Modules.AIAssistant.ModelIntegration.ModelManagement;
 
+[Obfuscation(Exclude = true, ApplyToMembers = true)]
+[Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
 public partial class ApiKeyManagerDialog : Window
 {
+    [Obfuscation(Exclude = true)]
     public enum KeyHealthStatus { Active, RateLimited, Disabled }
 
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class KeyItem : INotifyPropertyChanged
     {
         public string Id { get; set; } = string.Empty;
         public string Key { get; set; } = string.Empty;
         public string Remark { get; set; } = string.Empty;
+        public DateTime CreatedAt { get; set; }
 
         private bool _isEnabled = true;
         public bool IsEnabled
@@ -35,10 +42,10 @@ public partial class ApiKeyManagerDialog : Window
             set { _healthStatus = value; Notify(nameof(StatusIcon)); Notify(nameof(StatusText)); }
         }
 
-        public string StatusIcon => HealthStatus switch
+        public System.Windows.Media.ImageSource? StatusIcon => HealthStatus switch
         {
-            KeyHealthStatus.RateLimited => "⚠️",
-            _ => IsEnabled ? "✅" : "⛔"
+            KeyHealthStatus.RateLimited => IconHelper.TryGet("Icon.Warning"),
+            _ => IsEnabled ? IconHelper.TryGet("Icon.CheckCircle") : IconHelper.TryGet("Icon.Forbidden")
         };
 
         public string StatusText => HealthStatus switch
@@ -113,7 +120,8 @@ public partial class ApiKeyManagerDialog : Window
                     Key = k.Key,
                     Remark = k.Remark,
                     IsEnabled = k.IsEnabled,
-                    HealthStatus = health
+                    HealthStatus = health,
+                    CreatedAt = k.CreatedAt
                 });
             }
         }
@@ -139,7 +147,7 @@ public partial class ApiKeyManagerDialog : Window
         _showAllPlain = !_showAllPlain;
         foreach (var k in _keys)
             k.IsPlainVisible = _showAllPlain;
-        ToggleAllIcon.Text = _showAllPlain ? "👁" : "🔒";
+        ToggleAllIcon.Source = (System.Windows.Media.ImageSource?)TryFindResource(_showAllPlain ? "Icon.Eye" : "Icon.Lock");
         ToggleAllText.Text = _showAllPlain ? " 一键隐藏" : " 一键显示";
     }
 
@@ -196,11 +204,14 @@ public partial class ApiKeyManagerDialog : Window
             TM.Framework.Common.Helpers.GlobalToast.Info("密钥已存在", "所有密钥均已存在");
     }
 
+    private DispatcherTimer? _batchInputDebounceTimer;
+
     private void BatchInput_TextChanged(object sender, System.Windows.Controls.TextChangedEventArgs e)
     {
         var text = BatchInput.Text?.Trim();
         if (string.IsNullOrWhiteSpace(text))
         {
+            _batchInputDebounceTimer?.Stop();
             BatchImportBtnText.Text = "一键导入";
             StatsText.Text = _keys.Count > 0
                 ? $"共 {_keys.Count} 个密钥，{_keys.Count(k => k.IsEnabled)} 个启用"
@@ -208,12 +219,30 @@ public partial class ApiKeyManagerDialog : Window
             return;
         }
 
-        var count = text
-            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
-            .SelectMany(line => line.Replace('，', ',').TrimEnd(',').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-            .Where(k => !string.IsNullOrWhiteSpace(k))
-            .Distinct(StringComparer.Ordinal)
-            .Count();
+        if (_batchInputDebounceTimer == null)
+        {
+            _batchInputDebounceTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(300) };
+            _batchInputDebounceTimer.Tick += (_, _) => { _batchInputDebounceTimer.Stop(); UpdateBatchStats(); };
+        }
+        _batchInputDebounceTimer.Stop();
+        _batchInputDebounceTimer.Start();
+    }
+
+    private void UpdateBatchStats()
+    {
+        var text = BatchInput.Text?.Trim();
+        if (string.IsNullOrWhiteSpace(text)) return;
+
+        var seen = new System.Collections.Generic.HashSet<string>(StringComparer.Ordinal);
+        foreach (var line in text.Split('\n', StringSplitOptions.RemoveEmptyEntries))
+        {
+            foreach (var key in line.Replace('，', ',').TrimEnd(',').Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            {
+                if (!string.IsNullOrWhiteSpace(key))
+                    seen.Add(key);
+            }
+        }
+        var count = seen.Count;
 
         BatchImportBtnText.Text = "一键解析";
         StatsText.Text = $"检测到 {count} 条密钥";
@@ -284,13 +313,14 @@ public partial class ApiKeyManagerDialog : Window
 
     private void CloseButton_Click(object sender, RoutedEventArgs e)
     {
+        var now = DateTime.Now;
         ResultKeys = _keys.Select(k => new ApiKeyEntry
         {
             Id = k.Id,
             Key = k.Key,
             Remark = k.Remark,
             IsEnabled = k.IsEnabled,
-            CreatedAt = DateTime.Now
+            CreatedAt = k.CreatedAt == default ? now : k.CreatedAt
         }).ToList();
 
         DialogResult = true;

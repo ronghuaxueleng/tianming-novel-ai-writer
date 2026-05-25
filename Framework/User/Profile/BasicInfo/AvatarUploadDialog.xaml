@@ -1,7 +1,7 @@
 <Window x:Class="TM.Framework.User.Profile.BasicInfo.AvatarUploadDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
+        UseLayoutRounding="True"
         xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
         WindowStyle="None"
         AllowsTransparency="True"
@@ -21,21 +21,22 @@
                 <RowDefinition Height="Auto"/>
             </Grid.RowDefinitions>
 
-            <Border Grid.Row="0" Style="{DynamicResource StandardDialogTitleBarStyle}" 
+            <Border Grid.Row="0" Style="{DynamicResource StandardDialogTitleBarStyle}"
                     MouseLeftButtonDown="TitleBar_MouseDown" Padding="16,0">
                 <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <emoji:TextBlock Text="📷" FontSize="16" Margin="0,0,8,0"/>
+                    <Image Source="{DynamicResource Icon.Camera}" Width="16" Height="16" Margin="0,0,8,0"/>
                     <TextBlock Text="上传头像" Style="{DynamicResource StandardDialogTitleTextStyle}"/>
                 </StackPanel>
             </Border>
 
-            <ScrollViewer Grid.Row="1" 
-                         VerticalScrollBarVisibility="Auto" 
+            <ScrollViewer Grid.Row="1"
+                         VerticalScrollBarVisibility="Auto"
                          Margin="20,20,20,0">
                 <StackPanel>
-                    <layout:IconHeaderGroupBox Icon="👁️" Title="预览" Margin="0,0,0,15">
-                        <Border Width="150" Height="150" 
-                                Background="{DynamicResource Surface}"
+
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Eye}" Title="预览" Margin="0,0,0,15">
+                        <Border Width="150" Height="150"
+                                Background="{DynamicResource SurfaceGlass}"
                                 CornerRadius="75"
                                 HorizontalAlignment="Center">
                             <Border.Clip>
@@ -45,13 +46,13 @@
                         </Border>
                     </layout:IconHeaderGroupBox>
 
-                    <layout:IconHeaderGroupBox Icon="📁" Title="本地上传" Margin="0,0,0,15">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Folder}" Title="本地上传" Margin="0,0,0,15">
                         <StackPanel>
-                            <TextBlock Text="支持格式：JPG、PNG、BMP" 
-                                       FontSize="12" 
-                                       Foreground="{DynamicResource TextSecondary}" 
+                            <TextBlock Text="支持格式：JPG、PNG、BMP"
+                                       FontSize="12"
+                                       Foreground="{DynamicResource TextSecondary}"
                                        Margin="0,0,0,10"/>
-                            <Button Content="📁 选择图片" 
+                            <Button Content=" 选择图片"
                                     Style="{DynamicResource SecondaryButtonStyle}"
                                     Click="SelectImage_Click"
                                     HorizontalAlignment="Left"
@@ -59,55 +60,55 @@
                         </StackPanel>
                     </layout:IconHeaderGroupBox>
 
-                    <layout:IconHeaderGroupBox Icon="🎨" Title="预设头像">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Palette}" Title="预设头像">
                         <UniformGrid Columns="5" Rows="2">
                             <Button x:Name="PresetAvatar1" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="📷" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Camera}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar2" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="👤" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.User}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar3" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="🎨" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Palette}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar4" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="🌟" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Star}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar5" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="💼" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Briefcase}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar6" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="🎯" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Target}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar7" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="🚀" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Rocket}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar8" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="💎" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Diamond}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar9" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="🔥" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Flame}" Width="32" Height="32"/>
                             </Button>
                             <Button x:Name="PresetAvatar10" Click="PresetAvatar_Click" Style="{DynamicResource SecondaryButtonStyle}" Margin="5">
-                                <emoji:TextBlock Text="⚡" FontSize="32"/>
+                                <Image Source="{DynamicResource Icon.Lightning}" Width="32" Height="32"/>
                             </Button>
                         </UniformGrid>
                     </layout:IconHeaderGroupBox>
                 </StackPanel>
             </ScrollViewer>
 
-            <StackPanel Grid.Row="2" 
-                       Orientation="Horizontal" 
-                       HorizontalAlignment="Right" 
+            <StackPanel Grid.Row="2"
+                       Orientation="Horizontal"
+                       HorizontalAlignment="Right"
                        Margin="20,15,20,20">
-                <Button Content="取消" 
+                <Button Content="取消"
                         Style="{DynamicResource SecondaryButtonStyle}"
-                        Click="Cancel_Click" 
-                        Width="100" 
+                        Click="Cancel_Click"
+                        Width="100"
                         Margin="0,0,10,0"/>
-                <Button Content="确定" 
+                <Button Content="确定"
                         Style="{DynamicResource PrimaryButtonStyle}"
-                        Click="Confirm_Click" 
+                        Click="Confirm_Click"
                         Width="100"/>
             </StackPanel>
         </Grid>

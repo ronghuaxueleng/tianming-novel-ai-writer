@@ -1,5 +1,4 @@
-using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing;
@@ -14,7 +13,8 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Config
         {
             _profiles = new Dictionary<ChatMode, ConversationModeProfile>
             {
-                [ChatMode.Ask] = CreateAskProfile(),
+                [ChatMode.Channel] = CreateChannelProfile(),
+                [ChatMode.Edit] = CreateEditProfile(),
                 [ChatMode.Plan] = CreatePlanProfile(),
                 [ChatMode.Agent] = CreateAgentProfile()
             };
@@ -27,20 +27,20 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Config
                 return profile;
             }
 
-            TM.App.Log($"[ModeProfileRegistry] 未知模式 {mode}，使用 Ask 配置");
-            return _profiles[ChatMode.Ask];
+            TM.App.Log($"[ModeProfileRegistry] 未知模式 {mode}，使用 Channel 配置");
+            return _profiles[ChatMode.Channel];
         }
 
         public static IReadOnlyDictionary<ChatMode, ConversationModeProfile> All => _profiles;
 
         #region Profile 工厂方法
 
-        private static ConversationModeProfile CreateAskProfile()
+        private static ConversationModeProfile CreateChannelProfile()
         {
             return new ConversationModeProfile
             {
-                Mode = ChatMode.Ask,
-                Mapper = new AskModeMapper(),
+                Mode = ChatMode.Channel,
+                Mapper = new ChannelModeMapper(),
                 ExecutionResultMapper = null,
                 DisplayPolicy = new ConversationDisplayPolicy
                 {
@@ -51,7 +51,27 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Config
                     HideRawContentInBubble = false
                 },
                 RequiresExecutionEngine = false,
-                Description = "问答模式 - 直接对话，无执行"
+                Description = "总通道 - 基础参数基座 / fallback"
+            };
+        }
+
+        private static ConversationModeProfile CreateEditProfile()
+        {
+            return new ConversationModeProfile
+            {
+                Mode = ChatMode.Edit,
+                Mapper = new ChannelModeMapper(),
+                ExecutionResultMapper = null,
+                DisplayPolicy = new ConversationDisplayPolicy
+                {
+                    SummarySelector = msg => msg.Summary,
+                    ShowAnalysis = true,
+                    AnalysisExpandedByDefault = false,
+                    DefaultPayloadTarget = null,
+                    HideRawContentInBubble = false
+                },
+                RequiresExecutionEngine = false,
+                Description = "Edit 模式 - 查询与知识库编辑"
             };
         }
 

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
@@ -67,7 +66,7 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
             if (Data.Records.Count > Data.MaxRecords)
             {
                 Data.Records = Data.Records.Take(Data.MaxRecords).ToList();
-                SaveData();
+                _ = SaveDataAsync();
             }
             return Data.Records;
         }
@@ -75,13 +74,13 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
         public void ClearAll()
         {
             Data.Records.Clear();
-            SaveData();
+            _ = SaveDataAsync();
         }
 
         public void DeleteRecord(string id)
         {
             Data.Records.RemoveAll(r => r.Id == id);
-            SaveData();
+            _ = SaveDataAsync();
         }
 
         public void MarkAsRead(string id)
@@ -90,7 +89,7 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
             if (record != null)
             {
                 record.IsRead = true;
-                SaveData();
+                _ = SaveDataAsync();
             }
         }
     }

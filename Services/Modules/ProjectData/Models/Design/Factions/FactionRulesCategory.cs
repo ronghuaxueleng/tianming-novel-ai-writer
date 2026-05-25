@@ -7,7 +7,7 @@ namespace TM.Services.Modules.ProjectData.Models.Design.Factions
     {
         [JsonPropertyName("Id")] public string Id { get; set; } = string.Empty;
         [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("Icon")] public string Icon { get; set; } = "🏛️";
+        [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.Institution";
         [JsonPropertyName("ParentCategory")] public string? ParentCategory { get; set; }
         [JsonPropertyName("Level")] public int Level { get; set; } = 1;
         [JsonPropertyName("Order")] public int Order { get; set; } = 0;

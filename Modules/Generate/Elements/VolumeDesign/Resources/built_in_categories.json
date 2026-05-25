@@ -1,0 +1,12 @@
+[
+  {
+    "Id": "C713B2ZZ3FX5B",
+    "Name": "\u5206\u5377\u89C4\u5212",
+    "Icon": "Icon.Books",
+    "Order": 1,
+    "IsBuiltIn": true,
+    "Level": 1,
+    "ParentCategory": null,
+    "IsEnabled": true
+  }
+]

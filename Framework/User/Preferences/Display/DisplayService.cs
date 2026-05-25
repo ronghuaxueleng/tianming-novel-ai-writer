@@ -1,5 +1,4 @@
 using System;
-using TM.Framework.Common.Services;
 using TM.Framework.Appearance.Animation.UIResolution;
 
 namespace TM.Framework.User.Preferences.Display
@@ -25,7 +24,7 @@ namespace TM.Framework.User.Preferences.Display
                 var resService = ServiceLocator.TryGet<UIResolutionService>();
                 if (resService != null)
                 {
-                    var resCfg = resService.LoadSettings();
+                    var resCfg = resService.GetCurrentSettings();
                     resCfg.ScalePercent = scalePercent;
                     resService.SaveSettings(resCfg);
                     resService.ApplyUIScale(scalePercent);
@@ -36,19 +35,19 @@ namespace TM.Framework.User.Preferences.Display
             TM.App.Log($"[DisplayService] 更新界面缩放: {scalePercent}%");
         }
 
-        public void UpdateShowFunctionBar(bool show)
+        public async System.Threading.Tasks.Task UpdateShowFunctionBarAsync(bool show)
         {
-            var loadedSettings = Settings.LoadSettings();
+            var loadedSettings = await _settings.LoadSettingsAsync();
             loadedSettings.ShowFunctionBar = show;
-            Settings.SaveSettings(loadedSettings);
+            _settings.SaveSettings(loadedSettings);
             TM.App.Log($"[DisplayService] 更新功能栏显示状态: {show}");
         }
 
-        public void UpdateListDensity(ListDensity density)
+        public async System.Threading.Tasks.Task UpdateListDensityAsync(ListDensity density)
         {
-            var loadedSettings = Settings.LoadSettings();
+            var loadedSettings = await _settings.LoadSettingsAsync();
             loadedSettings.ListDensity = density;
-            Settings.SaveSettings(loadedSettings);
+            _settings.SaveSettings(loadedSettings);
             TM.App.Log($"[DisplayService] 更新列表密度: {density}");
         }
 
@@ -61,7 +60,7 @@ namespace TM.Framework.User.Preferences.Display
                 var resService = ServiceLocator.TryGet<UIResolutionService>();
                 if (resService != null)
                 {
-                    var resCfg = resService.LoadSettings();
+                    var resCfg = resService.GetCurrentSettings();
                     resCfg.ScalePercent = 100;
                     resService.SaveSettings(resCfg);
                     resService.ApplyUIScale(100);

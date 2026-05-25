@@ -3,6 +3,7 @@
                     xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI">
 
     <Style x:Key="StandardTextBoxStyle" TargetType="TextBox">
+
         <Setter Property="Height" Value="36"/>
         <Setter Property="Padding" Value="12,0"/>
         <Setter Property="FontFamily" Value="{DynamicResource GlobalFontFamily}"/>
@@ -10,9 +11,9 @@
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
 
-        <Setter Property="Background" Value="{DynamicResource ContentBackground}"/>
+        <Setter Property="Background" Value="{DynamicResource ContentBackgroundGlass}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource TextPrimary}"/>
         <Setter Property="SelectionBrush" Value="{DynamicResource PrimaryColor}"/>
 
@@ -71,9 +72,9 @@
         <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}"/>
         <Setter Property="BorderThickness" Value="1"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
-        <Setter Property="Background" Value="{DynamicResource ContentBackground}"/>
+        <Setter Property="Background" Value="{DynamicResource ContentBackgroundGlass}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="CaretBrush" Value="{DynamicResource TextPrimary}"/>
         <Setter Property="SelectionBrush" Value="{DynamicResource PrimaryColor}"/>
         <Setter Property="Template">
@@ -104,19 +105,23 @@
     </Style>
 
     <Style x:Key="StandardComboBoxStyle" TargetType="ComboBox">
+        <Setter Property="FocusVisualStyle" Value="{x:Null}"/>
         <Setter Property="Padding" Value="12,8,12,8"/>
         <Setter Property="FontFamily" Value="{DynamicResource GlobalFontFamily}"/>
         <Setter Property="FontSize" Value="{DynamicResource FontSizeNormal}"/>
         <Setter Property="BorderThickness" Value="1"/>
-        <Setter Property="Background" Value="{DynamicResource ContentBackground}"/>
+        <Setter Property="Background" Value="{DynamicResource ContentBackgroundGlass}"/>
         <Setter Property="Foreground" Value="{DynamicResource TextPrimary}"/>
-        <Setter Property="BorderBrush" Value="{DynamicResource BorderBrush}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource GlassBorderBrush}"/>
         <Setter Property="HorizontalContentAlignment" Value="Left"/>
         <Setter Property="VerticalContentAlignment" Value="Center"/>
         <Setter Property="helpers:ComboBoxHelper.FilterEmptyStringItems" Value="True"/>
         <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Auto"/>
         <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto"/>
         <Setter Property="ScrollViewer.CanContentScroll" Value="True"/>
+        <Setter Property="VirtualizingPanel.IsVirtualizing" Value="True"/>
+        <Setter Property="VirtualizingPanel.VirtualizationMode" Value="Recycling"/>
+        <Setter Property="VirtualizingPanel.ScrollUnit" Value="Pixel"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="ComboBox">
@@ -193,13 +198,15 @@
                               IsOpen="{TemplateBinding IsDropDownOpen}"
                               Focusable="False"
                               PopupAnimation="Slide">
+
                             <Border Background="Transparent"
                                    Margin="0"
                                    Width="{Binding ActualWidth, ElementName=templateRoot}"
                                    MinWidth="{Binding ActualWidth, ElementName=templateRoot}">
+
                                 <Border x:Name="dropDownBorder"
-                                       Background="{DynamicResource ContentBackground}"
-                                       BorderBrush="{DynamicResource BorderBrush}"
+                                       Background="{DynamicResource DialogGlass}"
+                                       BorderBrush="{DynamicResource GlassBorderBrush}"
                                        BorderThickness="1"
                                        CornerRadius="8"
                                        MaxHeight="{TemplateBinding MaxDropDownHeight}"

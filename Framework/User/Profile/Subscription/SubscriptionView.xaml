@@ -1,4 +1,4 @@
-<UserControl x:Class="TM.Framework.User.Profile.Subscription.SubscriptionView"
+﻿<UserControl x:Class="TM.Framework.User.Profile.Subscription.SubscriptionView"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:visibility="clr-namespace:TM.Framework.Common.Converters.Visibility"
@@ -23,7 +23,7 @@
             <RowDefinition Height="*"/>
         </Grid.RowDefinitions>
 
-        <layout:IconHeaderGroupBox Grid.Row="0" Icon="👤" Title="会员状态" Margin="0,0,0,5">
+        <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.User}" Title="会员状态" Margin="0,0,0,5">
             <Grid Margin="10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -31,42 +31,74 @@
                 </Grid.ColumnDefinitions>
 
                 <StackPanel Grid.Column="0">
+
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                        <TextBlock Text="我的ID："
+                                   Foreground="{DynamicResource TextSecondary}"
+                                   FontSize="13"
+                                   VerticalAlignment="Center"/>
+                        <TextBlock Text="{Binding InviteCode}"
+                                   Foreground="{DynamicResource PrimaryColor}"
+                                   FontSize="15"
+                                   FontWeight="SemiBold"
+                                   FontFamily="Consolas"
+                                   VerticalAlignment="Center"/>
+                        <Button Content="复制"
+                                Command="{Binding CopyInviteCodeCommand}"
+                                Style="{DynamicResource SecondaryButtonStyle}"
+                                FontSize="11"
+                                Padding="8,2"
+                                Margin="8,0,0,0"
+                                Height="22"
+                                VerticalAlignment="Center"/>
+                        <TextBlock Text="分享可得3天时长"
+                                   Foreground="{DynamicResource SuccessColor}"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Margin="10,0,0,0"/>
+                        <TextBlock Text="{Binding InviteStatsText}"
+                                   Foreground="{DynamicResource TextTertiary}"
+                                   FontSize="11"
+                                   VerticalAlignment="Center"
+                                   Margin="16,0,0,0"/>
+                    </StackPanel>
+
                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                        <TextBlock Text="{Binding PlanTypeDisplay}" 
-                                   FontSize="22" 
+                        <TextBlock Text="{Binding PlanTypeDisplay}"
+                                   FontSize="22"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource TextPrimary}"/>
-                        <Border Background="{Binding StatusColor}" 
-                                CornerRadius="4" 
-                                Padding="8,4" 
+                        <Border Background="{Binding StatusColor}"
+                                CornerRadius="4"
+                                Padding="8,4"
                                 Margin="12,0,0,0"
                                 VerticalAlignment="Center">
-                            <TextBlock Text="{Binding StatusText}" 
-                                       Foreground="White" 
+                            <TextBlock Text="{Binding StatusText}"
+                                       Foreground="White"
                                        FontSize="12"/>
                         </Border>
                     </StackPanel>
 
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="到期时间：" 
+                        <TextBlock Text="到期时间："
                                    Foreground="{DynamicResource TextSecondary}"
                                    FontSize="13"/>
-                        <TextBlock Text="{Binding EndTimeText}" 
+                        <TextBlock Text="{Binding EndTimeText}"
                                    Foreground="{DynamicResource TextPrimary}"
                                    FontSize="13"
                                    FontWeight="Medium"/>
-                        <TextBlock Text=" | " 
+                        <TextBlock Text=" | "
                                    Foreground="{DynamicResource TextTertiary}"
                                    FontSize="13"/>
-                        <TextBlock Text="{Binding RemainingDaysText}" 
+                        <TextBlock Text="{Binding RemainingDaysText}"
                                    Foreground="{DynamicResource PrimaryColor}"
                                    FontSize="13"
                                    FontWeight="Medium"/>
                     </StackPanel>
                 </StackPanel>
 
-                <Button Grid.Column="1" 
-                        Content="刷新" 
+                <Button Grid.Column="1"
+                        Content="刷新"
                         Command="{Binding RefreshCommand}"
                         Style="{DynamicResource SecondaryButtonStyle}"
                         Width="80"
@@ -75,7 +107,7 @@
             </Grid>
         </layout:IconHeaderGroupBox>
 
-        <layout:IconHeaderGroupBox Grid.Row="1" Icon="🎁" Title="套餐权益" Margin="0,0,0,5">
+        <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Gift}" Title="套餐权益" Margin="0,0,0,5">
             <Grid Margin="10">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*"/>
@@ -83,21 +115,21 @@
                     <ColumnDefinition Width="*"/>
                 </Grid.ColumnDefinitions>
 
-                <Border Grid.Column="0" 
-                        BorderBrush="{DynamicResource BorderBrush}" 
-                        BorderThickness="1" 
-                        CornerRadius="8" 
+                <Border Grid.Column="0"
+                        BorderBrush="{DynamicResource GlassBorderBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
                         Padding="16"
                         Margin="0,0,8,0">
                     <StackPanel>
-                        <TextBlock Text="免费版" 
-                                   FontSize="16" 
+                        <TextBlock Text="免费版"
+                                   FontSize="16"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource TextPrimary}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8"/>
-                        <TextBlock Text="¥0" 
-                                   FontSize="24" 
+                        <TextBlock Text="¥0"
+                                   FontSize="24"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource TextSecondary}"
                                    HorizontalAlignment="Center"
@@ -108,21 +140,21 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="1" 
-                        BorderBrush="{DynamicResource PrimaryColor}" 
-                        BorderThickness="2" 
-                        CornerRadius="8" 
+                <Border Grid.Column="1"
+                        BorderBrush="{DynamicResource PrimaryColor}"
+                        BorderThickness="2"
+                        CornerRadius="8"
                         Padding="16"
                         Margin="4,0">
                     <StackPanel>
-                        <TextBlock Text="基础版" 
-                                   FontSize="16" 
+                        <TextBlock Text="基础版"
+                                   FontSize="16"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource PrimaryColor}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8"/>
-                        <TextBlock Text="¥0" 
-                                   FontSize="24" 
+                        <TextBlock Text="¥0"
+                                   FontSize="24"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource PrimaryColor}"
                                    HorizontalAlignment="Center"
@@ -134,21 +166,21 @@
                     </StackPanel>
                 </Border>
 
-                <Border Grid.Column="2" 
-                        BorderBrush="{DynamicResource WarningColor}" 
-                        BorderThickness="2" 
-                        CornerRadius="8" 
+                <Border Grid.Column="2"
+                        BorderBrush="{DynamicResource WarningColor}"
+                        BorderThickness="2"
+                        CornerRadius="8"
                         Padding="16"
                         Margin="8,0,0,0">
                     <StackPanel>
-                        <TextBlock Text="专业版" 
-                                   FontSize="16" 
+                        <TextBlock Text="专业版"
+                                   FontSize="16"
                                    FontWeight="SemiBold"
                                    Foreground="{DynamicResource WarningColor}"
                                    HorizontalAlignment="Center"
                                    Margin="0,0,0,8"/>
-                        <TextBlock Text="¥0" 
-                                   FontSize="24" 
+                        <TextBlock Text="¥0"
+                                   FontSize="24"
                                    FontWeight="Bold"
                                    Foreground="{DynamicResource WarningColor}"
                                    HorizontalAlignment="Center"
@@ -162,7 +194,7 @@
             </Grid>
         </layout:IconHeaderGroupBox>
 
-        <layout:IconHeaderGroupBox Grid.Row="2" Icon="🔑" Title="续费卡密" Margin="0,0,0,5">
+        <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Key}" Title="续费卡密" Margin="0,0,0,5">
             <StackPanel Margin="10">
                 <Grid>
                     <Grid.ColumnDefinitions>
@@ -174,7 +206,7 @@
                              Text="{Binding CardKey, UpdateSourceTrigger=PropertyChanged}"
                              Style="{DynamicResource StandardTextBoxStyle}"
                              FontSize="14"
-                             Height="40"
+                             Height="36"
                              Padding="12,0"
                              VerticalContentAlignment="Center"
                              Margin="0,0,12,0">
@@ -189,24 +221,43 @@
                             IsEnabled="{Binding IsActivating, Converter={StaticResource InverseBoolConverter}, FallbackValue=True}"
                             Style="{DynamicResource PrimaryButtonStyle}"
                             Width="100"
-                            Height="40"/>
+                            Height="36"/>
                 </Grid>
 
-                <TextBlock Text="请输入16-32位卡密，续费后立即生效" 
-                           FontSize="12" 
+                <TextBlock Text="请输入16-32位卡密，续费后立即生效"
+                           FontSize="12"
                            Foreground="{DynamicResource TextTertiary}"
                            Margin="0,8,0,0"/>
             </StackPanel>
         </layout:IconHeaderGroupBox>
 
-        <layout:IconHeaderGroupBox Grid.Row="3" Icon="📋" Title="续费记录" ShowCount="True" Count="{Binding ActivationHistory.Count}" VerticalAlignment="Stretch">
+        <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Clipboard}" Title="续费记录" ShowCount="True" Count="{Binding ActivationHistory.Count}" VerticalAlignment="Stretch">
             <Grid Margin="10">
-                <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <ItemsControl ItemsSource="{Binding ActivationHistory}">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border BorderBrush="{DynamicResource BorderBrush}" 
-                                        BorderThickness="0,0,0,1" 
+                <ListBox ItemsSource="{Binding ActivationHistory}"
+                         BorderThickness="0"
+                         Background="Transparent"
+                         VirtualizingPanel.IsVirtualizing="True"
+                         VirtualizingPanel.VirtualizationMode="Recycling"
+                         ScrollViewer.CanContentScroll="True"
+                         ScrollViewer.VerticalScrollBarVisibility="Auto">
+                    <ListBox.ItemContainerStyle>
+                        <Style TargetType="ListBoxItem">
+                            <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+                            <Setter Property="Padding" Value="0"/>
+                            <Setter Property="Background" Value="Transparent"/>
+                            <Setter Property="Template">
+                                <Setter.Value>
+                                    <ControlTemplate TargetType="ListBoxItem">
+                                        <ContentPresenter HorizontalAlignment="Stretch"/>
+                                    </ControlTemplate>
+                                </Setter.Value>
+                            </Setter>
+                        </Style>
+                    </ListBox.ItemContainerStyle>
+                    <ListBox.ItemTemplate>
+                        <DataTemplate>
+                                <Border BorderBrush="{DynamicResource GlassBorderBrush}"
+                                        BorderThickness="0,0,0,1"
                                         Padding="0,8">
                                     <Grid>
                                         <Grid.ColumnDefinitions>
@@ -215,32 +266,31 @@
                                             <ColumnDefinition Width="Auto"/>
                                         </Grid.ColumnDefinitions>
 
-                                        <TextBlock Grid.Column="0" 
-                                                   Text="{Binding CardKey}" 
+                                        <TextBlock Grid.Column="0"
+                                                   Text="{Binding CardKey}"
                                                    Foreground="{DynamicResource TextPrimary}"
                                                    FontFamily="Consolas"
                                                    VerticalAlignment="Center"/>
 
-                                        <TextBlock Grid.Column="1" 
-                                                   Text="{Binding DurationDays, StringFormat=+{0}天}" 
+                                        <TextBlock Grid.Column="1"
+                                                   Text="{Binding DurationDays, StringFormat=+{0}天}"
                                                    Foreground="{DynamicResource SuccessColor}"
                                                    FontWeight="Medium"
                                                    Margin="0,0,16,0"
                                                    VerticalAlignment="Center"/>
 
-                                        <TextBlock Grid.Column="2" 
-                                                   Text="{Binding ActivatedTime, StringFormat=yyyy-MM-dd HH:mm}" 
+                                        <TextBlock Grid.Column="2"
+                                                   Text="{Binding ActivatedTime, StringFormat=yyyy-MM-dd HH:mm}"
                                                    Foreground="{DynamicResource TextSecondary}"
                                                    FontSize="12"
                                                    VerticalAlignment="Center"/>
                                     </Grid>
                                 </Border>
                             </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-                </ScrollViewer>
+                    </ListBox.ItemTemplate>
+                </ListBox>
 
-                <TextBlock Text="暂无激活记录" 
+                <TextBlock Text="暂无激活记录"
                            Foreground="{DynamicResource TextTertiary}"
                            HorizontalAlignment="Center"
                            VerticalAlignment="Center"

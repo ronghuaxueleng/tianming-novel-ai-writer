@@ -127,7 +127,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                 return "暂无数据";
             }
 
-            var peakHour = hourlyCounts.OrderByDescending(kvp => kvp.Value).First().Key;
+            var peakHour = hourlyCounts.MaxBy(kvp => kvp.Value).Key;
             return $"{peakHour:D2}:00 - {(peakHour + 1) % 24:D2}:00";
         }
 

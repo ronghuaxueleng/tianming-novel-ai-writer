@@ -1,0 +1,16 @@
+using System.Reflection;
+using System.Windows.Controls;
+
+namespace TM.Framework.SystemSettings.DataBackup
+{
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public partial class DataBackupView : UserControl
+    {
+        public DataBackupView()
+        {
+            InitializeComponent();
+            DataContext = ServiceLocator.Get<DataBackupViewModel>();
+        }
+    }
+}

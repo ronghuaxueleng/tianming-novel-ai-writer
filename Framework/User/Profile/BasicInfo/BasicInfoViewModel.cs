@@ -1,21 +1,20 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Profile.BasicInfo
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class BasicInfoViewModel : INotifyPropertyChanged
     {
         private readonly BasicInfoSettings _settings;
@@ -45,7 +44,7 @@ namespace TM.Framework.User.Profile.BasicInfo
 
         public ObservableCollection<string> CountryList { get; private set; }
 
-        public ObservableCollection<string> ProvinceList { get; private set; }
+        public RangeObservableCollection<string> ProvinceList { get; private set; }
 
         public event PropertyChangedEventHandler? PropertyChanged;
 
@@ -63,17 +62,17 @@ namespace TM.Framework.User.Profile.BasicInfo
             _apiService = apiService;
 
             CountryList = new ObservableCollection<string>(Framework.Common.Helpers.Utility.RegionDataHelper.GetCountries());
-            ProvinceList = new ObservableCollection<string>();
+            ProvinceList = new RangeObservableCollection<string>();
 
             SaveCommand = new Framework.Common.Helpers.MVVM.RelayCommand(SaveProfile);
             ResetCommand = new Framework.Common.Helpers.MVVM.RelayCommand(ResetProfile);
             UploadAvatarCommand = new Framework.Common.Helpers.MVVM.RelayCommand(UploadAvatar);
-            ExportDataCommand = new Framework.Common.Helpers.MVVM.RelayCommand(ExportData);
-            ImportDataCommand = new Framework.Common.Helpers.MVVM.RelayCommand(ImportData);
+            ExportDataCommand = new Framework.Common.Helpers.MVVM.RelayCommand(() => ExportData().SafeFireAndForget(ex => TM.App.Log($"[BasicInfoViewModel] {ex.Message}")));
+            ImportDataCommand = new Framework.Common.Helpers.MVVM.RelayCommand(() => ImportData().SafeFireAndForget(ex => TM.App.Log($"[BasicInfoViewModel] {ex.Message}")));
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-                _settings.LoadSettings();
+                await _settings.LoadDataAsync().ConfigureAwait(false);
                 return () =>
                 {
                     ApplyProfileToUI();
@@ -227,17 +226,17 @@ namespace TM.Framework.User.Profile.BasicInfo
 
         #region 方法
 
-        private void LoadProfile()
+        private async System.Threading.Tasks.Task LoadProfileAsync()
         {
             try
             {
-                _settings.LoadSettings();
+                await _settings.LoadDataAsync().ConfigureAwait(true);
                 ApplyProfileToUI();
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfo] 加载用户资料失败: {ex.Message}");
-                StandardDialog.ShowError($"加载用户资料失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"加载用户资料失败\n\n错误详情：{ex.Message}", "加载失败");
             }
         }
 
@@ -285,7 +284,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                 _settings.City = City;
                 _settings.AvatarPath = AvatarPath;
 
-                _settings.SaveSettings();
+                _ = _settings.SaveDataAsync();
 
                 _userContext.Refresh();
 
@@ -297,7 +296,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfo] 保存用户资料失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"保存失败\n\n错误详情：{ex.Message}", "保存失败");
             }
         }
 
@@ -375,7 +374,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                 }
             }
 
-            _settings.SaveSettings();
+            _ = _settings.SaveDataAsync();
             _userContext.Refresh();
         }
 
@@ -449,12 +448,9 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                 var json = JsonSerializer.Serialize(pending, JsonHelper.Default);
                 var _pSyncPath = GetProfilePendingSyncFilePath();
-                await Task.Run(() =>
-                {
-                    var tmpBiv = _pSyncPath + ".tmp";
-                    File.WriteAllText(tmpBiv, json);
-                    File.Move(tmpBiv, _pSyncPath, overwrite: true);
-                });
+                var tmpBiv = _pSyncPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmpBiv, json);
+                File.Move(tmpBiv, _pSyncPath, overwrite: true);
                 TM.App.Log($"[BasicInfo] 资料同步失败，已写入待同步队列: {errorMsg}");
             }
             catch (Exception ex)
@@ -472,12 +468,8 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                 var path = GetProfilePendingSyncFilePath();
 
-                var json = await Task.Run(() =>
-                {
-                    if (!File.Exists(path)) return (string?)null;
-                    return File.ReadAllText(path);
-                });
-                if (json == null) return;
+                if (!File.Exists(path)) return;
+                var json = await File.ReadAllTextAsync(path);
 
                 var pending = JsonSerializer.Deserialize<PendingProfileSync>(json);
                 if (pending == null)
@@ -519,7 +511,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             [System.Text.Json.Serialization.JsonPropertyName("UpdatedAt")] public DateTime UpdatedAt { get; set; }
         }
 
-        private void ResetProfile()
+        private async void ResetProfile()
         {
             var result = StandardDialog.ShowConfirm(
                 "确定要重置吗？\n\n未保存的修改将丢失！",
@@ -528,13 +520,22 @@ namespace TM.Framework.User.Profile.BasicInfo
 
             if (result)
             {
-                LoadProfile();
-                TM.App.Log("[BasicInfo] 用户资料已重置");
-                GlobalToast.Info("重置完成", "已恢复到保存的数据");
+                try
+                {
+                    await _settings.LoadDataAsync();
+                    ApplyProfileToUI();
+                    TM.App.Log("[BasicInfo] 用户资料已重置");
+                    GlobalToast.Info("重置完成", "已恢复到保存的数据");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[BasicInfo] 重置用户资料失败: {ex.Message}");
+                    StandardDialog.ShowError($"重置用户资料失败\n\n错误详情：{ex.Message}", "重置失败");
+                }
             }
         }
 
-        private void UploadAvatar()
+        private async void UploadAvatar()
         {
             try
             {
@@ -544,13 +545,14 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                 if (result == true && !string.IsNullOrEmpty(dialog.SelectedAvatarPath))
                 {
-                    string avatarPath = _profileService.SaveAvatar(dialog.SelectedAvatarPath);
+                    string avatarPath = await _profileService.SaveAvatarAsync(dialog.SelectedAvatarPath)
+                        .ConfigureAwait(true);
 
                     if (!string.IsNullOrEmpty(avatarPath))
                     {
                         AvatarPath = avatarPath;
                         _settings.AvatarPath = avatarPath;
-                        _settings.SaveSettings();
+                        _ = _settings.SaveDataAsync();
 
                         _userContext.Refresh();
 
@@ -566,11 +568,11 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfo] 上传头像失败: {ex.Message}");
-                StandardDialog.ShowError($"上传头像失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"上传头像失败\n\n错误详情：{ex.Message}", "上传失败");
             }
         }
 
-        private async void ExportData()
+        private async Task ExportData()
         {
             try
             {
@@ -599,11 +601,11 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfo] 导出资料失败: {ex.Message}");
-                StandardDialog.ShowError($"导出失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"导出失败\n\n错误详情：{ex.Message}", "导出失败");
             }
         }
 
-        private async void ImportData()
+        private async Task ImportData()
         {
             try
             {
@@ -626,7 +628,7 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                         if (success)
                         {
-                            LoadProfile();
+                            await LoadProfileAsync();
 
                             TM.App.Log($"[BasicInfo] 资料导入成功: {openFileDialog.FileName}");
                             GlobalToast.Success("导入成功", "用户资料已导入");
@@ -641,26 +643,23 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[BasicInfo] 导入资料失败: {ex.Message}");
-                StandardDialog.ShowError($"导入失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"导入失败\n\n错误详情：{ex.Message}", "导入失败");
             }
         }
 
         private void UpdateProvinceList()
         {
-            ProvinceList.Clear();
-
             var provinces = Framework.Common.Helpers.Utility.RegionDataHelper.GetProvinces(Country);
-            foreach (var province in provinces)
-            {
-                ProvinceList.Add(province);
-            }
 
-            if (!ProvinceList.Contains(Province))
+            var provinceList = provinces.ToList();
+            var keepProvince = provinceList.Contains(Province);
+
+            ProvinceList.ReplaceAll(provinceList);
+
+            if (!keepProvince)
             {
                 Province = string.Empty;
             }
-
-            OnPropertyChanged(nameof(ProvinceList));
         }
 
         protected void OnPropertyChanged(string propertyName)

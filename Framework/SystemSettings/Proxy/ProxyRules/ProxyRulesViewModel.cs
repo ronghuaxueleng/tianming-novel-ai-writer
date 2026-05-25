@@ -1,25 +1,22 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.SystemSettings.Proxy.Services;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
+using System.Windows.Threading;
 
 namespace TM.Framework.SystemSettings.Proxy.ProxyRules
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ProxyRulesViewModel : INotifyPropertyChanged
     {
         private readonly string _settingsFile;
@@ -29,20 +26,36 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
         private ProxyRule? _selectedRule;
         private readonly ProxyRuleService _ruleService;
 
-        public ObservableCollection<ProxyRule> Rules { get; } = new();
-        public ObservableCollection<RuleType> RuleTypes { get; } = new();
-        public ObservableCollection<ProxyAction> ProxyActions { get; } = new();
+        public RangeObservableCollection<ProxyRule> Rules { get; } = new();
+        public RangeObservableCollection<RuleType> RuleTypes { get; } = new();
+        public RangeObservableCollection<ProxyAction> ProxyActions { get; } = new();
 
-        public ObservableCollection<RuleMatchHistory> MatchHistory { get; } = new();
-        public ObservableCollection<RuleUsageStatistics> Statistics { get; } = new();
-        public ObservableCollection<RuleEffectiveness> Effectiveness { get; } = new();
-        public ObservableCollection<RuleRecommendation> Recommendations { get; } = new();
+        public RangeObservableCollection<RuleMatchHistory> MatchHistory { get; } = new();
+        public RangeObservableCollection<RuleUsageStatistics> Statistics { get; } = new();
+        public RangeObservableCollection<RuleEffectiveness> Effectiveness { get; } = new();
+        public RangeObservableCollection<RuleRecommendation> Recommendations { get; } = new();
         public RuleConflictAnalysis? CurrentConflictAnalysis { get; private set; }
+
+        private DispatcherTimer? _searchFilterTimer;
 
         public string SearchKeyword
         {
             get => _searchKeyword;
-            set { _searchKeyword = value; OnPropertyChanged(nameof(SearchKeyword)); FilterRules(); }
+            set
+            {
+                _searchKeyword = value;
+                OnPropertyChanged(nameof(SearchKeyword));
+                if (_searchFilterTimer == null)
+                {
+                    _searchFilterTimer = new DispatcherTimer(DispatcherPriority.Background)
+                    {
+                        Interval = TimeSpan.FromMilliseconds(250)
+                    };
+                    _searchFilterTimer.Tick += (_, _) => { _searchFilterTimer.Stop(); FilterRules(); };
+                }
+                _searchFilterTimer.Stop();
+                _searchFilterTimer.Start();
+            }
         }
 
         public ProxyRule? SelectedRule
@@ -90,21 +103,15 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             DetectConflictsCommand = new RelayCommand(DetectConflicts);
             GenerateRecommendationsCommand = new RelayCommand(GenerateRecommendations);
             OptimizeRulesCommand = new RelayCommand(OptimizeRules);
-            ExportRuleReportCommand = new RelayCommand(ExportRuleReport);
+            ExportRuleReportCommand = new RelayCommand(() => ExportRuleReport().SafeFireAndForget(ex => TM.App.Log($"[ProxyRulesViewModel] {ex.Message}")));
 
             InitializeEnums();
             AsyncSettingsLoader.LoadOrDefer<ProxyRulesSettings>(_settingsFile, s =>
             {
                 _settings = s;
-                MatchHistory.Clear();
-                foreach (var item in _settings.MatchHistory.OrderByDescending(h => h.Timestamp).Take(100))
-                    MatchHistory.Add(item);
-                Statistics.Clear();
-                foreach (var stat in _settings.UsageStatistics.OrderByDescending(st => st.TotalMatches).Take(20))
-                    Statistics.Add(stat);
-                Effectiveness.Clear();
-                foreach (var eff in _settings.EffectivenessData)
-                    Effectiveness.Add(eff);
+                ReplaceCollection(MatchHistory, _settings.MatchHistory.OrderByDescending(h => h.Timestamp).Take(100));
+                ReplaceCollection(Statistics, _settings.UsageStatistics.OrderByDescending(st => st.TotalMatches).Take(20));
+                ReplaceCollection(Effectiveness, _settings.EffectivenessData);
                 LoadRules();
             }, "ProxyRules");
             TM.App.Log("[ProxyRulesViewModel] 初始化完成");
@@ -112,31 +119,21 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
 
         private void InitializeEnums()
         {
-            foreach (RuleType type in Enum.GetValues(typeof(RuleType)))
-            {
-                RuleTypes.Add(type);
-            }
-
-            foreach (ProxyAction action in Enum.GetValues(typeof(ProxyAction)))
-            {
-                ProxyActions.Add(action);
-            }
+            ReplaceCollection(RuleTypes, Enum.GetValues(typeof(RuleType)).Cast<RuleType>());
+            ReplaceCollection(ProxyActions, Enum.GetValues(typeof(ProxyAction)).Cast<ProxyAction>());
         }
 
         private void LoadRules()
         {
             try
             {
-                Rules.Clear();
                 var rules = _ruleService.GetRules();
-                foreach (var rule in rules)
-                {
-                    Rules.Add(rule);
-                }
+                ReplaceCollection(Rules, rules);
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("加载失败", $"加载规则失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 加载规则失败: {ex.Message}");
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         }
 
@@ -148,15 +145,11 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
                 return;
             }
 
-            Rules.Clear();
             var rules = _ruleService.GetRules()
                 .Where(r => r.Pattern.Contains(_searchKeyword, StringComparison.OrdinalIgnoreCase) ||
                             r.Description.Contains(_searchKeyword, StringComparison.OrdinalIgnoreCase));
 
-            foreach (var rule in rules)
-            {
-                Rules.Add(rule);
-            }
+            ReplaceCollection(Rules, rules);
         }
 
         private void AddRule()
@@ -188,6 +181,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
         private void DeleteRule(ProxyRule? rule)
         {
             if (rule == null) return;
+
+            if (ProxyRuleService.IsBuiltInRule(rule.Id))
+            {
+                GlobalToast.Warning("无法删除", $"规则“{rule.Pattern}”是内置规则，不可删除");
+                return;
+            }
 
             if (StandardDialog.ShowConfirm($"确定要删除规则 '{rule.Pattern}' 吗？", "确认删除"))
             {
@@ -222,7 +221,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             LoadRules();
         }
 
-        private void Import()
+        private async void Import()
         {
             var dialog = new OpenFileDialog
             {
@@ -234,18 +233,19 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             {
                 try
                 {
-                    _ruleService.ImportRules(dialog.FileName, append: true);
+                    await _ruleService.ImportRulesAsync(dialog.FileName, append: true).ConfigureAwait(true);
                     LoadRules();
                     GlobalToast.Success("导入成功", "规则已导入");
                 }
                 catch (Exception ex)
                 {
-                    StandardDialog.ShowError("导入失败", $"导入规则失败: {ex.Message}");
+                    TM.App.Log($"[ProxyRules] 导入规则失败: {ex.Message}");
+                    StandardDialog.ShowError($"导入规则失败\n\n错误详情：{ex.Message}", "导入失败");
                 }
             }
         }
 
-        private void Export()
+        private async void Export()
         {
             var dialog = new SaveFileDialog
             {
@@ -257,12 +257,14 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             {
                 try
                 {
-                    _ruleService.ExportRules(dialog.FileName);
-                    GlobalToast.Success("导出成功", $"已保存到: {dialog.FileName}");
+                    var path = dialog.FileName;
+                    await _ruleService.ExportRulesAsync(path);
+                    GlobalToast.Success("导出成功", $"已保存到: {path}");
                 }
                 catch (Exception ex)
                 {
-                    StandardDialog.ShowError("导出失败", $"导出规则失败: {ex.Message}");
+                    TM.App.Log($"[ProxyRules] 导出规则失败: {ex.Message}");
+                    StandardDialog.ShowError($"导出规则失败\n\n错误详情：{ex.Message}", "导出失败");
                 }
             }
         }
@@ -279,15 +281,17 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             }
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
                 _settings.LastUpdated = DateTime.Now;
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.CnDefault);
-                var tmpPrv = _settingsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpPrv, json);
+                var tmpPrv = _settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpPrv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.CnDefault);
+                }
                 File.Move(tmpPrv, _settingsFile, overwrite: true);
             }
             catch (Exception ex)
@@ -298,7 +302,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
 
         private void ViewMatchHistory()
         {
-            if (!MatchHistory.Any())
+            if (MatchHistory.Count == 0)
             {
                 GlobalToast.Info("无历史记录", "暂无规则匹配历史");
                 return;
@@ -311,8 +315,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
         {
             try
             {
-                Effectiveness.Clear();
-
+                var effectivenessItems = new List<RuleEffectiveness>();
                 var rules = _ruleService.GetRules();
                 foreach (var rule in rules)
                 {
@@ -348,16 +351,19 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
 
                     effectiveness.Summary = $"{effectiveness.Level} - 命中率: {effectiveness.HitRate:F1}%, 准确率: {effectiveness.Accuracy:F1}%";
 
-                    Effectiveness.Add(effectiveness);
+                    effectivenessItems.Add(effectiveness);
                     _settings.EffectivenessData.Add(effectiveness);
                 }
 
-                SaveSettings();
+                ReplaceCollection(Effectiveness, effectivenessItems);
+
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyRulesViewModel] {ex.Message}"));
                 GlobalToast.Success("分析完成", $"已分析 {Effectiveness.Count} 条规则");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("分析失败", $"效果分析失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 效果分析失败: {ex.Message}");
+                GlobalToast.Error("分析失败", $"分析失败：{ex.Message}");
             }
         }
 
@@ -374,57 +380,61 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             return Math.Min(100, score);
         }
 
-        private void DetectConflicts()
+        private async void DetectConflicts()
         {
             try
             {
                 var rules = _ruleService.GetRules().Where(r => r.Enabled).ToList();
-                var conflicts = new List<ConflictingRulePair>();
 
-                for (int i = 0; i < rules.Count - 1; i++)
+                var conflicts = await Task.Run(() =>
                 {
-                    for (int j = i + 1; j < rules.Count; j++)
+                    var result = new List<ConflictingRulePair>();
+                    for (int i = 0; i < rules.Count - 1; i++)
                     {
-                        var rule1 = rules[i];
-                        var rule2 = rules[j];
-
-                        if (IsPatternOverlap(rule1.Pattern, rule2.Pattern))
+                        for (int j = i + 1; j < rules.Count; j++)
                         {
-                            conflicts.Add(new ConflictingRulePair
-                            {
-                                Rule1 = rule1,
-                                Rule2 = rule2,
-                                Type = ConflictType.PatternOverlap,
-                                Severity = ConflictSeverity.Medium,
-                                Reason = "规则模式存在重叠",
-                                Resolution = "考虑合并规则或调整优先级"
-                            });
-                        }
+                            var rule1 = rules[i];
+                            var rule2 = rules[j];
 
-                        if (rule1.Pattern == rule2.Pattern && rule1.Action != rule2.Action)
-                        {
-                            conflicts.Add(new ConflictingRulePair
+                            if (IsPatternOverlap(rule1.Pattern, rule2.Pattern))
                             {
-                                Rule1 = rule1,
-                                Rule2 = rule2,
-                                Type = ConflictType.ActionConflict,
-                                Severity = ConflictSeverity.High,
-                                Reason = "相同模式但动作不同",
-                                Resolution = "删除或禁用其中一条规则"
-                            });
+                                result.Add(new ConflictingRulePair
+                                {
+                                    Rule1 = rule1,
+                                    Rule2 = rule2,
+                                    Type = ConflictType.PatternOverlap,
+                                    Severity = ConflictSeverity.Medium,
+                                    Reason = "规则模式存在重叠",
+                                    Resolution = "考虑合并规则或调整优先级"
+                                });
+                            }
+
+                            if (rule1.Pattern == rule2.Pattern && rule1.Action != rule2.Action)
+                            {
+                                result.Add(new ConflictingRulePair
+                                {
+                                    Rule1 = rule1,
+                                    Rule2 = rule2,
+                                    Type = ConflictType.ActionConflict,
+                                    Severity = ConflictSeverity.High,
+                                    Reason = "相同模式但动作不同",
+                                    Resolution = "删除或禁用其中一条规则"
+                                });
+                            }
                         }
                     }
-                }
+                    return result;
+                });
 
                 CurrentConflictAnalysis = new RuleConflictAnalysis
                 {
                     Conflicts = conflicts,
-                    Summary = conflicts.Any() ? $"发现 {conflicts.Count} 个潜在冲突" : "未发现规则冲突"
+                    Summary = conflicts.Count > 0 ? $"发现 {conflicts.Count} 个潜在冲突" : "未发现规则冲突"
                 };
 
                 OnPropertyChanged(nameof(CurrentConflictAnalysis));
 
-                if (conflicts.Any())
+                if (conflicts.Count > 0)
                 {
                     GlobalToast.Warning("发现冲突", $"检测到 {conflicts.Count} 个规则冲突");
                 }
@@ -435,7 +445,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("检测失败", $"冲突检测失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 冲突检测失败: {ex.Message}");
+                GlobalToast.Error("检测失败", $"检测失败：{ex.Message}");
             }
         }
 
@@ -444,18 +455,17 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             return pattern1.Contains(pattern2) || pattern2.Contains(pattern1);
         }
 
-        private void GenerateRecommendations()
+        private async void GenerateRecommendations()
         {
             try
             {
-                Recommendations.Clear();
-
+                var recommendations = new List<RuleRecommendation>();
                 var rules = _ruleService.GetRules();
 
                 var lowUsageRules = _settings.UsageStatistics.Where(s => s.TotalMatches < 5).ToList();
-                if (lowUsageRules.Any())
+                if (lowUsageRules.Count > 0)
                 {
-                    Recommendations.Add(new RuleRecommendation
+                    recommendations.Add(new RuleRecommendation
                     {
                         Title = "移除低使用规则",
                         Description = $"发现 {lowUsageRules.Count} 条很少使用的规则",
@@ -467,9 +477,9 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
                 }
 
                 var poorRules = Effectiveness.Where(e => e.Level == EffectivenessLevel.Poor).ToList();
-                if (poorRules.Any())
+                if (poorRules.Count > 0)
                 {
-                    Recommendations.Add(new RuleRecommendation
+                    recommendations.Add(new RuleRecommendation
                     {
                         Title = "优化低效规则",
                         Description = $"发现 {poorRules.Count} 条效果较差的规则",
@@ -481,10 +491,11 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
                     });
                 }
 
-                var similarRules = FindSimilarRules(rules);
+                var rulesCopy = rules.ToList();
+                var similarRules = await Task.Run(() => FindSimilarRules(rulesCopy));
                 if (similarRules > 0)
                 {
-                    Recommendations.Add(new RuleRecommendation
+                    recommendations.Add(new RuleRecommendation
                     {
                         Title = "合并相似规则",
                         Description = "发现多条模式相似的规则可以合并",
@@ -495,12 +506,20 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
                     });
                 }
 
+                ReplaceCollection(Recommendations, recommendations);
+
                 GlobalToast.Success("推荐生成", $"已生成 {Recommendations.Count} 条优化建议");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("生成失败", $"生成推荐失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 生成推荐失败: {ex.Message}");
+                GlobalToast.Error("生成失败", $"生成失败：{ex.Message}");
             }
+        }
+
+        private static void ReplaceCollection<T>(RangeObservableCollection<T> target, IEnumerable<T> items)
+        {
+            target.ReplaceAll(items is IList<T> list ? list : items.ToList());
         }
 
         private int FindSimilarRules(List<ProxyRule> rules)
@@ -523,7 +542,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
         {
             var words1 = pattern1.Split('.');
             var words2 = pattern2.Split('.');
-            int common = words1.Intersect(words2).Count();
+            var set1 = new HashSet<string>(words1);
+            int common = 0;
+            foreach (var w in words2)
+                if (set1.Contains(w)) common++;
             return common > words1.Length / 2 || common > words2.Length / 2;
         }
 
@@ -550,11 +572,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("优化失败", $"规则优化失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 规则优化失败: {ex.Message}");
+                GlobalToast.Error("优化失败", $"优化失败：{ex.Message}");
             }
         }
 
-        private async void ExportRuleReport()
+        private async Task ExportRuleReport()
         {
             try
             {
@@ -584,10 +607,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
                 {
                     var json = JsonSerializer.Serialize(report, JsonHelper.CnDefault);
                     var filePath = dialog.FileName;
-                    await Task.Run(() =>
+                    await Task.Run(async () =>
                     {
                         var tmp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(tmp, json);
+                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
                         File.Move(tmp, filePath, overwrite: true);
                     });
 
@@ -597,7 +620,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("导出失败", $"导出报告失败: {ex.Message}");
+                TM.App.Log($"[ProxyRulesViewModel] 导出报告失败: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
@@ -607,7 +631,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
 
             var rules = _ruleService.GetRules();
 
-            if (rules.Any())
+            if (rules.Count > 0)
             {
                 var enabledRatio = rules.Count(r => r.Enabled) * 100.0 / rules.Count;
                 if (enabledRatio < 50) score -= 20;

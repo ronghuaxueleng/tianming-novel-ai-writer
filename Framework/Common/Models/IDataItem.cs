@@ -10,9 +10,4 @@ namespace TM.Framework.Common.Models
 
         string CategoryId { get; set; }
     }
-
-    public interface ISourceBookBound
-    {
-        string? SourceBookId { get; set; }
-    }
 }

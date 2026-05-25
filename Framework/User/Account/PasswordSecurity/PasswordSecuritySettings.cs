@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
 using TM.Framework.User.Account.PasswordSecurity.Services;
 
 namespace TM.Framework.User.Account.PasswordSecurity
@@ -35,6 +34,9 @@ namespace TM.Framework.User.Account.PasswordSecurity
         private readonly string _passwordHistoryFile;
         private readonly string _twoFactorSecretFile;
         private readonly string _lockoutDataFile;
+        private int? _strengthLevelCache;
+        private volatile AccountLockoutData? _lockoutDataCache;
+        private volatile TwoFactorAuthData? _twoFactorDataCache;
 
         public PasswordSecuritySettings()
         {
@@ -44,50 +46,35 @@ namespace TM.Framework.User.Account.PasswordSecurity
             _passwordHistoryFile = StoragePathHelper.GetFilePath(basePath, subPath, "password_history.json");
             _twoFactorSecretFile = StoragePathHelper.GetFilePath(basePath, subPath, "2fa_secret.json");
             _lockoutDataFile = StoragePathHelper.GetFilePath(basePath, subPath, "lockout_data.json");
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var data = await LoadPasswordDataAsync().ConfigureAwait(false);
+                    _strengthLevelCache = data?.StrengthLevel > 0 ? data.StrengthLevel : (data != null ? 2 : 0);
+                }
+                catch { }
+            });
         }
 
         #region 密码数据持久化
 
-        public PasswordData? LoadPasswordData()
+        public async System.Threading.Tasks.Task<PasswordData?> LoadPasswordDataAsync()
         {
             try
             {
                 if (File.Exists(_passwordHashFile))
                 {
-                    var json = File.ReadAllText(_passwordHashFile);
+                    var json = await File.ReadAllTextAsync(_passwordHashFile).ConfigureAwait(false);
                     return JsonSerializer.Deserialize<PasswordData>(json);
                 }
                 return null;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PasswordSecuritySettings] load err: {ex.Message}");
+                TM.App.Log($"[PasswordSecuritySettings] async load err: {ex.Message}");
                 return null;
-            }
-        }
-
-        public void SavePasswordData(PasswordData data)
-        {
-            try
-            {
-                var directory = Path.GetDirectoryName(_passwordHashFile);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(data, options);
-                var tmpPh = _passwordHashFile + ".tmp";
-                File.WriteAllText(tmpPh, json);
-                File.Move(tmpPh, _passwordHashFile, overwrite: true);
-
-                TM.App.Log("[PasswordSecuritySettings] saved");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[PasswordSecuritySettings] save err: {ex.Message}");
-                throw;
             }
         }
 
@@ -102,10 +89,13 @@ namespace TM.Framework.User.Account.PasswordSecurity
                 }
 
                 var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(data, options);
-                var tmpPhA = _passwordHashFile + ".tmp";
-                await File.WriteAllTextAsync(tmpPhA, json);
+                var tmpPhA = _passwordHashFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpPhA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, data, options);
+                }
                 File.Move(tmpPhA, _passwordHashFile, overwrite: true);
+                _strengthLevelCache = null;
 
                 TM.App.Log("[PasswordSecuritySettings] async saved");
             }
@@ -120,93 +110,71 @@ namespace TM.Framework.User.Account.PasswordSecurity
 
         #region 密码历史持久化
 
-        public List<string> LoadPasswordHistory()
+        public async System.Threading.Tasks.Task<List<string>> LoadPasswordHistoryAsync()
         {
             try
             {
                 if (File.Exists(_passwordHistoryFile))
                 {
-                    var json = File.ReadAllText(_passwordHistoryFile);
+                    var json = await File.ReadAllTextAsync(_passwordHistoryFile).ConfigureAwait(false);
                     return JsonSerializer.Deserialize<List<string>>(json) ?? new List<string>();
                 }
                 return new List<string>();
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PasswordSecuritySettings] history load err: {ex.Message}");
+                TM.App.Log($"[PasswordSecuritySettings] async history load err: {ex.Message}");
                 return new List<string>();
             }
         }
 
-        public void SavePasswordHistory(List<string> history)
+        public async System.Threading.Tasks.Task SavePasswordHistoryAsync(List<string> history)
         {
-            try
-            {
-                var directory = Path.GetDirectoryName(_passwordHistoryFile);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(history, options);
-                var tmpHist = _passwordHistoryFile + ".tmp";
-                File.WriteAllText(tmpHist, json);
-                File.Move(tmpHist, _passwordHistoryFile, overwrite: true);
-
-                TM.App.Log("[PasswordSecuritySettings] history saved");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[PasswordSecuritySettings] history save err: {ex.Message}");
-                throw;
-            }
+            var json = JsonSerializer.Serialize(history, JsonHelper.Default);
+            var tmp = _passwordHistoryFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var target = _passwordHistoryFile;
+            var dir = Path.GetDirectoryName(target);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+            File.Move(tmp, target, overwrite: true);
         }
 
         #endregion
 
         #region 双因素认证持久化
 
-        public TwoFactorAuthData? LoadTwoFactorData()
+        public async System.Threading.Tasks.Task SaveTwoFactorDataAsync(TwoFactorAuthData data)
         {
+            _twoFactorDataCache = data;
+            var json = JsonSerializer.Serialize(data, JsonHelper.Default);
+            var tmp = _twoFactorSecretFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var target = _twoFactorSecretFile;
+            var dir = Path.GetDirectoryName(target);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+            File.Move(tmp, target, overwrite: true);
+        }
+
+        public async System.Threading.Tasks.Task<TwoFactorAuthData?> LoadTwoFactorDataAsync()
+        {
+            var cached = _twoFactorDataCache;
+            if (cached != null) return cached;
+
             try
             {
                 if (File.Exists(_twoFactorSecretFile))
                 {
-                    var json = File.ReadAllText(_twoFactorSecretFile);
-                    return JsonSerializer.Deserialize<TwoFactorAuthData>(json);
+                    var json = await File.ReadAllTextAsync(_twoFactorSecretFile).ConfigureAwait(false);
+                    var data = JsonSerializer.Deserialize<TwoFactorAuthData>(json);
+                    _twoFactorDataCache = data;
+                    return data;
                 }
                 return null;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PasswordSecuritySettings] 加载双因素认证数据失败: {ex.Message}");
+                TM.App.Log($"[PasswordSecuritySettings] 异步加载双因素认证数据失败: {ex.Message}");
                 return null;
-            }
-        }
-
-        public void SaveTwoFactorData(TwoFactorAuthData data)
-        {
-            try
-            {
-                var directory = Path.GetDirectoryName(_twoFactorSecretFile);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(data, options);
-                var tmpTf = _twoFactorSecretFile + ".tmp";
-                File.WriteAllText(tmpTf, json);
-                File.Move(tmpTf, _twoFactorSecretFile, overwrite: true);
-
-                TM.App.Log("[PasswordSecuritySettings] 双因素认证数据已保存");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[PasswordSecuritySettings] 保存双因素认证数据失败: {ex.Message}");
-                throw;
             }
         }
 
@@ -214,47 +182,44 @@ namespace TM.Framework.User.Account.PasswordSecurity
 
         #region 账户锁定持久化
 
-        public AccountLockoutData LoadLockoutData()
+        public async System.Threading.Tasks.Task<AccountLockoutData> LoadLockoutDataAsync()
         {
+            var cached = _lockoutDataCache;
+            if (cached != null)
+                return cached;
+
             try
             {
+                AccountLockoutData data;
                 if (File.Exists(_lockoutDataFile))
                 {
-                    var json = File.ReadAllText(_lockoutDataFile);
-                    return JsonSerializer.Deserialize<AccountLockoutData>(json) ?? new AccountLockoutData();
+                    var json = await File.ReadAllTextAsync(_lockoutDataFile).ConfigureAwait(false);
+                    data = JsonSerializer.Deserialize<AccountLockoutData>(json) ?? new AccountLockoutData();
                 }
-                return new AccountLockoutData();
+                else
+                {
+                    data = new AccountLockoutData();
+                }
+                _lockoutDataCache = data;
+                return data;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[PasswordSecuritySettings] 加载账户锁定数据失败: {ex.Message}");
+                TM.App.Log($"[PasswordSecuritySettings] 异步加载账户锁定数据失败: {ex.Message}");
                 return new AccountLockoutData();
             }
         }
 
-        public void SaveLockoutData(AccountLockoutData data)
+        public async System.Threading.Tasks.Task SaveLockoutDataAsync(AccountLockoutData data)
         {
-            try
-            {
-                var directory = Path.GetDirectoryName(_lockoutDataFile);
-                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
-                {
-                    Directory.CreateDirectory(directory);
-                }
-
-                var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(data, options);
-                var tmpLk = _lockoutDataFile + ".tmp";
-                File.WriteAllText(tmpLk, json);
-                File.Move(tmpLk, _lockoutDataFile, overwrite: true);
-
-                TM.App.Log("[PasswordSecuritySettings] 账户锁定数据已保存");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[PasswordSecuritySettings] 保存账户锁定数据失败: {ex.Message}");
-                throw;
-            }
+            _lockoutDataCache = data;
+            var json = JsonSerializer.Serialize(data, JsonHelper.Default);
+            var tmp = _lockoutDataFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            var target = _lockoutDataFile;
+            var dir = Path.GetDirectoryName(target);
+            if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir)) Directory.CreateDirectory(dir);
+            await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+            File.Move(tmp, target, overwrite: true);
         }
 
         #endregion
@@ -265,20 +230,22 @@ namespace TM.Framework.User.Account.PasswordSecurity
         {
             get
             {
-                try
+                if (_strengthLevelCache.HasValue)
+                    return _strengthLevelCache.Value;
+
+                _ = System.Threading.Tasks.Task.Run(async () =>
                 {
-                    var passwordData = LoadPasswordData();
-                    if (passwordData != null)
+                    try
                     {
-                        return 2;
+                        var data = await LoadPasswordDataAsync().ConfigureAwait(false);
+                        _strengthLevelCache = data?.StrengthLevel > 0 ? data.StrengthLevel : (data != null ? 2 : 0);
                     }
-                    return 0;
-                }
-                catch (Exception ex)
-                {
-                    DebugLogOnce(nameof(CurrentPasswordStrengthLevel), ex);
-                    return 0;
-                }
+                    catch (Exception ex)
+                    {
+                        DebugLogOnce(nameof(CurrentPasswordStrengthLevel), ex);
+                    }
+                });
+                return 0;
             }
         }
 

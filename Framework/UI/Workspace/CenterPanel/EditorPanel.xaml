@@ -3,18 +3,10 @@
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              xmlns:chaptereditor="clr-namespace:TM.Framework.UI.Workspace.CenterPanel.ChapterEditor"
              xmlns:controls="clr-namespace:TM.Framework.UI.Workspace.CenterPanel.Controls">
-    <UserControl.Resources>
-        <ResourceDictionary>
-            <ResourceDictionary.MergedDictionaries>
-                <ResourceDictionary Source="../../Windows/Theme.xaml"/>
-                <ResourceDictionary Source="../Common/Resources/ChatStyles.xaml"/>
-            </ResourceDictionary.MergedDictionaries>
-        </ResourceDictionary>
-    </UserControl.Resources>
 
-    <Border Background="{DynamicResource ContentHighlight}"
-            BorderBrush="{DynamicResource WindowBorder}"
-            BorderThickness="{StaticResource StandardBorder}"
+    <Border Background="Transparent"
+            BorderBrush="Transparent"
+            BorderThickness="0"
             CornerRadius="{StaticResource SmallRadius}"
             ClipToBounds="True">
         <Grid>
@@ -24,31 +16,35 @@
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0"
-                    Background="{DynamicResource UnifiedBackground}"
-                    BorderBrush="{DynamicResource BorderBrush}"
-                    BorderThickness="0,0,0,1"
-                    CornerRadius="{StaticResource SmallRadius}"
+                    Background="{DynamicResource SurfaceGlass}"
+                    BorderBrush="{DynamicResource GlassBorderBrush}"
+                    BorderThickness="1"
+                    CornerRadius="6,6,0,0"
                     Height="30">
                 <chaptereditor:EditorTabBar x:Name="EditorTabBar"/>
             </Border>
 
             <Border Grid.Row="1"
-                    Background="{DynamicResource ContentBackground}"
+                    Background="Transparent"
+                    BorderBrush="{DynamicResource GlassBorderBrush}"
+                    BorderThickness="1,0,1,1"
                     CornerRadius="0,0,6,6"
                     ClipToBounds="True">
                 <Grid>
-                    <chaptereditor:HomepageView x:Name="HomepagePanel" Visibility="Collapsed"/>
 
                     <chaptereditor:DashboardView x:Name="DashboardPanel" Visibility="Collapsed"/>
 
-                    <chaptereditor:ChapterMarkdownEditor x:Name="ChapterEditor" Visibility="Collapsed"/>
+                    <Border Visibility="{Binding Visibility, ElementName=ChapterEditor}" Background="{DynamicResource ContentBackgroundGlass}">
+                        <chaptereditor:ChapterMarkdownEditor x:Name="ChapterEditor" Visibility="Collapsed"/>
+                    </Border>
 
-                    <controls:DiffViewer x:Name="DiffViewerPanel"
-                                         Margin="8"
-                                         Visibility="Collapsed"/>
+                    <Border Visibility="{Binding Visibility, ElementName=DiffViewerPanel}" Background="{DynamicResource ContentBackgroundGlass}" Margin="8" CornerRadius="8">
+                        <controls:DiffViewer x:Name="DiffViewerPanel" Visibility="Collapsed"/>
+                    </Border>
 
-                    <chaptereditor:PlanView x:Name="PlanViewPanel"
-                                            Visibility="Collapsed"/>
+                    <Border Visibility="{Binding Visibility, ElementName=PlanViewPanel}" Background="{DynamicResource ContentBackgroundGlass}">
+                        <chaptereditor:PlanView x:Name="PlanViewPanel" Visibility="Collapsed"/>
+                    </Border>
                 </Grid>
             </Border>
         </Grid>

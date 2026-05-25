@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
 using System.Threading.Tasks;
 using TM.Framework.Common.Helpers.Id;
 using TM.Framework.User.Services;
@@ -30,40 +29,43 @@ namespace TM.Framework.User.Account.LoginHistory
         {
             try
             {
-                var sessionId = ShortIdGenerator.New("D");
-                var ipAddress = IpLocationHelper.GetLocalIpAddress();
-
-                var record = new LoginRecord
+                var (record, data) = await Task.Run(() =>
                 {
-                    Id = ShortIdGenerator.New("D"),
-                    LoginTime = DateTime.Now,
-                    IpAddress = ipAddress,
-                    DeviceType = "Windows PC",
-                    DeviceName = Environment.MachineName,
-                    Location = IpLocationHelper.GetLocation(ipAddress),
-                    Browser = "天命客户端",
-                    OperatingSystem = Environment.OSVersion.ToString(),
-                    IsSuccess = isSuccess,
-                    SessionId = sessionId
-                };
+                    var sessionId = ShortIdGenerator.New("D");
+                    var ipAddress = IpLocationHelper.GetLocalIpAddress();
 
-                var riskAssessment = AssessLoginRisk(record);
-                record.IsAbnormal = riskAssessment.IsAbnormal;
-                record.RiskLevel = riskAssessment.RiskLevel;
-                record.RiskReason = riskAssessment.Reason;
+                    var r = new LoginRecord
+                    {
+                        Id = ShortIdGenerator.New("D"),
+                        LoginTime = DateTime.Now,
+                        IpAddress = ipAddress,
+                        DeviceType = "Windows PC",
+                        DeviceName = Environment.MachineName,
+                        Location = IpLocationHelper.GetLocation(ipAddress),
+                        Browser = "天命客户端",
+                        OperatingSystem = Environment.OSVersion.ToString(),
+                        IsSuccess = isSuccess,
+                        SessionId = sessionId
+                    };
 
-                var data = LoadHistoryData();
-                data.Records.Insert(0, record);
+                    var riskAssessment = AssessLoginRisk(r);
+                    r.IsAbnormal = riskAssessment.IsAbnormal;
+                    r.RiskLevel = riskAssessment.RiskLevel;
+                    r.RiskReason = riskAssessment.Reason;
 
-                if (data.Records.Count > 200)
-                {
-                    data.Records = data.Records.Take(200).ToList();
-                }
+                    var d = LoadHistoryData();
+                    d.Records.Insert(0, r);
 
-                SaveHistoryData(data);
+                    if (d.Records.Count > 200)
+                    {
+                        d.Records = d.Records.Take(200).ToList();
+                    }
+
+                    return (r, d);
+                }).ConfigureAwait(false);
+
+                await _historySettings.SaveRecordsAsync(data).ConfigureAwait(false);
                 TM.App.Log($"[LoginHistoryService] 登录记录已保存: {record.IpAddress} - {record.Location} [风险等级: {record.RiskLevel}]");
-
-                await Task.CompletedTask;
             }
             catch (Exception ex)
             {
@@ -200,14 +202,17 @@ namespace TM.Framework.User.Account.LoginHistory
             TM.App.Log("[LoginHistoryService] 历史记录已清空");
         }
 
-        public string ExportHistory()
+        public async Task<string> ExportHistoryAsync()
         {
             try
             {
                 var exportPath = StoragePathHelper.GetFilePath("Framework", "User/Account/LoginHistory", $"login_history_export_{DateTime.Now:yyyyMMdd_HHmmss}.json");
-                var data = LoadHistoryData();
-                var json = JsonSerializer.Serialize(data, JsonHelper.Default);
-                File.WriteAllText(exportPath, json);
+                await Task.Run(async () =>
+                {
+                    var data = LoadHistoryData();
+                    var json = JsonSerializer.Serialize(data, JsonHelper.Default);
+                    await File.WriteAllTextAsync(exportPath, json).ConfigureAwait(false);
+                }).ConfigureAwait(false);
 
                 TM.App.Log($"[LoginHistoryService] 历史记录已导出: {exportPath}");
                 return exportPath;
@@ -222,7 +227,7 @@ namespace TM.Framework.User.Account.LoginHistory
         private (bool IsAbnormal, LoginRiskLevel RiskLevel, string Reason) AssessLoginRisk(LoginRecord currentRecord)
         {
             var records = GetAllRecords();
-            if (records.Count == 0) 
+            if (records.Count == 0)
                 return (false, LoginRiskLevel.Low, "首次登录");
 
             var reasons = new List<string>();
@@ -287,55 +292,65 @@ namespace TM.Framework.User.Account.LoginHistory
         public LoginStatistics GetStatistics(DateTime? startDate = null, DateTime? endDate = null)
         {
             var records = GetFilteredRecords(startDate, endDate, null);
+            var total = records.Count;
 
-            var stats = new LoginStatistics
+            if (total == 0)
             {
-                TotalLogins = records.Count,
-                SuccessfulLogins = records.Count(r => r.IsSuccess),
-                FailedLogins = records.Count(r => !r.IsSuccess),
-                AbnormalLogins = records.Count(r => r.IsAbnormal),
-                UniqueIPs = records.Select(r => r.IpAddress).Distinct().Count(),
-                UniqueDevices = records.Select(r => r.DeviceName).Distinct().Count()
-            };
+                return new LoginStatistics { SecurityScore = 100 };
+            }
 
-            stats.LocationDistribution = records
-                .GroupBy(r => r.Location)
-                .ToDictionary(g => g.Key, g => g.Count());
+            int successCount = 0, abnormalCount = 0, highRiskCount = 0;
+            var ipSet = new HashSet<string>();
+            var deviceSet = new HashSet<string>();
+            var locationDist = new Dictionary<string, int>();
+            var hourlyDist = new Dictionary<int, int>();
+            var deviceTypeDist = new Dictionary<string, int>();
 
-            stats.HourlyDistribution = records
-                .GroupBy(r => r.LoginTime.Hour)
-                .ToDictionary(g => g.Key, g => g.Count());
+            foreach (var r in records)
+            {
+                if (r.IsSuccess) successCount++;
+                if (r.IsAbnormal) abnormalCount++;
+                if (r.RiskLevel >= LoginRiskLevel.High) highRiskCount++;
 
-            stats.DeviceTypeDistribution = records
-                .GroupBy(r => r.DeviceType)
-                .ToDictionary(g => g.Key, g => g.Count());
+                ipSet.Add(r.IpAddress);
+                deviceSet.Add(r.DeviceName);
 
-            stats.SecurityScore = CalculateSecurityScore(records);
+                if (locationDist.TryGetValue(r.Location, out var lc))
+                    locationDist[r.Location] = lc + 1;
+                else
+                    locationDist[r.Location] = 1;
 
-            return stats;
-        }
+                var hour = r.LoginTime.Hour;
+                if (hourlyDist.TryGetValue(hour, out var hc))
+                    hourlyDist[hour] = hc + 1;
+                else
+                    hourlyDist[hour] = 1;
 
-        private int CalculateSecurityScore(List<LoginRecord> records)
-        {
-            if (records.Count == 0) return 100;
+                if (deviceTypeDist.TryGetValue(r.DeviceType, out var dc))
+                    deviceTypeDist[r.DeviceType] = dc + 1;
+                else
+                    deviceTypeDist[r.DeviceType] = 1;
+            }
 
             int score = 100;
-
-            var abnormalRate = (double)records.Count(r => r.IsAbnormal) / records.Count;
-            score -= (int)(abnormalRate * 30);
-
-            var highRiskCount = records.Count(r => r.RiskLevel >= LoginRiskLevel.High);
+            score -= (int)((double)abnormalCount / total * 30);
             score -= highRiskCount * 5;
+            if (ipSet.Count > total / 2) score -= 15;
+            if (deviceSet.Count > 3) score -= 10;
 
-            var uniqueIPs = records.Select(r => r.IpAddress).Distinct().Count();
-            if (uniqueIPs > records.Count / 2)
-                score -= 15;
-
-            var uniqueDevices = records.Select(r => r.DeviceName).Distinct().Count();
-            if (uniqueDevices > 3)
-                score -= 10;
-
-            return Math.Max(0, Math.Min(100, score));
+            return new LoginStatistics
+            {
+                TotalLogins = total,
+                SuccessfulLogins = successCount,
+                FailedLogins = total - successCount,
+                AbnormalLogins = abnormalCount,
+                UniqueIPs = ipSet.Count,
+                UniqueDevices = deviceSet.Count,
+                LocationDistribution = locationDist,
+                HourlyDistribution = hourlyDist,
+                DeviceTypeDistribution = deviceTypeDist,
+                SecurityScore = Math.Max(0, Math.Min(100, score))
+            };
         }
 
         public List<LoginRecord> GetRiskRecords(LoginRiskLevel minRiskLevel = LoginRiskLevel.Medium)
@@ -347,7 +362,7 @@ namespace TM.Framework.User.Account.LoginHistory
         public List<LoginRecord> GetActiveSessions()
         {
             var records = GetAllRecords();
-            return records.Where(r => r.LogoutTime == null && 
+            return records.Where(r => r.LogoutTime == null &&
                                     (DateTime.Now - r.LoginTime).TotalHours < 24).ToList();
         }
 

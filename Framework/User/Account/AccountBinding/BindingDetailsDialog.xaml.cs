@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Linq;
 using System.Windows;
@@ -8,13 +8,26 @@ using System.Windows.Media;
 namespace TM.Framework.User.Account.AccountBinding
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class BindingDetailsDialog : Window
     {
+        private static readonly SolidColorBrush _noneBg = Freeze(Color.FromRgb(224, 224, 224));
+        private static readonly SolidColorBrush _noneFg = Freeze(Color.FromRgb(97, 97, 97));
+        private static readonly SolidColorBrush _syncingBg = Freeze(Color.FromRgb(255, 243, 224));
+        private static readonly SolidColorBrush _syncingFg = Freeze(Color.FromRgb(230, 126, 34));
+        private static readonly SolidColorBrush _syncedBg = Freeze(Color.FromRgb(232, 245, 233));
+        private static readonly SolidColorBrush _syncedFg = Freeze(Color.FromRgb(46, 125, 50));
+        private static readonly SolidColorBrush _failedBg = Freeze(Color.FromRgb(255, 235, 238));
+        private static readonly SolidColorBrush _failedFg = Freeze(Color.FromRgb(211, 47, 47));
+        private static readonly SolidColorBrush _outdatedBg = Freeze(Color.FromRgb(255, 243, 224));
+        private static readonly SolidColorBrush _outdatedFg = Freeze(Color.FromRgb(245, 124, 0));
+        private static SolidColorBrush Freeze(Color c) { var b = new SolidColorBrush(c); b.Freeze(); return b; }
+
         private readonly ThirdPartyBinding _binding;
         private readonly string _platformName;
-        private readonly string _platformIcon;
+        private readonly ImageSource? _platformIcon;
 
-        public BindingDetailsDialog(ThirdPartyBinding binding, string platformName, string platformIcon)
+        public BindingDetailsDialog(ThirdPartyBinding binding, string platformName, ImageSource? platformIcon)
         {
             InitializeComponent();
 
@@ -28,7 +41,7 @@ namespace TM.Framework.User.Account.AccountBinding
         private void LoadBindingDetails()
         {
             PlatformNameText.Text = $"{_platformName} 绑定详情";
-            PlatformIconText.Text = _platformIcon;
+            PlatformIconImage.Source = _platformIcon;
 
             AccountIdText.Text = _binding.AccountId;
             NicknameText.Text = _binding.Nickname;
@@ -60,29 +73,29 @@ namespace TM.Framework.User.Account.AccountBinding
             switch (_binding.SyncStatus)
             {
                 case SyncStatus.None:
-                    SyncStatusBorder.Background = new SolidColorBrush(Color.FromRgb(224, 224, 224));
+                    SyncStatusBorder.Background = _noneBg;
                     SyncStatusText.Text = "未同步";
-                    SyncStatusText.Foreground = new SolidColorBrush(Color.FromRgb(97, 97, 97));
+                    SyncStatusText.Foreground = _noneFg;
                     break;
                 case SyncStatus.Syncing:
-                    SyncStatusBorder.Background = new SolidColorBrush(Color.FromRgb(255, 243, 224));
+                    SyncStatusBorder.Background = _syncingBg;
                     SyncStatusText.Text = "同步中...";
-                    SyncStatusText.Foreground = new SolidColorBrush(Color.FromRgb(230, 126, 34));
+                    SyncStatusText.Foreground = _syncingFg;
                     break;
                 case SyncStatus.Synced:
-                    SyncStatusBorder.Background = new SolidColorBrush(Color.FromRgb(232, 245, 233));
+                    SyncStatusBorder.Background = _syncedBg;
                     SyncStatusText.Text = "已同步";
-                    SyncStatusText.Foreground = new SolidColorBrush(Color.FromRgb(46, 125, 50));
+                    SyncStatusText.Foreground = _syncedFg;
                     break;
                 case SyncStatus.Failed:
-                    SyncStatusBorder.Background = new SolidColorBrush(Color.FromRgb(255, 235, 238));
+                    SyncStatusBorder.Background = _failedBg;
                     SyncStatusText.Text = "同步失败";
-                    SyncStatusText.Foreground = new SolidColorBrush(Color.FromRgb(211, 47, 47));
+                    SyncStatusText.Foreground = _failedFg;
                     break;
                 case SyncStatus.Outdated:
-                    SyncStatusBorder.Background = new SolidColorBrush(Color.FromRgb(255, 243, 224));
+                    SyncStatusBorder.Background = _outdatedBg;
                     SyncStatusText.Text = "需要更新";
-                    SyncStatusText.Foreground = new SolidColorBrush(Color.FromRgb(245, 124, 0));
+                    SyncStatusText.Foreground = _outdatedFg;
                     break;
             }
         }
@@ -127,7 +140,7 @@ namespace TM.Framework.User.Account.AccountBinding
             catch (Exception ex)
             {
                 TM.App.Log($"[BindingDetailsDialog] 同步失败: {ex.Message}");
-                GlobalToast.Error("数据同步", $"同步异常: {ex.Message}");
+                GlobalToast.Error("数据同步", $"同步失败：{ex.Message}");
             }
         }
 

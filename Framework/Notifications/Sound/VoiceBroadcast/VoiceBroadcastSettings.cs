@@ -1,10 +1,10 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.Notifications.Sound.VoiceBroadcast
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class VoiceBroadcastSettingsData
     {
         [System.Text.Json.Serialization.JsonPropertyName("IsEnabled")] public bool IsEnabled { get; set; } = false;
@@ -18,6 +18,7 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class VoiceBroadcastSettings : BaseSettings<VoiceBroadcastSettings, VoiceBroadcastSettingsData>
     {
         public VoiceBroadcastSettings(IStoragePathHelper storagePathHelper, IObjectFactory objectFactory)
@@ -37,7 +38,10 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
         public bool BroadcastOnError { get => Data.BroadcastOnError; set { Data.BroadcastOnError = value; OnPropertyChanged(); } }
         public bool BroadcastOnSuccess { get => Data.BroadcastOnSuccess; set { Data.BroadcastOnSuccess = value; OnPropertyChanged(); } }
 
-        public void LoadSettings() => LoadData();
+        public void LoadSettings()
+        {
+        }
+        public System.Threading.Tasks.Task LoadSettingsAsync() => LoadDataAsync();
         public void SaveSettings() => SaveData();
     }
 }

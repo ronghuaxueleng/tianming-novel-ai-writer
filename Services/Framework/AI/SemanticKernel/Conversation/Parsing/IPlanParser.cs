@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing

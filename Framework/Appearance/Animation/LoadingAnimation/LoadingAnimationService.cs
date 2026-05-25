@@ -1,25 +1,57 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Effects;
-using TM.Framework.Common.Controls.Dialogs;
 
 namespace TM.Framework.Appearance.Animation.LoadingAnimation
 {
     public class LoadingAnimationService
     {
         private Window? _loadingWindow;
-        private LoadingAnimationSettings _settings;
+        private volatile LoadingAnimationSettings _settings;
+        private int _settingsVersion;
         private DateTime _showStartTime;
         private bool _isShowing;
+        private ProgressBar? _progressBar;
+        private TextBlock? _percentText;
+        private TextBlock? _loadingText;
+        private SolidColorBrush? _cachedOverlayBrush;
+        private SolidColorBrush? _cachedTextBrush;
+        private string? _cachedOverlayColorKey;
+        private string? _cachedTextColorKey;
+        private BlurEffect? _cachedBlurEffect;
+        private int _cachedBlurRadius = -1;
+
+        private SolidColorBrush GetOrCreateBrush(ref SolidColorBrush? cache, ref string? cacheKey, string colorStr)
+        {
+            if (cache != null && cacheKey == colorStr) return cache;
+            var b = new SolidColorBrush((Color)ColorConverter.ConvertFromString(colorStr));
+            b.Freeze();
+            cache = b;
+            cacheKey = colorStr;
+            return b;
+        }
 
         public LoadingAnimationService()
         {
-            _settings = LoadSettings();
+            _settings = new LoadingAnimationSettings();
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                var loadVersion = Volatile.Read(ref _settingsVersion);
+                try
+                {
+                    var loaded = await LoadSettingsAsync().ConfigureAwait(false);
+                    if (loadVersion != Volatile.Read(ref _settingsVersion))
+                        return;
+                    _settings = loaded;
+                }
+                catch (Exception ex) { TM.App.Log($"[LoadingAnimation] 加载设置失败: {ex.Message}"); }
+            });
         }
 
         public void Show(string? message = null, Window? owner = null)
@@ -40,9 +72,17 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
                     {
                         _showStartTime = DateTime.Now;
 
-                        _loadingWindow = CreateLoadingWindow(owner);
-
-                        ApplySettings(_loadingWindow, message);
+                        if (_loadingWindow == null)
+                        {
+                            _loadingWindow = CreateLoadingWindow(owner);
+                            ApplySettings(_loadingWindow, message);
+                        }
+                        else
+                        {
+                            RepositionWindow(_loadingWindow, owner);
+                            if (_loadingText != null)
+                                _loadingText.Text = message ?? _settings.LoadingText;
+                        }
 
                         _loadingWindow.Show();
 
@@ -69,28 +109,19 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
                     {
                         percentage = Math.Max(0, Math.Min(100, percentage));
 
-                        var progressBar = FindChild<ProgressBar>(_loadingWindow, "LoadingProgressBar");
-                        if (progressBar != null)
+                        if (_progressBar != null)
                         {
-                            progressBar.Value = percentage;
+                            _progressBar.Value = percentage;
                         }
 
-                        if (_settings.ShowPercentage)
+                        if (_settings.ShowPercentage && _percentText != null)
                         {
-                            var percentText = FindChild<TextBlock>(_loadingWindow, "PercentageText");
-                            if (percentText != null)
-                            {
-                                percentText.Text = $"{percentage:F1}%";
-                            }
+                            _percentText.Text = $"{percentage:F1}%";
                         }
 
-                        if (!string.IsNullOrEmpty(message))
+                        if (!string.IsNullOrEmpty(message) && _loadingText != null)
                         {
-                            var messageText = FindChild<TextBlock>(_loadingWindow, "LoadingText");
-                            if (messageText != null)
-                            {
-                                messageText.Text = message;
-                            }
+                            _loadingText.Text = message;
                         }
 
                         TM.App.Log($"[LoadingAnimation] 更新进度: {percentage:F1}% - {message}");
@@ -144,16 +175,13 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
                         if (displayDuration < minTime)
                         {
                             var delay = (int)(minTime - displayDuration);
-                            Task.Delay(delay).ContinueWith(_ =>
+                            _ = Task.Delay(delay).ContinueWith(_ =>
                             {
-                                var innerDispatcher = Application.Current?.Dispatcher;
-                                if (innerDispatcher != null)
+                                try
                                 {
-                                    innerDispatcher.BeginInvoke(() =>
-                                    {
-                                        CloseLoadingWindow();
-                                    });
+                                    Application.Current?.Dispatcher.BeginInvoke(() => CloseLoadingWindow());
                                 }
+                                catch (Exception ex) { TM.App.Log($"[LoadingAnimation] 延迟关闭失败: {ex.Message}"); }
                             });
                         }
                         else
@@ -197,7 +225,7 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             }
         }
 
-        private LoadingAnimationSettings LoadSettings()
+        private async System.Threading.Tasks.Task<LoadingAnimationSettings> LoadSettingsAsync()
         {
             try
             {
@@ -209,7 +237,7 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
 
                 if (File.Exists(settingsFile))
                 {
-                    var json = File.ReadAllText(settingsFile);
+                    var json = await File.ReadAllTextAsync(settingsFile).ConfigureAwait(false);
                     var settings = JsonSerializer.Deserialize<LoadingAnimationSettings>(json);
                     if (settings != null)
                     {
@@ -230,8 +258,26 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
 
         public void ReloadSettings()
         {
-            _settings = LoadSettings();
-            TM.App.Log("[LoadingAnimation] 配置已重新加载");
+            var loadVersion = Volatile.Read(ref _settingsVersion);
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    var loaded = await LoadSettingsAsync().ConfigureAwait(false);
+                    if (loadVersion != Volatile.Read(ref _settingsVersion))
+                        return;
+                    _settings = loaded;
+                    TM.App.Log("[LoadingAnimation] 配置已重新加载");
+                }
+                catch (Exception ex) { TM.App.Log($"[LoadingAnimation] 重载失败: {ex.Message}"); }
+            });
+        }
+
+        public void UpdateSettings(LoadingAnimationSettings settings)
+        {
+            Interlocked.Increment(ref _settingsVersion);
+            _settings = settings.Clone();
+            TM.App.Log("[LoadingAnimation] 配置已从内存更新");
         }
 
         private Window CreateLoadingWindow(Window? owner)
@@ -281,22 +327,22 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
 
             if (_settings.Overlay != OverlayMode.None)
             {
+                var overlayBrush = GetOrCreateBrush(ref _cachedOverlayBrush, ref _cachedOverlayColorKey, _settings.OverlayColor);
                 var overlay = new Border
                 {
-                    Background = new SolidColorBrush(
-                        (Color)ColorConverter.ConvertFromString(_settings.OverlayColor)
-                    )
-                    {
-                        Opacity = _settings.OverlayOpacity
-                    }
+                    Background = overlayBrush,
+                    Opacity = _settings.OverlayOpacity
                 };
 
                 if (_settings.Overlay == OverlayMode.Blur)
                 {
-                    overlay.Effect = new BlurEffect
+                    if (_cachedBlurEffect == null || _cachedBlurRadius != _settings.BlurRadius)
                     {
-                        Radius = _settings.BlurRadius
-                    };
+                        _cachedBlurEffect = new BlurEffect { Radius = _settings.BlurRadius };
+                        _cachedBlurEffect.Freeze();
+                        _cachedBlurRadius = _settings.BlurRadius;
+                    }
+                    overlay.Effect = _cachedBlurEffect;
                 }
 
                 grid.Children.Add(overlay);
@@ -308,20 +354,41 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
                 VerticalAlignment = GetVerticalAlignment(_settings.Position)
             };
 
-            var loadingText = new TextBlock
+            _progressBar = new ProgressBar
+            {
+                Minimum = 0,
+                Maximum = 100,
+                Value = 0,
+                Width = _settings.Size * 3,
+                Height = 6,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Visibility = _settings.ShowPercentage ? Visibility.Visible : Visibility.Collapsed
+            };
+            container.Children.Add(_progressBar);
+
+            _percentText = new TextBlock
+            {
+                Text = "0.0%",
+                Foreground = GetOrCreateBrush(ref _cachedTextBrush, ref _cachedTextColorKey, _settings.TextColor),
+                FontSize = _settings.TextSize - 2,
+                HorizontalAlignment = HorizontalAlignment.Center,
+                Margin = new Thickness(0, 4, 0, 0),
+                Visibility = _settings.ShowPercentage ? Visibility.Visible : Visibility.Collapsed
+            };
+            container.Children.Add(_percentText);
+
+            _loadingText = new TextBlock
             {
                 Text = customMessage ?? _settings.LoadingText,
-                Foreground = new SolidColorBrush(
-                    (Color)ColorConverter.ConvertFromString(_settings.TextColor)
-                ),
+                Foreground = GetOrCreateBrush(ref _cachedTextBrush, ref _cachedTextColorKey, _settings.TextColor),
                 FontSize = _settings.TextSize,
                 HorizontalAlignment = HorizontalAlignment.Center,
-                Margin = new Thickness(0, _settings.Size + 10, 0, 0)
+                Margin = new Thickness(0, 4, 0, 0)
             };
 
             if (_settings.ShowText)
             {
-                container.Children.Add(loadingText);
+                container.Children.Add(_loadingText);
             }
 
             grid.Children.Add(container);
@@ -350,14 +417,32 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             };
         }
 
+        private void RepositionWindow(Window window, Window? owner)
+        {
+            StandardDialog.EnsureOwnerAndTopmost(window, owner);
+            var resolvedOwner = window.Owner;
+            if (resolvedOwner != null)
+            {
+                window.WindowStartupLocation = WindowStartupLocation.Manual;
+                window.Left = resolvedOwner.Left;
+                window.Top = resolvedOwner.Top;
+                window.Width = resolvedOwner.ActualWidth > 0 ? resolvedOwner.ActualWidth : resolvedOwner.Width;
+                window.Height = resolvedOwner.ActualHeight > 0 ? resolvedOwner.ActualHeight : resolvedOwner.Height;
+            }
+            else
+            {
+                window.Width = SystemParameters.PrimaryScreenWidth;
+                window.Height = SystemParameters.PrimaryScreenHeight;
+            }
+        }
+
         private void CloseLoadingWindow()
         {
             if (_loadingWindow != null)
             {
-                _loadingWindow.Close();
-                _loadingWindow = null;
+                _loadingWindow.Hide();
                 _isShowing = false;
-                TM.App.Log("[LoadingAnimation] 加载指示器已关闭");
+                TM.App.Log("[LoadingAnimation] 加载指示器已隐藏");
             }
         }
     }

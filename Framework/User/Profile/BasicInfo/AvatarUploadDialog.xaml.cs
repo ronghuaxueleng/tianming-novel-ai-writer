@@ -1,21 +1,27 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.IO;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
-using TM.Framework.Common.Controls;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using Microsoft.Win32;
 
 namespace TM.Framework.User.Profile.BasicInfo
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class AvatarUploadDialog : Window
     {
+        private static readonly SolidColorBrush s_placeholderBg;
+        static AvatarUploadDialog()
+        {
+            s_placeholderBg = new SolidColorBrush(Color.FromArgb(50, 128, 128, 128));
+            s_placeholderBg.Freeze();
+        }
+
         private string _tempAvatarPath = string.Empty;
 
         public string SelectedAvatarPath => _tempAvatarPath;
@@ -36,7 +42,7 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                 using (DrawingContext dc = drawingVisual.RenderOpen())
                 {
-                    dc.DrawRectangle(new SolidColorBrush(Color.FromArgb(50, 128, 128, 128)), null, new Rect(0, 0, 150, 150));
+                    dc.DrawRectangle(s_placeholderBg, null, new Rect(0, 0, 150, 150));
 
                     var formattedText = new FormattedText(
                         "选择头像",
@@ -61,7 +67,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             }
         }
 
-        private void SelectImage_Click(object sender, RoutedEventArgs e)
+        private async void SelectImage_Click(object sender, RoutedEventArgs e)
         {
             try
             {
@@ -73,30 +79,28 @@ namespace TM.Framework.User.Profile.BasicInfo
 
                 if (openFileDialog.ShowDialog() == true)
                 {
-                    LoadImage(openFileDialog.FileName);
+                    await LoadImageAsync(openFileDialog.FileName);
                     _tempAvatarPath = openFileDialog.FileName;
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[AvatarDialog] 选择图片失败: {ex.Message}");
-                StandardDialog.ShowError($"选择图片失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"选择图片失败：{ex.Message}", "选择失败");
             }
         }
 
-        private void PresetAvatar_Click(object sender, RoutedEventArgs e)
+        private async void PresetAvatar_Click(object sender, RoutedEventArgs e)
         {
             try
             {
-                if (sender is Button button && button.Content is Emoji.Wpf.TextBlock emojiBlock)
+                if (sender is Button button && button.Content is Image img && img.Source is ImageSource imageSource)
                 {
-                    string emoji = emojiBlock.Text;
-
-                    string tempPath = CreateEmojiAvatar(emoji);
+                    string tempPath = CreateIconAvatar(imageSource);
 
                     if (!string.IsNullOrEmpty(tempPath))
                     {
-                        LoadImage(tempPath);
+                        await LoadImageAsync(tempPath);
                         _tempAvatarPath = tempPath;
                     }
                 }
@@ -104,11 +108,11 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[AvatarDialog] 选择预设头像失败: {ex.Message}");
-                StandardDialog.ShowError($"选择预设头像失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"选择预设头像失败：{ex.Message}", "选择失败");
             }
         }
 
-        private string CreateEmojiAvatar(string emoji)
+        private string CreateIconAvatar(ImageSource iconSource)
         {
             try
             {
@@ -118,7 +122,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                     Directory.CreateDirectory(tempDir);
                 }
 
-                string tempPath = Path.Combine(tempDir, $"emoji_avatar_{ShortIdGenerator.NewGuid()}.png");
+                string tempPath = Path.Combine(tempDir, $"icon_avatar_{ShortIdGenerator.NewGuid()}.png");
 
                 var renderBitmap = new RenderTargetBitmap(256, 256, 96, 96, PixelFormats.Pbgra32);
                 var drawingVisual = new DrawingVisual();
@@ -127,18 +131,8 @@ namespace TM.Framework.User.Profile.BasicInfo
                 {
                     dc.DrawRectangle(Brushes.White, null, new Rect(0, 0, 256, 256));
 
-                    var formattedText = new FormattedText(
-                        emoji,
-                        System.Globalization.CultureInfo.CurrentCulture,
-                        FlowDirection.LeftToRight,
-                        new Typeface("Segoe UI Emoji"),
-                        180,
-                        Brushes.Black,
-                        VisualTreeHelper.GetDpi(this).PixelsPerDip);
-
-                    dc.DrawText(formattedText, new Point(
-                        (256 - formattedText.Width) / 2,
-                        (256 - formattedText.Height) / 2));
+                    const double padding = 28;
+                    dc.DrawImage(iconSource, new Rect(padding, padding, 256 - padding * 2, 256 - padding * 2));
                 }
 
                 renderBitmap.Render(drawingVisual);
@@ -151,25 +145,30 @@ namespace TM.Framework.User.Profile.BasicInfo
                     encoder.Save(fileStream);
                 }
 
-                TM.App.Log($"[AvatarDialog] Emoji头像创建成功: {tempPath}");
+                TM.App.Log($"[AvatarDialog] 图标头像创建成功: {tempPath}");
                 return tempPath;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[AvatarDialog] 创建Emoji头像失败: {ex.Message}");
+                TM.App.Log($"[AvatarDialog] 创建图标头像失败: {ex.Message}");
                 return string.Empty;
             }
         }
 
-        private void LoadImage(string imagePath)
+        private async Task LoadImageAsync(string imagePath)
         {
             try
             {
-                var bitmap = new BitmapImage();
-                bitmap.BeginInit();
-                bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                bitmap.UriSource = new Uri(imagePath, UriKind.Absolute);
-                bitmap.EndInit();
+                var bitmap = await Task.Run(() =>
+                {
+                    var bmp = new BitmapImage();
+                    bmp.BeginInit();
+                    bmp.CacheOption = BitmapCacheOption.OnLoad;
+                    bmp.UriSource = new Uri(imagePath, UriKind.Absolute);
+                    bmp.EndInit();
+                    bmp.Freeze();
+                    return bmp;
+                });
 
                 PreviewImage.Source = bitmap;
 
@@ -178,7 +177,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             catch (Exception ex)
             {
                 TM.App.Log($"[AvatarDialog] 加载图片失败: {ex.Message}");
-                StandardDialog.ShowError($"加载图片失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"加载图片失败：{ex.Message}", "加载失败");
             }
         }
 

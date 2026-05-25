@@ -5,10 +5,7 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
-using System.Net.NetworkInformation;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using System.Threading.Tasks;
 
 namespace TM.Framework.SystemSettings.Proxy.Services
@@ -43,6 +40,8 @@ namespace TM.Framework.SystemSettings.Proxy.Services
     {
 
         private readonly string _historyFile;
+        private readonly object _historyLock = new();
+        private readonly System.Threading.SemaphoreSlim _historySaveLock = new(1, 1);
         private List<ProxyTestResult> _testHistory = new();
 
         private static readonly object _debugLogLock = new();
@@ -66,6 +65,8 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             System.Diagnostics.Debug.WriteLine($"[ProxyTestService] {key}: {ex.Message}");
         }
 
+        private static readonly HttpClient _ipLocationClient = new() { Timeout = TimeSpan.FromSeconds(5) };
+
         private const string TestUrl = "https://www.google.com";
         private const string IPCheckUrl = "https://api.ipify.org?format=json";
         private const string SpeedTestUrl = "https://speed.cloudflare.com/__down?bytes=10000000";
@@ -77,7 +78,7 @@ namespace TM.Framework.SystemSettings.Proxy.Services
         {
             _proxyService = proxyService;
             _historyFile = StoragePathHelper.GetFilePath("Framework", "Network/Proxy", "test_history.json");
-            LoadHistory();
+            _ = Task.Run(LoadHistoryAsync);
         }
 
         public async Task<ProxyTestResult> TestAll(ProxyConfig config)
@@ -98,13 +99,18 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                     return result;
                 }
 
-                var ipResult = await TestIPAddress(config);
+                var ipTask = TestIPAddress(config);
+                var speedTask = TestSpeed(config);
+                var dnsTask = TestDNSLeak(config);
+                await Task.WhenAll(ipTask, speedTask, dnsTask);
+
+                var ipResult = await ipTask;
                 result.ExitIP = ipResult.ExitIP;
                 result.Location = ipResult.Location;
 
-                result.DownloadSpeed = await TestSpeed(config);
+                result.DownloadSpeed = await speedTask;
 
-                result.DNSLeakDetected = await TestDNSLeak(config);
+                result.DNSLeakDetected = await dnsTask;
                 if (result.DNSLeakDetected)
                 {
                     result.Issues.Add("检测到DNS泄漏");
@@ -129,12 +135,16 @@ namespace TM.Framework.SystemSettings.Proxy.Services
 
             try
             {
-                var direct = await GetPublicIpDirectAsync();
+                var directTask = GetPublicIpDirectAsync();
+                var proxiedTask = GetPublicIpViaApplicationProxyAsync();
+                await Task.WhenAll(directTask, proxiedTask);
+
+                var direct = await directTask;
                 result.DirectSuccess = direct.Success;
                 result.DirectIP = direct.Ip;
                 result.DirectError = direct.Error;
 
-                var proxied = await GetPublicIpViaApplicationProxyAsync();
+                var proxied = await proxiedTask;
                 result.ProxySuccess = proxied.Success;
                 result.ProxyIP = proxied.Ip;
                 result.ProxyError = proxied.Error;
@@ -154,12 +164,12 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 else if (result.DirectSuccess && !result.ProxySuccess)
                 {
                     result.IsProxyEffective = false;
-                    result.Summary = $"直连可用（IP={result.DirectIP}），但应用内代理请求失败：{result.ProxyError}";
+                    result.Summary = $"直连可用（IP={result.DirectIP}），但应用内代理请求失败：{(string.IsNullOrWhiteSpace(result.ProxyError) ? "未知原因" : result.ProxyError)}";
                 }
                 else
                 {
                     result.IsProxyEffective = false;
-                    result.Summary = $"直连与代理均失败：直连={result.DirectError}；代理={result.ProxyError}";
+                    result.Summary = $"直连失败：{(string.IsNullOrWhiteSpace(result.DirectError) ? "未知原因" : result.DirectError)}；代理失败：{(string.IsNullOrWhiteSpace(result.ProxyError) ? "未知原因" : result.ProxyError)}";
                 }
 
                 return result;
@@ -266,9 +276,9 @@ namespace TM.Framework.SystemSettings.Proxy.Services
                 var json = await response.Content.ReadAsStringAsync();
                 var ipData = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
 
-                if (ipData != null && ipData.ContainsKey("ip"))
+                if (ipData != null && ipData.TryGetValue("ip", out var exitIp))
                 {
-                    result.ExitIP = ipData["ip"];
+                    result.ExitIP = exitIp;
 
                     result.Location = await GetIPLocation(result.ExitIP);
                 }
@@ -320,15 +330,14 @@ namespace TM.Framework.SystemSettings.Proxy.Services
         {
             try
             {
-                using var client = new HttpClient() { Timeout = TimeSpan.FromSeconds(5) };
-                var response = await client.GetAsync($"https://ipapi.co/{ip}/json/");
+                var response = await _ipLocationClient.GetAsync($"https://ipapi.co/{ip}/json/");
                 var json = await response.Content.ReadAsStringAsync();
                 var data = JsonSerializer.Deserialize<Dictionary<string, object>>(json);
 
                 if (data != null)
                 {
-                    var country = data.ContainsKey("country_name") ? data["country_name"].ToString() : "";
-                    var city = data.ContainsKey("city") ? data["city"].ToString() : "";
+                    var country = data.TryGetValue("country_name", out var countryObj) ? countryObj.ToString() : "";
+                    var city = data.TryGetValue("city", out var cityObj) ? cityObj.ToString() : "";
                     return $"{country} {city}".Trim();
                 }
             }
@@ -410,31 +419,37 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             return handler;
         }
 
-        public List<ProxyTestResult> GetHistory() => new List<ProxyTestResult>(_testHistory);
+        public List<ProxyTestResult> GetHistory()
+        {
+            lock (_historyLock) return new List<ProxyTestResult>(_testHistory);
+        }
 
         private void SaveToHistory(ProxyTestResult result)
         {
-            _testHistory.Insert(0, result);
-
-            while (_testHistory.Count > MaxHistoryRecords)
+            lock (_historyLock)
             {
-                _testHistory.RemoveAt(_testHistory.Count - 1);
+                _testHistory.Insert(0, result);
+
+                while (_testHistory.Count > MaxHistoryRecords)
+                {
+                    _testHistory.RemoveAt(_testHistory.Count - 1);
+                }
             }
 
-            SaveHistory();
+            _ = SaveHistoryAsync();
         }
 
-        private void LoadHistory()
+        private async System.Threading.Tasks.Task LoadHistoryAsync()
         {
             try
             {
                 if (File.Exists(_historyFile))
                 {
-                    var json = File.ReadAllText(_historyFile);
+                    var json = await File.ReadAllTextAsync(_historyFile).ConfigureAwait(false);
                     var history = JsonSerializer.Deserialize<List<ProxyTestResult>>(json);
                     if (history != null)
                     {
-                        _testHistory = history;
+                        lock (_historyLock) _testHistory = history;
                     }
                 }
             }
@@ -444,29 +459,32 @@ namespace TM.Framework.SystemSettings.Proxy.Services
             }
         }
 
-        private void SaveHistory()
-        {
-            try
-            {
-                var json = JsonSerializer.Serialize(_testHistory, JsonHelper.CnDefault);
-                File.WriteAllText(_historyFile, json);
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[ProxyTestService] 保存测试历史失败: {ex.Message}");
-            }
-        }
-
         private async System.Threading.Tasks.Task SaveHistoryAsync()
         {
+            List<ProxyTestResult> snapshot;
+            lock (_historyLock) snapshot = new List<ProxyTestResult>(_testHistory);
+
+            await _historySaveLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var json = JsonSerializer.Serialize(_testHistory, JsonHelper.CnDefault);
-                await File.WriteAllTextAsync(_historyFile, json);
+                var directory = Path.GetDirectoryName(_historyFile);
+                if (!string.IsNullOrEmpty(directory) && !Directory.Exists(directory))
+                    Directory.CreateDirectory(directory);
+
+                var tmp = _historyFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmp))
+                {
+                    await JsonSerializer.SerializeAsync(stream, snapshot, JsonHelper.CnDefault).ConfigureAwait(false);
+                }
+                File.Move(tmp, _historyFile, overwrite: true);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ProxyTestService] 异步保存测试历史失败: {ex.Message}");
+            }
+            finally
+            {
+                _historySaveLock.Release();
             }
         }
     }

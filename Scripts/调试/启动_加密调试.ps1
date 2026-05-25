@@ -1,9 +1,8 @@
-# 天命 - 加密版调试模式（打包+启动）
-param(
-    [switch]$SkipBuild,
-    [string]$Profile = "full"   # full/minimal/no-necrobit/no-string/no-flow/no-resource/naming-only
-)
+﻿# 天命 - 调试模式启动
+# 先用 dotnet run 或 Scripts/编译.bat 构建，再运行此脚本启动 --debug 模式。
+# 原加密打包流程（.NET Reactor + VMProtect）已在开源版中移除。
 
+chcp 65001 > $null
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $Host.UI.RawUI.ForegroundColor = "Green"
 
@@ -15,36 +14,23 @@ try {
 }
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$buildScript = Join-Path (Split-Path -Parent $scriptDir) "加密\Protect-Build.ps1"
-$exePath = "E:\AI\天命\Publish\Portable\天命.exe"
+$projectRoot = Split-Path -Parent (Split-Path -Parent $scriptDir)
+$exePath = Join-Path $projectRoot "Core\App\bin\Debug\net8.0-windows10.0.19041.0\win-x64\天命.exe"
 
 Write-Host "================================================================" -ForegroundColor Green
-Write-Host "            天命 - 加密版调试模式 [$Profile]                    " -ForegroundColor Green
+Write-Host "            天命 - 调试模式启动                                 " -ForegroundColor Green
 Write-Host "================================================================" -ForegroundColor Green
 Write-Host ""
-
-if (-not $SkipBuild) {
-    Write-Host "[1/2] 打包加密版 (Profile=$Profile)..." -ForegroundColor Yellow
-    $proc = Get-Process -Name "天命" -ErrorAction SilentlyContinue
-    if ($proc) { $proc | Stop-Process -Force; Start-Sleep -Seconds 1 }
-    echo 1 | powershell -ExecutionPolicy Bypass -File $buildScript -Profile $Profile
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "[错误] 打包失败" -ForegroundColor Red
-        Read-Host "按Enter键退出"
-        exit 1
-    }
-} else {
-    Write-Host "[跳过] 打包（使用已有版本）" -ForegroundColor Gray
-}
 
 if (-not (Test-Path $exePath)) {
-    Write-Host "[错误] 未找到: $exePath" -ForegroundColor Red
-    Read-Host "按Enter键退出"
-    exit 1
+    Write-Host "[提示] 未找到已构建的可执行文件，尝试使用 dotnet run 启动..." -ForegroundColor Yellow
+    $csproj = Join-Path $projectRoot "Core\App\天命.csproj"
+    Write-Host "[启动] dotnet run --project $csproj -- --debug" -ForegroundColor Green
+    & dotnet run --project $csproj -- --debug
+    exit $LASTEXITCODE
 }
 
-Write-Host ""
-Write-Host "[2/2] 启动加密版 (--debug)..." -ForegroundColor Green
+Write-Host "[启动] 天命.exe --debug" -ForegroundColor Green
 Write-Host "─────────────────────────────────────────" -ForegroundColor Green
 Write-Host ""
 

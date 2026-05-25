@@ -1,11 +1,10 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
 using TM.Framework.UI.Workspace.Services;
 using Microsoft.SemanticKernel;
@@ -16,34 +15,69 @@ namespace TM.Services.Framework.AI.SemanticKernel
     public class SessionManager
     {
 
-        private string _sessionsDir;
+        private volatile string _sessionsDir;
         private string? _currentSessionId;
-        private readonly Dictionary<string, SessionInfo> _sessionIndex = new();
-        private readonly SemaphoreSlim _writeSemaphore = new(1, 1);
+        private readonly ConcurrentDictionary<string, SessionInfo> _sessionIndex = new();
+        private readonly object _indexSwapLock = new();
+        private readonly object _writeQueueLock = new();
+        private Task _writeQueue = Task.CompletedTask;
+
+        public Task InitializationTask { get; }
 
         public SessionManager()
         {
             _sessionsDir = BuildSessionsDir();
-            Directory.CreateDirectory(_sessionsDir);
-            LoadSessionIndex();
-            CleanupEmptySessions();
+
+            InitializationTask = Task.Run(async () =>
+            {
+                try
+                {
+                    Directory.CreateDirectory(_sessionsDir);
+                    await LoadSessionIndexAsync().ConfigureAwait(false);
+                    CleanupEmptySessions();
+                    RestoreLastSessionId();
+                    TM.App.Log($"[SessionManager] 初始化完成，会话目录: {_sessionsDir}，当前会话: {_currentSessionId ?? "(无)"}");
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[SessionManager] 初始化失败: {ex.Message}");
+                }
+            });
 
             StoragePathHelper.CurrentProjectChanged += OnProjectChanged;
-
-            TM.App.Log($"[SessionManager] 初始化完成，会话目录: {_sessionsDir}");
         }
 
         private static string BuildSessionsDir()
             => Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "Sessions");
 
-        private void OnProjectChanged(string oldProject, string newProject)
+        private async void OnProjectChanged(string oldProject, string newProject)
         {
-            _sessionsDir = BuildSessionsDir();
-            Directory.CreateDirectory(_sessionsDir);
-            _sessionIndex.Clear();
-            _currentSessionId = null;
-            LoadSessionIndex();
-            TM.App.Log($"[SessionManager] 项目切换（{oldProject}→{newProject}），会话目录: {_sessionsDir}");
+            try
+            {
+                await System.Threading.Tasks.Task.Run(async () =>
+                {
+                    var newDir = BuildSessionsDir();
+                    Directory.CreateDirectory(newDir);
+
+                    var newIndex = await LoadSessionIndexFromDirAsync(newDir).ConfigureAwait(false);
+
+                    lock (_indexSwapLock)
+                    {
+                        foreach (var key in _sessionIndex.Keys)
+                            _sessionIndex.TryRemove(key, out _);
+                        foreach (var kv in newIndex)
+                            _sessionIndex[kv.Key] = kv.Value;
+                        _sessionsDir = newDir;
+                        _currentSessionId = null;
+                    }
+
+                    TM.App.Log($"[SessionManager] 项目切换（{oldProject}→{newProject}），会话目录: {newDir}");
+                }).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[SessionManager] 项目切换失败: {ex.Message}");
+            }
         }
 
         #region 会话管理
@@ -66,27 +100,14 @@ namespace TM.Services.Framework.AI.SemanticKernel
             SaveSessionIndex();
             SaveMessages(sessionId, Array.Empty<SerializedMessageRecord>());
 
-            TM.App.Log($"[SessionManager] 创建会话: {sessionId}");
+            if (InfoLogDedup.ShouldLog($"SessionManager:Create:{sessionId}"))
+                TM.App.Log($"[SessionManager] 创建会话: {sessionId}");
             return sessionId;
         }
 
         public void ResetCurrentSession()
         {
             _currentSessionId = null;
-        }
-
-        public ChatHistory SwitchSession(string sessionId)
-        {
-            if (!_sessionIndex.ContainsKey(sessionId))
-            {
-                TM.App.Log($"[SessionManager] 会话不存在: {sessionId}");
-                return new ChatHistory();
-            }
-
-            _currentSessionId = sessionId;
-
-            var records = LoadMessages(sessionId);
-            return RebuildChatHistory(records);
         }
 
         public ChatHistory SwitchSessionWithRecords(string sessionId, List<SerializedMessageRecord> records)
@@ -98,6 +119,11 @@ namespace TM.Services.Framework.AI.SemanticKernel
             }
 
             _currentSessionId = sessionId;
+            if (_sessionIndex.TryGetValue(sessionId, out var switchedInfo))
+            {
+                switchedInfo.UpdatedAt = DateTime.Now;
+                SaveSessionIndex();
+            }
             return RebuildChatHistory(records);
         }
 
@@ -126,7 +152,7 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
         public void DeleteSession(string sessionId)
         {
-            if (_sessionIndex.Remove(sessionId))
+            if (_sessionIndex.TryRemove(sessionId, out _))
             {
                 var messagesPath = GetMessagesFilePath(sessionId);
                 if (File.Exists(messagesPath))
@@ -161,7 +187,8 @@ namespace TM.Services.Framework.AI.SemanticKernel
             {
                 info.Mode = mode;
                 SaveSessionIndex();
-                TM.App.Log($"[SessionManager] 更新会话模式: {sessionId} -> {mode}");
+                if (InfoLogDedup.ShouldLog($"SessionManager:Mode:{sessionId}"))
+                    TM.App.Log($"[SessionManager] 更新会话模式: {sessionId} -> {mode}");
             }
         }
 
@@ -192,34 +219,26 @@ namespace TM.Services.Framework.AI.SemanticKernel
                         info.ContextChapterId = CurrentChapterTracker.CurrentChapterId;
                 }
 
-                var msgJson = JsonSerializer.Serialize(list, JsonHelper.Default);
+                var idxSnapshot = _sessionIndex.Values.ToList();
                 var msgPath = GetMessagesFilePath(sessionId);
-                var idxJson = JsonSerializer.Serialize(_sessionIndex.Values.ToList(), JsonHelper.Default);
                 var idxPath = GetIndexFilePath();
                 var count = list.Count;
 
-                _ = Task.Run(async () =>
+                EnqueueWrite(async () =>
                 {
-                    await _writeSemaphore.WaitAsync().ConfigureAwait(false);
-                    try
+                    var msgJson = JsonSerializer.Serialize(list, JsonHelper.Default);
+                    var tmp = msgPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await File.WriteAllTextAsync(tmp, msgJson).ConfigureAwait(false);
+                    File.Move(tmp, msgPath, overwrite: true);
+
+                    var idxJson = JsonSerializer.Serialize(idxSnapshot, JsonHelper.Default);
+                    var idxTmp = idxPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await File.WriteAllTextAsync(idxTmp, idxJson).ConfigureAwait(false);
+                    File.Move(idxTmp, idxPath, overwrite: true);
+
+                    if (InfoLogDedup.ShouldLog($"SessionManager:Save:{sessionId}"))
                     {
-                        var tmp = msgPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(tmp, msgJson);
-                        File.Move(tmp, msgPath, overwrite: true);
-
-                        var idxTmp = idxPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(idxTmp, idxJson);
-                        File.Move(idxTmp, idxPath, overwrite: true);
-
                         TM.App.Log($"[SessionManager] 保存消息: {sessionId}, {count} 条");
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[SessionManager] 保存消息失败: {ex.Message}");
-                    }
-                    finally
-                    {
-                        _writeSemaphore.Release();
                     }
                 });
             }
@@ -229,19 +248,20 @@ namespace TM.Services.Framework.AI.SemanticKernel
             }
         }
 
-        public List<SerializedMessageRecord> LoadMessages(string sessionId)
+        public async Task<List<SerializedMessageRecord>> LoadMessagesAsync(string sessionId)
         {
             var filePath = GetMessagesFilePath(sessionId);
             if (!File.Exists(filePath))
-            {
                 return new List<SerializedMessageRecord>();
-            }
 
             try
             {
-                var json = File.ReadAllText(filePath);
+                var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                 var records = JsonSerializer.Deserialize<List<SerializedMessageRecord>>(json);
-                TM.App.Log($"[SessionManager] 加载消息: {sessionId}, {records?.Count ?? 0} 条");
+                if (InfoLogDedup.ShouldLog($"SessionManager:Load:{sessionId}"))
+                {
+                    TM.App.Log($"[SessionManager] 加载消息: {sessionId}, {records?.Count ?? 0} 条");
+                }
                 return records ?? new List<SerializedMessageRecord>();
             }
             catch (Exception ex)
@@ -249,29 +269,6 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 TM.App.Log($"[SessionManager] 加载消息失败: {ex.Message}");
                 return new List<SerializedMessageRecord>();
             }
-        }
-
-        public async Task<List<SerializedMessageRecord>> LoadMessagesAsync(string sessionId)
-        {
-            var filePath = GetMessagesFilePath(sessionId);
-            if (!File.Exists(filePath))
-                return new List<SerializedMessageRecord>();
-
-            return await Task.Run(() =>
-            {
-                try
-                {
-                    var json = File.ReadAllText(filePath);
-                    var records = JsonSerializer.Deserialize<List<SerializedMessageRecord>>(json);
-                    TM.App.Log($"[SessionManager] 加载消息: {sessionId}, {records?.Count ?? 0} 条");
-                    return records ?? new List<SerializedMessageRecord>();
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[SessionManager] 加载消息失败: {ex.Message}");
-                    return new List<SerializedMessageRecord>();
-                }
-            }).ConfigureAwait(false);
         }
 
         public void SaveCurrentMessages(IEnumerable<SerializedMessageRecord> messages)
@@ -288,16 +285,6 @@ namespace TM.Services.Framework.AI.SemanticKernel
                 : _currentSessionId;
 
             SaveMessages(sessionId, list);
-        }
-
-        public List<SerializedMessageRecord> LoadCurrentMessages()
-        {
-            if (string.IsNullOrEmpty(_currentSessionId))
-            {
-                return new List<SerializedMessageRecord>();
-            }
-
-            return LoadMessages(_currentSessionId);
         }
 
         public ChatHistory RebuildChatHistory(IEnumerable<SerializedMessageRecord> messages)
@@ -331,27 +318,67 @@ namespace TM.Services.Framework.AI.SemanticKernel
             return Path.Combine(_sessionsDir, "_index.json");
         }
 
-        private void LoadSessionIndex()
+        private void EnqueueWrite(Func<Task> writeAction)
         {
-            var indexPath = GetIndexFilePath();
-            if (!File.Exists(indexPath)) return;
+            lock (_writeQueueLock)
+            {
+                _writeQueue = _writeQueue.ContinueWith(async _ =>
+                {
+                    try
+                    {
+                        await writeAction().ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[SessionManager] 写入失败: {ex.Message}");
+                    }
+                }, TaskScheduler.Default).Unwrap();
+            }
+        }
 
+        private static async System.Threading.Tasks.Task<Dictionary<string, SessionInfo>> LoadSessionIndexFromDirAsync(string dir)
+        {
+            var result = new Dictionary<string, SessionInfo>();
+            var indexPath = Path.Combine(dir, "_index.json");
+            if (!File.Exists(indexPath))
+                indexPath = Path.Combine(dir, "session_index.json");
+            if (!File.Exists(indexPath)) return result;
             try
             {
-                var json = File.ReadAllText(indexPath);
-                var sessions = JsonSerializer.Deserialize<List<SessionInfo>>(json);
-
-                if (sessions != null)
+                var json = await File.ReadAllTextAsync(indexPath).ConfigureAwait(false);
+                var trimmed = json.Trim();
+                if (string.IsNullOrEmpty(trimmed) || trimmed == "{}" || trimmed == "null") return result;
+                List<SessionInfo>? sessions = null;
+                if (trimmed.StartsWith('['))
+                    sessions = System.Text.Json.JsonSerializer.Deserialize<List<SessionInfo>>(json, JsonHelper.Default);
+                else if (trimmed.StartsWith('{'))
                 {
-                    foreach (var s in sessions)
-                    {
-                        _sessionIndex[s.Id] = s;
-                    }
+                    var dict = System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, SessionInfo>>(json, JsonHelper.Default);
+                    if (dict != null) sessions = dict.Values.ToList();
                 }
+                if (sessions != null)
+                    foreach (var s in sessions)
+                        if (!string.IsNullOrEmpty(s.Id))
+                            result[s.Id] = s;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[SessionManager] 加载索引失败: {ex.Message}");
+                TM.App.Log($"[SessionManager] LoadSessionIndexFromDirAsync 失败: {ex.Message}");
+            }
+            return result;
+        }
+
+        private void RestoreLastSessionId()
+        {
+            if (_sessionIndex.IsEmpty) return;
+
+            var lastSession = _sessionIndex.Values
+                .OrderByDescending(s => s.UpdatedAt)
+                .FirstOrDefault();
+
+            if (lastSession != null && !string.IsNullOrEmpty(lastSession.Id))
+            {
+                _currentSessionId = lastSession.Id;
             }
         }
 
@@ -362,20 +389,57 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
             try
             {
-                var json = await File.ReadAllTextAsync(indexPath);
-                var sessions = JsonSerializer.Deserialize<List<SessionInfo>>(json);
+                var json = await File.ReadAllTextAsync(indexPath).ConfigureAwait(false);
+                var trimmed = json.Trim();
+
+                if (string.IsNullOrEmpty(trimmed) || trimmed == "{}" || trimmed == "null")
+                {
+                    TM.App.Log($"[SessionManager] 异步：索引文件为空或旧格式，已重置");
+                    var tmpEmpty = indexPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await File.WriteAllTextAsync(tmpEmpty, "[]").ConfigureAwait(false);
+                    File.Move(tmpEmpty, indexPath, overwrite: true);
+                    return;
+                }
+
+                List<SessionInfo>? sessions = null;
+
+                if (trimmed.StartsWith('['))
+                {
+                    sessions = JsonSerializer.Deserialize<List<SessionInfo>>(json, JsonHelper.Default);
+                }
+                else if (trimmed.StartsWith('{'))
+                {
+                    var dict = JsonSerializer.Deserialize<Dictionary<string, SessionInfo>>(json, JsonHelper.Default);
+                    if (dict != null)
+                    {
+                        sessions = dict.Values.ToList();
+                        var migratedJson = JsonSerializer.Serialize(sessions, JsonHelper.Default);
+                        var tmpMigrated = indexPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                        await File.WriteAllTextAsync(tmpMigrated, migratedJson).ConfigureAwait(false);
+                        File.Move(tmpMigrated, indexPath, overwrite: true);
+                        TM.App.Log($"[SessionManager] 异步：旧格式索引已迁移: {sessions.Count} 条");
+                    }
+                }
 
                 if (sessions != null)
                 {
                     foreach (var s in sessions)
                     {
-                        _sessionIndex[s.Id] = s;
+                        if (!string.IsNullOrEmpty(s.Id))
+                            _sessionIndex[s.Id] = s;
                     }
                 }
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[SessionManager] 异步加载索引失败: {ex.Message}");
+                TM.App.Log($"[SessionManager] 异步加载索引失败（已重置）: {ex.Message}");
+                try
+                {
+                    var tmpReset = indexPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await File.WriteAllTextAsync(tmpReset, "[]").ConfigureAwait(false);
+                    File.Move(tmpReset, indexPath, overwrite: true);
+                }
+                catch { }
             }
         }
 
@@ -383,34 +447,32 @@ namespace TM.Services.Framework.AI.SemanticKernel
         {
             _sessionIndex.Clear();
             _currentSessionId = null;
-            LoadSessionIndex();
-            TM.App.Log("[SessionManager] 已重新加载会话索引");
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                try
+                {
+                    await LoadSessionIndexAsync().ConfigureAwait(false);
+                    CleanupEmptySessions();
+                    RestoreLastSessionId();
+                    TM.App.Log($"[SessionManager] 已重新加载会话索引，当前会话: {_currentSessionId ?? "(无)"}");
+                }
+                catch (Exception ex) { TM.App.Log($"[SessionManager] 重新加载索引失败: {ex.Message}"); }
+            });
         }
 
         private void SaveSessionIndex()
         {
             try
             {
-                var json = JsonSerializer.Serialize(_sessionIndex.Values.ToList(), JsonHelper.Default);
+                var snapshot = _sessionIndex.Values.ToList();
                 var path = GetIndexFilePath();
 
-                _ = Task.Run(async () =>
+                EnqueueWrite(async () =>
                 {
-                    await _writeSemaphore.WaitAsync().ConfigureAwait(false);
-                    try
-                    {
-                        var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(tmp, json);
-                        File.Move(tmp, path, overwrite: true);
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[SessionManager] 保存索引失败: {ex.Message}");
-                    }
-                    finally
-                    {
-                        _writeSemaphore.Release();
-                    }
+                    var json = JsonSerializer.Serialize(snapshot, JsonHelper.Default);
+                    var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                    await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                    File.Move(tmp, path, overwrite: true);
                 });
             }
             catch (Exception ex)
@@ -444,8 +506,8 @@ namespace TM.Services.Framework.AI.SemanticKernel
 
                     try
                     {
-                        var json = File.ReadAllText(path);
-                        if (string.IsNullOrWhiteSpace(json) || json.Trim() == "[]")
+                        var fileInfo = new FileInfo(path);
+                        if (fileInfo.Length <= 4)
                         {
                             toDelete.Add(id);
                         }
@@ -487,6 +549,7 @@ namespace TM.Services.Framework.AI.SemanticKernel
         [System.Text.Json.Serialization.JsonPropertyName("Role")] public string Role { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Summary")] public string Summary { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Analysis")] public string? Analysis { get; set; }
+        [System.Text.Json.Serialization.JsonPropertyName("AnalysisKind")] public string? AnalysisKind { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("DurationSeconds")] public double? DurationSeconds { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("ChangesJson")] public string? ChangesJson { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("ChangesDurationSeconds")] public double? ChangesDurationSeconds { get; set; }

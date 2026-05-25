@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Services.Framework.AI.Core;
 
 namespace TM.Services.Framework.AI.Interfaces.AI
@@ -17,7 +17,7 @@ namespace TM.Services.Framework.AI.Interfaces.AI
 
         AIModel? GetModelById(string modelId);
 
-        void ReloadLibrary();
+        System.Threading.Tasks.Task ReloadLibraryAsync();
 
         bool IsCompatibilityFallbackEnabled(string providerId, string modelId);
 

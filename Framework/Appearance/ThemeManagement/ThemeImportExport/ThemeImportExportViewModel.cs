@@ -7,11 +7,11 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ThemeImportExportViewModel : INotifyPropertyChanged
     {
         private string _statusMessage = "";
@@ -51,16 +51,17 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
                 "天命", "导出的主题"
             );
 
-            Directory.CreateDirectory(_exportPath);
-
-            ExportCurrentCommand = new RelayCommand(ExportCurrentTheme);
-            ExportAllCommand = new RelayCommand(ExportAllThemes);
-            ImportThemeCommand = new RelayCommand(ImportTheme);
+            ExportCurrentCommand = new AsyncRelayCommand(ExportCurrentTheme);
+            ExportAllCommand = new AsyncRelayCommand(ExportAllThemes);
+            ImportThemeCommand = new AsyncRelayCommand(ImportTheme);
             OpenExportFolderCommand = new RelayCommand(OpenExportFolder);
             ClearExportListCommand = new RelayCommand(ClearExportList);
 
             AsyncSettingsLoader.RunOrDefer(() =>
             {
+                if (!Directory.Exists(_exportPath))
+                    Directory.CreateDirectory(_exportPath);
+
                 var items = new System.Collections.Generic.List<ExportedThemeItem>();
                 try
                 {
@@ -123,94 +124,77 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
 
         #region 导出功能
 
-        private void ExportCurrentTheme()
+        private async System.Threading.Tasks.Task ExportCurrentTheme()
         {
             try
             {
                 var currentTheme = _themeManager.CurrentTheme;
                 var themeFileName = GetThemeFileName(currentTheme);
 
-                if (string.IsNullOrEmpty(themeFileName))
-                {
-                    ShowError("无法导出当前主题");
-                    return;
-                }
+                if (string.IsNullOrEmpty(themeFileName)) { ShowError("无法导出当前主题"); return; }
 
                 var sourcePath = Path.Combine(_themesPath, themeFileName);
-                if (!File.Exists(sourcePath))
-                {
-                    ShowError($"主题文件不存在：{themeFileName}");
-                    return;
-                }
+                if (!File.Exists(sourcePath)) { ShowError($"主题文件不存在：{themeFileName}"); return; }
 
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 var exportFileName = $"{Path.GetFileNameWithoutExtension(themeFileName)}_{timestamp}.xaml";
                 var exportFilePath = Path.Combine(_exportPath, exportFileName);
 
-                File.Copy(sourcePath, exportFilePath, true);
+                await using var src = File.OpenRead(sourcePath);
+                await using var dst = File.Create(exportFilePath);
+                await src.CopyToAsync(dst).ConfigureAwait(true);
 
                 AddExportedTheme(exportFileName, currentTheme.ToString());
-
                 ShowSuccess($"✓ 已导出主题：{ThemeManager.GetThemeDisplayName(currentTheme)}");
             }
             catch (Exception ex)
             {
+                TM.App.Log($"[ThemeImportExport] 导出当前主题失败: {ex.Message}");
                 ShowError($"导出失败：{ex.Message}");
             }
         }
 
-        private void ExportAllThemes()
+        private async System.Threading.Tasks.Task ExportAllThemes()
         {
             try
             {
-                if (!Directory.Exists(_themesPath))
-                {
-                    ShowError("主题目录不存在");
-                    return;
-                }
-
-                var themeFiles = Directory.GetFiles(_themesPath, "*.xaml");
-                if (themeFiles.Length == 0)
-                {
-                    ShowError("没有找到主题文件");
-                    return;
-                }
+                if (!Directory.Exists(_themesPath)) { ShowError("主题目录不存在"); return; }
 
                 var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss");
                 var exportFolderName = $"所有主题_{timestamp}";
                 var exportFolder = Path.Combine(_exportPath, exportFolderName);
-                Directory.CreateDirectory(exportFolder);
 
-                int successCount = 0;
-                foreach (var themeFile in themeFiles)
+                var exportedNames = new System.Collections.Generic.List<string>();
+                int successCount = await System.Threading.Tasks.Task.Run(() =>
                 {
-                    try
+                    var themeFiles = Directory.GetFiles(_themesPath, "*.xaml");
+                    if (themeFiles.Length == 0) return -1;
+                    Directory.CreateDirectory(exportFolder);
+                    int success = 0;
+                    foreach (var themeFile in themeFiles)
                     {
-                        var fileName = Path.GetFileName(themeFile);
-                        var destPath = Path.Combine(exportFolder, fileName);
-                        File.Copy(themeFile, destPath, true);
-
-                        AddExportedTheme($"{exportFolderName}/{fileName}", "批量导出");
-                        successCount++;
+                        try
+                        {
+                            var fileName = Path.GetFileName(themeFile);
+                            File.Copy(themeFile, Path.Combine(exportFolder, fileName), true);
+                            exportedNames.Add($"{exportFolderName}/{fileName}");
+                            success++;
+                        }
+                        catch (Exception ex) { DebugLogOnce("ExportAllThemes_CopyFile", themeFile, ex); }
                     }
-                    catch (Exception ex)
-                    {
-                        DebugLogOnce("ExportAllThemes_CopyFile", themeFile, ex);
-                    }
-                }
+                    return success;
+                }).ConfigureAwait(true);
+                if (successCount == -1) { ShowError("没有找到主题文件"); return; }
 
-                if (successCount > 0)
-                {
-                    ShowSuccess($"✓ 已导出 {successCount} 个主题到：{exportFolderName}");
-                }
-                else
-                {
-                    ShowError("未能导出任何主题");
-                }
+                foreach (var n in exportedNames) AddExportedTheme(n, "批量导出");
+
+                if (successCount > 0) ShowSuccess($"✓ 已导出 {successCount} 个主题到：{exportFolderName}");
+                else ShowError("未能导出任何主题");
             }
             catch (Exception ex)
             {
-                ShowError($"导出失败：{ex.Message}");
+                TM.App.Log($"[ThemeImportExport] 批量导出主题失败: {ex.Message}");
+                ShowError($"批量导出失败：{ex.Message}");
             }
         }
 
@@ -218,7 +202,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
 
         #region 导入功能
 
-        private void ImportTheme()
+        private async System.Threading.Tasks.Task ImportTheme()
         {
             try
             {
@@ -230,87 +214,75 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
                     InitialDirectory = _exportPath
                 };
 
-                if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0)
-                    return;
+                if (dialog.ShowDialog() != true || dialog.FileNames.Length == 0) return;
 
-                int successCount = 0;
-                int skipCount = 0;
+                var allFiles = dialog.FileNames;
 
-                foreach (var sourceFile in dialog.FileNames)
+                var validFiles = await System.Threading.Tasks.Task.Run(() =>
+                    System.Linq.Enumerable.Where(allFiles, ValidateThemeFile).ToArray()
+                ).ConfigureAwait(true);
+
+                int skipCount = allFiles.Length - validFiles.Length;
+
+                var filesToCopy = new System.Collections.Generic.List<(string src, string dest)>();
+                foreach (var sourceFile in validFiles)
                 {
-                    try
+                    var fileName = Path.GetFileName(sourceFile);
+                    var destPath = Path.Combine(_themesPath, fileName);
+                    if (File.Exists(destPath))
                     {
-                        if (!ValidateThemeFile(sourceFile))
-                        {
-                            skipCount++;
-                            continue;
-                        }
-
-                        var fileName = Path.GetFileName(sourceFile);
-                        var destPath = Path.Combine(_themesPath, fileName);
-
-                        if (File.Exists(destPath))
-                        {
-                            var result = StandardDialog.ShowConfirm(
-                                $"主题 '{fileName}' 已存在，是否覆盖？",
-                                "确认覆盖"
-                            );
-
-                            if (!result)
-                            {
-                                skipCount++;
-                                continue;
-                            }
-                        }
-
-                        File.Copy(sourceFile, destPath, true);
-                        successCount++;
+                        if (!StandardDialog.ShowConfirm($"主题 '{fileName}' 已存在，是否覆盖？", "确认覆盖"))
+                        { skipCount++; continue; }
                     }
-                    catch (Exception ex)
-                    {
-                        DebugLogOnce("ImportTheme_CopyFile", sourceFile, ex);
-                        skipCount++;
-                    }
+                    filesToCopy.Add((sourceFile, destPath));
                 }
+
+                if (filesToCopy.Count == 0) { if (skipCount > 0) ShowError($"导入失败，跳过 {skipCount} 个文件"); return; }
+
+                var successCount = await System.Threading.Tasks.Task.Run(() =>
+                {
+                    int success = 0;
+                    foreach (var (src, dest) in filesToCopy)
+                    {
+                        try { File.Copy(src, dest, true); success++; }
+                        catch (Exception ex) { DebugLogOnce("ImportTheme_CopyFile", src, ex); skipCount++; }
+                    }
+                    return success;
+                }).ConfigureAwait(true);
 
                 if (successCount > 0)
                 {
-                    ShowSuccess($"✓ 已导入 {successCount} 个主题" + 
-                               (skipCount > 0 ? $"，跳过 {skipCount} 个" : ""));
-
-                    StandardDialog.ShowInfo(
-                        "导入完成",
-                        "主题导入成功！\n\n请在\"主题选择\"中刷新列表以查看新主题。"
-                    );
+                    ShowSuccess($"✓ 已导入 {successCount} 个主题" + (skipCount > 0 ? $"，跳过 {skipCount} 个" : ""));
+                    StandardDialog.ShowInfo("导入完成", "主题导入成功！\n\n请在\"主题选择\"中刷新列表以查看新主题。");
                 }
-                else
-                {
-                    ShowError($"导入失败，跳过 {skipCount} 个文件");
-                }
+                else { ShowError($"导入失败，跳过 {skipCount} 个文件"); }
             }
             catch (Exception ex)
             {
+                TM.App.Log($"[ThemeImportExport] 导入主题失败: {ex.Message}");
                 ShowError($"导入失败：{ex.Message}");
             }
         }
 
-        private bool ValidateThemeFile(string filePath)
+        #endregion
+
+        private static bool ValidateThemeFile(string filePath)
         {
             try
             {
-                if (!File.Exists(filePath))
-                    return false;
+                if (!File.Exists(filePath)) return false;
 
-                var content = File.ReadAllText(filePath);
+                var buffer = new char[2048];
+                using var reader = new StreamReader(filePath);
+                var charsRead = reader.Read(buffer, 0, buffer.Length);
+                var header = new string(buffer, 0, charsRead);
 
-                if (!content.Contains("<ResourceDictionary") || 
-                    !content.Contains("xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\""))
-                {
+                if (!header.Contains("<ResourceDictionary") ||
+                    !header.Contains("xmlns=\"http://schemas.microsoft.com/winfx/2006/xaml/presentation\""))
                     return false;
-                }
 
                 var requiredKeys = new[] { "PrimaryColor", "ContentBackground", "TextPrimary" };
-                return requiredKeys.Any(key => content.Contains(key));
+                return requiredKeys.Any(key => header.Contains(key));
             }
             catch (Exception ex)
             {
@@ -318,8 +290,6 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
                 return false;
             }
         }
-
-        #endregion
 
         #region 导出记录管理
 
@@ -354,6 +324,7 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
             }
             catch (Exception ex)
             {
+                TM.App.Log($"[ThemeImportExport] 打开导出目录失败: {ex.Message}");
                 ShowError($"无法打开文件夹：{ex.Message}");
             }
         }
@@ -411,8 +382,8 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeImportExport
 
         private void ShowError(string message)
         {
-            StatusMessage = $"❌ {message}";
-            StandardDialog.ShowError("错误", message);
+            StatusMessage = $"✗ {message}";
+            StandardDialog.ShowError(message, "错误");
         }
 
         #endregion

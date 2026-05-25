@@ -1,28 +1,30 @@
-using System;
+﻿using System;
 using System.Reflection;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
 using System.Windows.Threading;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.Services;
+using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 
 namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class DashboardView : UserControl
     {
+        private static readonly string[] _weekDays = { "周日", "周一", "周二", "周三", "周四", "周五", "周六" };
+
         public event Action<string>? ModuleSelected;
 
         private readonly PanelCommunicationService _comm;
         private readonly GeneratedContentService _contentService;
         private readonly GenerationGate _generationGate;
+        private readonly VolumeDesignService _volumeDesignService;
         private readonly DispatcherTimer _clockTimer;
+        private System.Threading.CancellationTokenSource? _dashboardDebounceCtx;
 
         public DashboardView()
         {
@@ -31,10 +33,11 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             _comm = ServiceLocator.Get<PanelCommunicationService>();
             _contentService = ServiceLocator.Get<GeneratedContentService>();
             _generationGate = ServiceLocator.Get<GenerationGate>();
+            _volumeDesignService = ServiceLocator.Get<VolumeDesignService>();
 
-            LoadAppIcon();
+            TM.Framework.Common.Helpers.UI.AppIconLoader.Load(AppIconBorder, 56, FallbackIconImage, "DashboardView");
 
-            _clockTimer = new DispatcherTimer
+            _clockTimer = new DispatcherTimer(System.Windows.Threading.DispatcherPriority.Background)
             {
                 Interval = TimeSpan.FromSeconds(1)
             };
@@ -46,13 +49,15 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             _ = LoadStatisticsAsync();
 
             _comm.RefreshChapterListRequested += OnRefreshRequested;
+            _volumeDesignService.DataChanged += OnVolumeDesignDataChanged;
 
-            this.Unloaded += (s, e) => 
+            this.Unloaded += (s, e) =>
             {
                 _clockTimer.Stop();
                 _comm.RefreshChapterListRequested -= OnRefreshRequested;
+                _volumeDesignService.DataChanged -= OnVolumeDesignDataChanged;
             };
-            this.Loaded += (s, e) => 
+            this.Loaded += (s, e) =>
             {
                 if (!_clockTimer.IsEnabled)
                     _clockTimer.Start();
@@ -60,16 +65,31 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             };
         }
 
-        private void OnRefreshRequested()
+        private void OnRefreshRequested() => DebounceLoadStatistics();
+
+        private void OnVolumeDesignDataChanged(object? sender, EventArgs e) => DebounceLoadStatistics();
+
+        private void DebounceLoadStatistics()
         {
-            _ = Dispatcher.InvokeAsync(() => _ = LoadStatisticsAsync());
+            _dashboardDebounceCtx?.Cancel();
+            var cts = _dashboardDebounceCtx = new System.Threading.CancellationTokenSource();
+            var token = cts.Token;
+            _ = Dispatcher.InvokeAsync(async () =>
+            {
+                try
+                {
+                    await System.Threading.Tasks.Task.Delay(150, token).ConfigureAwait(true);
+                    if (!token.IsCancellationRequested)
+                        await LoadStatisticsAsync();
+                }
+                catch (OperationCanceledException) { }
+            });
         }
 
         private void UpdateDateTime()
         {
             var now = DateTime.Now;
-            var weekDays = new[] { "周日", "周一", "周二", "周三", "周四", "周五", "周六" };
-            DateText.Text = $"{now:yyyy年M月d日} {weekDays[(int)now.DayOfWeek]}";
+            DateText.Text = $"{now:yyyy年M月d日} {_weekDays[(int)now.DayOfWeek]}";
             TimeText.Text = now.ToString("HH:mm:ss");
 
             var hour = now.Hour;
@@ -90,9 +110,9 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                 var contentService = _contentService;
 
                 var chapters = await contentService.GetGeneratedChaptersAsync();
-                var volumeService = ServiceLocator.Get<TM.Modules.Generate.Elements.VolumeDesign.Services.VolumeDesignService>();
-                await volumeService.InitializeAsync();
-                var volumeDesigns = volumeService.GetAllVolumeDesigns();
+                await _volumeDesignService.InitializeAsync();
+                var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns()
+                    .ToList();
 
                 ChapterCountText.Text = chapters.Count.ToString();
 
@@ -143,52 +163,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                 >= 1000 => $"{number / 1000.0:F1}K",
                 _ => number.ToString()
             };
-        }
-
-        private void LoadAppIcon()
-        {
-            try
-            {
-                var iconPath = StoragePathHelper.GetFrameworkPath("UI/Icons/app.ico");
-                if (!File.Exists(iconPath))
-                {
-                    AppIconBorder.Background = null;
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    FallbackIconTextBlock.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                var decoder = new IconBitmapDecoder(new Uri(iconPath, UriKind.Absolute),
-                    BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-
-                var target = 56;
-                var best = decoder.Frames
-                    .OrderBy(f => Math.Abs(f.PixelWidth - target))
-                    .FirstOrDefault();
-
-                var source = best ?? decoder.Frames.FirstOrDefault();
-                if (source == null)
-                {
-                    AppIconBorder.Background = null;
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    FallbackIconTextBlock.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                var brush = new ImageBrush(source) { Stretch = Stretch.UniformToFill };
-                if (brush.CanFreeze) brush.Freeze();
-
-                AppIconBorder.Background = brush;
-                AppIconBorder.Visibility = Visibility.Visible;
-                FallbackIconTextBlock.Visibility = Visibility.Collapsed;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[DashboardView] 加载应用图标失败: {ex.Message}");
-                AppIconBorder.Background = null;
-                AppIconBorder.Visibility = Visibility.Collapsed;
-                FallbackIconTextBlock.Visibility = Visibility.Visible;
-            }
         }
 
         private void QuickAction_Click(object sender, RoutedEventArgs e)
@@ -244,7 +218,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             catch (Exception ex)
             {
                 TM.App.Log($"[DashboardView] 继续写作失败: {ex.Message}");
-                GlobalToast.Error("打开失败", ex.Message);
+                GlobalToast.Error("打开失败", $"打开失败：{ex.Message}");
             }
         }
     }

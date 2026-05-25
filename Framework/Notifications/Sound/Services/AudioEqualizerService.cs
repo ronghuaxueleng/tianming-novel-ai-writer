@@ -1,16 +1,10 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 
 namespace TM.Framework.Notifications.Sound.Services
 {
     public class AudioEqualizerService
     {
-        private const double BassFrequency = 60;
-        private const double MidBassFrequency = 230;
-        private const double MidFrequency = 910;
-        private const double MidTrebleFrequency = 3600;
-        private const double TrebleFrequency = 14000;
-
         private double _bassGain = 0;
         private double _midBassGain = 0;
         private double _midGain = 0;
@@ -107,9 +101,8 @@ namespace TM.Framework.Notifications.Sound.Services
             return (_bassGain, _midBassGain, _midGain, _midTrebleGain, _trebleGain);
         }
 
-        public Dictionary<string, (double bass, double midBass, double mid, double midTreble, double treble)> GetPresets()
-        {
-            return new Dictionary<string, (double, double, double, double, double)>
+        private static readonly IReadOnlyDictionary<string, (double bass, double midBass, double mid, double midTreble, double treble)> _presets =
+            new Dictionary<string, (double, double, double, double, double)>
             {
                 ["默认"] = (0, 0, 0, 0, 0),
                 ["流行"] = (3, 1, 0, 1, 3),
@@ -121,7 +114,8 @@ namespace TM.Framework.Notifications.Sound.Services
                 ["人声增强"] = (-2, 0, 4, 3, -1),
                 ["柔和"] = (-3, -2, 0, 2, 3)
             };
-        }
+
+        public IReadOnlyDictionary<string, (double bass, double midBass, double mid, double midTreble, double treble)> GetPresets() => _presets;
 
         private void ApplyEqualizer()
         {

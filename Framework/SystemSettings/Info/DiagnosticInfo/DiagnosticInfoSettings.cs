@@ -1,5 +1,3 @@
-using System;
-
 namespace TM.Framework.SystemSettings.Info.DiagnosticInfo
 {
     public class DiagnosticInfoSettings

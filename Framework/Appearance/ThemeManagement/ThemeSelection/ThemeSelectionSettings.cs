@@ -24,26 +24,32 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
         public void AddFavorite(string themeId)
         {
             if (string.IsNullOrEmpty(themeId)) throw new ArgumentNullException(nameof(themeId));
-            lock (_lock) { if (Data.FavoriteIds.Add(themeId)) { SaveData(); TM.App.Log($"[ThemeSelectionSettings] 添加收藏: {themeId}"); } }
+            bool changed;
+            lock (_lock) { changed = Data.FavoriteIds.Add(themeId); }
+            if (changed) { SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}")); TM.App.Log($"[ThemeSelectionSettings] 添加收藏: {themeId}"); }
         }
 
         public void RemoveFavorite(string themeId)
         {
             if (string.IsNullOrEmpty(themeId)) throw new ArgumentNullException(nameof(themeId));
-            lock (_lock) { if (Data.FavoriteIds.Remove(themeId)) { SaveData(); TM.App.Log($"[ThemeSelectionSettings] 移除收藏: {themeId}"); } }
+            bool changed;
+            lock (_lock) { changed = Data.FavoriteIds.Remove(themeId); }
+            if (changed) { SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}")); TM.App.Log($"[ThemeSelectionSettings] 移除收藏: {themeId}"); }
         }
 
         public bool ToggleFavorite(string themeId)
         {
             if (string.IsNullOrEmpty(themeId)) throw new ArgumentNullException(nameof(themeId));
+            bool result;
             lock (_lock)
             {
                 bool isFavorite = Data.FavoriteIds.Contains(themeId);
                 if (isFavorite) Data.FavoriteIds.Remove(themeId); else Data.FavoriteIds.Add(themeId);
-                SaveData();
-                TM.App.Log($"[ThemeSelectionSettings] 切换收藏 {themeId}: {!isFavorite}");
-                return !isFavorite;
+                result = !isFavorite;
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}"));
+            TM.App.Log($"[ThemeSelectionSettings] 切换收藏 {themeId}: {result}");
+            return result;
         }
 
         public bool IsFavorite(string themeId) { lock (_lock) { return Data.FavoriteIds.Contains(themeId); } }
@@ -56,9 +62,9 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                 Data.RecentThemes.RemoveAll(r => r.ThemeId == themeId);
                 Data.RecentThemes.Insert(0, new RecentThemeRecord { ThemeId = themeId, ThemeName = themeName, LastUsedTime = DateTime.Now });
                 if (Data.RecentThemes.Count > 20) Data.RecentThemes = Data.RecentThemes.Take(20).ToList();
-                SaveData();
-                TM.App.Log($"[ThemeSelectionSettings] 记录最近使用: {themeName}");
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}"));
+            TM.App.Log($"[ThemeSelectionSettings] 记录最近使用: {themeName}");
         }
 
         public List<RecentThemeRecord> GetRecentThemes(int count = 10) { lock (_lock) { return Data.RecentThemes.Take(count).ToList(); } }
@@ -71,15 +77,15 @@ namespace TM.Framework.Appearance.ThemeManagement.ThemeSelection
                 Data.SearchHistory.Remove(searchText);
                 Data.SearchHistory.Insert(0, searchText);
                 if (Data.SearchHistory.Count > 50) Data.SearchHistory = Data.SearchHistory.Take(50).ToList();
-                SaveData();
             }
+            SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}"));
         }
 
         public List<string> GetSearchHistory(int count = 10) { lock (_lock) { return Data.SearchHistory.Take(count).ToList(); } }
 
-        public void ClearSearchHistory() { lock (_lock) { Data.SearchHistory.Clear(); SaveData(); TM.App.Log("[ThemeSelectionSettings] 已清空搜索历史"); } }
+        public void ClearSearchHistory() { lock (_lock) { Data.SearchHistory.Clear(); } SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}")); TM.App.Log("[ThemeSelectionSettings] 已清空搜索历史"); }
 
-        public void UpdatePreferences(ThemeSelectionPreferences preferences) { lock (_lock) { Data.Preferences = preferences ?? new ThemeSelectionPreferences(); SaveData(); } }
+        public void UpdatePreferences(ThemeSelectionPreferences preferences) { lock (_lock) { Data.Preferences = preferences ?? new ThemeSelectionPreferences(); } SaveDataAsync().SafeFireAndForget(ex => TM.App.Log($"[ThemeSelectionSettings] 保存失败: {ex.Message}")); }
 
         public ThemeSelectionPreferences GetPreferences() { lock (_lock) { return Data.Preferences; } }
     }

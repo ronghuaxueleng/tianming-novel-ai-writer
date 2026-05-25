@@ -1,11 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace TM.Services.Modules.ProjectData.Models.Guides
 {
     public class OutlineGuide
     {
         [System.Text.Json.Serialization.JsonPropertyName("Module")] public string Module { get; set; } = "OutlineGuide";
-        [System.Text.Json.Serialization.JsonPropertyName("SourceBookId")] public string SourceBookId { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Volumes")] public Dictionary<string, VolumeGuideEntry> Volumes { get; set; } = new();
     }
 

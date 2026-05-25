@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers;
@@ -44,7 +42,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
 
         public static System.Threading.Tasks.Task PrewarmContentGuideCacheAsync()
         {
-            return System.Threading.Tasks.Task.Run(() =>
+            return System.Threading.Tasks.Task.Run(async () =>
             {
                 try
                 {
@@ -69,7 +67,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     var mergedEntries = new Dictionary<string, ContentGuideEntry>();
                     foreach (var shardFile in shardFiles)
                     {
-                        var json = File.ReadAllText(shardFile);
+                        var json = await File.ReadAllTextAsync(shardFile).ConfigureAwait(false);
                         var shard = JsonSerializer.Deserialize<ContentGuide>(json, JsonHelper.Default);
                         if (shard?.Chapters != null)
                             foreach (var (k, v) in shard.Chapters)
@@ -110,9 +108,9 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             });
         }
 
-        public ConversationMessage? TryBuildPlanWithoutModel(string userInput)
+        public async System.Threading.Tasks.Task<ConversationMessage?> TryBuildPlanWithoutModelAsync(string userInput)
         {
-            var guideSteps = BuildPlanFromContentGuide(userInput, out var usedContentGuide, out var noMatch, out var missingNumbers);
+            var (guideSteps, usedContentGuide, noMatch, missingNumbers) = await BuildPlanFromContentGuideAsync(userInput).ConfigureAwait(false);
             if (!usedContentGuide)
                 return null;
 
@@ -133,13 +131,9 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             };
 
             if (usedContentGuide && noMatch)
-            {
-                message.Summary = "⚠️ 未匹配到章节，请检查@续写/章节号是否存在，或重新打包后再试。";
-            }
+                message.Summary = "[提示] 未匹配到章节，请检查@续写/章节号是否存在，或重新打包后再试。";
             else
-            {
                 message.Summary = GenerateSummary(message);
-            }
 
             TM.App.Log($"[PlanModeMapper] 基于打包数据跳过模型调用，直接生成计划");
             return message;
@@ -189,7 +183,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     var missingStr = missingNumbers.Count <= 10
                         ? string.Join("、", missingNumbers.Select(n => $"第{n}章"))
                         : string.Join("、", missingNumbers.Take(10).Select(n => $"第{n}章")) + $" 等共 {missingNumbers.Count} 章";
-                    sb.AppendLine($"⚠️ 注意：{missingStr} 未在打包数据中找到（可能尚未创建章节规划或需要重新打包），已自动跳过。");
+                    sb.AppendLine($"[注意] {missingStr} 未在打包数据中找到（可能尚未创建章节规划或需要重新打包），已自动跳过。");
                 }
             }
 
@@ -217,15 +211,11 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             return Array.Empty<int>();
         }
 
-        private static IReadOnlyList<PlanStep>? BuildPlanFromContentGuide(
-            string userInput,
-            out bool usedContentGuide,
-            out bool noMatch,
-            out IReadOnlyList<int> missingNumbers)
+        private static async System.Threading.Tasks.Task<(IReadOnlyList<PlanStep>? steps, bool usedContentGuide, bool noMatch, IReadOnlyList<int> missingNumbers)> BuildPlanFromContentGuideAsync(string userInput)
         {
-            usedContentGuide = false;
-            noMatch = false;
-            missingNumbers = Array.Empty<int>();
+            bool usedContentGuide = false;
+            bool noMatch = false;
+            IReadOnlyList<int> missingNumbers = Array.Empty<int>();
             try
             {
                 var guidesDir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
@@ -238,7 +228,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     if (!File.Exists(legacy))
                     {
                         TM.App.Log("[PlanModeMapper] content_guide 数据不存在，回退到模型计划");
-                        return null;
+                        return (null, usedContentGuide, noMatch, missingNumbers);
                     }
                     shardFiles = new[] { legacy };
                 }
@@ -257,15 +247,13 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     {
                         noMatch = _lastPlanNoMatch;
                         missingNumbers = _lastPlanMissingNumbers;
-                        return _lastPlanSteps;
+                        return (_lastPlanSteps, usedContentGuide, noMatch, missingNumbers);
                     }
                 }
                 lock (ContentGuideCacheLock)
                 {
                     if (_contentGuideChapterItems != null && _contentGuideWriteUtc == writeUtc)
-                    {
                         chapters = _contentGuideChapterItems;
-                    }
                 }
 
                 if (chapters == null)
@@ -273,7 +261,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     var mergedEntries = new Dictionary<string, ContentGuideEntry>();
                     foreach (var shardFile in shardFiles)
                     {
-                        var json = File.ReadAllText(shardFile);
+                        var json = await File.ReadAllTextAsync(shardFile).ConfigureAwait(false);
                         var shard = JsonSerializer.Deserialize<ContentGuide>(json, JsonHelper.Default);
                         if (shard?.Chapters != null)
                             foreach (var (k, v) in shard.Chapters)
@@ -283,7 +271,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     if (mergedEntries.Count == 0)
                     {
                         TM.App.Log("[PlanModeMapper] content_guide 无章节数据，回退到模型计划");
-                        return null;
+                        return (null, usedContentGuide, noMatch, missingNumbers);
                     }
 
                     chapters = mergedEntries.Values
@@ -292,12 +280,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                             var parsed = ChapterParserHelper.ParseChapterId(entry.ChapterId);
                             var volumeNumber = parsed?.volumeNumber ?? 0;
                             var chapterNumber = ResolveChapterNumber(entry);
-                            return new ChapterPlanItem
-                            {
-                                Entry = entry,
-                                VolumeNumber = volumeNumber,
-                                ChapterNumber = chapterNumber
-                            };
+                            return new ChapterPlanItem { Entry = entry, VolumeNumber = volumeNumber, ChapterNumber = chapterNumber };
                         })
                         .OrderBy(item => item.VolumeNumber > 0 ? 0 : 1)
                         .ThenBy(item => item.VolumeNumber)
@@ -306,12 +289,9 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                         .ThenBy(item => item.Entry.ChapterId)
                         .ToList();
 
-                    lock (ContentGuideCacheLock)
-                    {
-                        _contentGuideChapterItems = chapters;
-                        _contentGuideWriteUtc = writeUtc;
-                    }
+                    lock (ContentGuideCacheLock) { _contentGuideChapterItems = chapters; _contentGuideWriteUtc = writeUtc; }
                 }
+
                 var filtered = ApplyChapterFilter(chapters, userInput);
                 if (filtered.Count == 0)
                 {
@@ -319,13 +299,11 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     noMatch = true;
                     lock (PlanStepsCacheLock)
                     {
-                        _lastPlanInput = userInput;
-                        _lastPlanWriteUtc = writeUtc;
-                        _lastPlanSteps = Array.Empty<PlanStep>();
-                        _lastPlanNoMatch = true;
+                        _lastPlanInput = userInput; _lastPlanWriteUtc = writeUtc;
+                        _lastPlanSteps = Array.Empty<PlanStep>(); _lastPlanNoMatch = true;
                         _lastPlanMissingNumbers = Array.Empty<int>();
                     }
-                    return Array.Empty<PlanStep>();
+                    return (Array.Empty<PlanStep>(), usedContentGuide, noMatch, missingNumbers);
                 }
 
                 var requestedNumbers = ComputeRequestedChapterNumbers(userInput);
@@ -346,33 +324,23 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     var entry = item.Entry;
                     var chapterNumber = item.ChapterNumber;
                     var title = BuildStepTitle(entry, chapterNumber);
-                    var detail = BuildStepDetail(entry, chapterNumber);
-
-                    steps.Add(new PlanStep
-                    {
-                        Index = index++,
-                        Title = title,
-                        Detail = detail,
-                        ChapterNumber = chapterNumber
-                    });
+                    var detail = await BuildStepDetailAsync(entry, chapterNumber).ConfigureAwait(false);
+                    steps.Add(new PlanStep { Index = index++, Title = title, Detail = detail, ChapterNumber = chapterNumber });
                 }
 
                 lock (PlanStepsCacheLock)
                 {
-                    _lastPlanInput = userInput;
-                    _lastPlanWriteUtc = writeUtc;
-                    _lastPlanSteps = steps;
-                    _lastPlanNoMatch = false;
-                    _lastPlanMissingNumbers = missing;
+                    _lastPlanInput = userInput; _lastPlanWriteUtc = writeUtc;
+                    _lastPlanSteps = steps; _lastPlanNoMatch = false; _lastPlanMissingNumbers = missing;
                 }
 
                 TM.App.Log($"[PlanModeMapper] 基于打包数据生成计划步骤：{steps.Count} 章");
-                return steps;
+                return (steps, usedContentGuide, noMatch, missingNumbers);
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[PlanModeMapper] 基于打包数据生成计划失败: {ex.Message}");
-                return null;
+                return (null, usedContentGuide, noMatch, missingNumbers);
             }
         }
 
@@ -432,7 +400,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             return title;
         }
 
-        private static string BuildStepDetail(ContentGuideEntry entry, int chapterNumber)
+        private static async System.Threading.Tasks.Task<string> BuildStepDetailAsync(ContentGuideEntry entry, int chapterNumber)
         {
             var sb = new StringBuilder();
             sb.AppendLine($"    章节ID: {entry.ChapterId}");
@@ -451,7 +419,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     || (entry.ContextIds.PlotRules?.Count ?? 0) > 0;
                 if (hasNames)
                 {
-                    var nameMaps = GetNameMappings();
+                    var nameMaps = await GetNameMappingsAsync().ConfigureAwait(false);
                     AppendNameList(sb, "    涉及角色", entry.ContextIds.Characters, nameMaps.characters);
                     AppendNameList(sb, "    涉及地点", entry.ContextIds.Locations, nameMaps.locations);
                     AppendNameList(sb, "    涉及势力", entry.ContextIds.Factions, nameMaps.factions);
@@ -462,50 +430,15 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             sb.AppendLine();
             sb.AppendLine("章节信息:");
 
-            if (!string.IsNullOrWhiteSpace(entry.Title))
-            {
-                sb.AppendLine($"    章节主题: {entry.Title.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.Summary))
-            {
-                sb.AppendLine($"    摘要: {entry.Summary.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.MainGoal))
-            {
-                sb.AppendLine($"    主目标: {entry.MainGoal.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.WorldInfoDrop))
-            {
-                sb.AppendLine($"    世界信息: {entry.WorldInfoDrop.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.ChapterTheme))
-            {
-                sb.AppendLine($"    主题: {entry.ChapterTheme.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.KeyTurn))
-            {
-                sb.AppendLine($"    关键转折: {entry.KeyTurn.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.CharacterArcProgress))
-            {
-                sb.AppendLine($"    角色弧线进展: {entry.CharacterArcProgress.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.Hook))
-            {
-                sb.AppendLine($"    钩子: {entry.Hook.Trim()}");
-            }
-
-            if (!string.IsNullOrWhiteSpace(entry.Foreshadowing))
-            {
-                sb.AppendLine($"    伏笔: {entry.Foreshadowing.Trim()}");
-            }
+            if (!string.IsNullOrWhiteSpace(entry.Title)) sb.AppendLine($"    章节主题: {entry.Title.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.Summary)) sb.AppendLine($"    摘要: {entry.Summary.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.MainGoal)) sb.AppendLine($"    主目标: {entry.MainGoal.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.WorldInfoDrop)) sb.AppendLine($"    世界信息: {entry.WorldInfoDrop.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.ChapterTheme)) sb.AppendLine($"    主题: {entry.ChapterTheme.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.KeyTurn)) sb.AppendLine($"    关键转折: {entry.KeyTurn.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.CharacterArcProgress)) sb.AppendLine($"    角色弧线进展: {entry.CharacterArcProgress.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.Hook)) sb.AppendLine($"    钉子: {entry.Hook.Trim()}");
+            if (!string.IsNullOrWhiteSpace(entry.Foreshadowing)) sb.AppendLine($"    伏笔: {entry.Foreshadowing.Trim()}");
 
             if (entry.Scenes != null && entry.Scenes.Count > 0)
             {
@@ -516,22 +449,12 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                     var sceneTitle = string.IsNullOrWhiteSpace(scene.Title) ? "" : scene.Title.Trim();
                     var pov = string.IsNullOrWhiteSpace(scene.PovCharacter) ? string.Empty : $" | 视角: {scene.PovCharacter.Trim()}";
                     sb.AppendLine($"    场景{scene.SceneNumber}: {sceneTitle}{pov}");
-
-                    if (!string.IsNullOrWhiteSpace(scene.Purpose))
-                    {
-                        sb.AppendLine($"    目的: {scene.Purpose.Trim()}");
-                    }
-
+                    if (!string.IsNullOrWhiteSpace(scene.Purpose)) sb.AppendLine($"    目的: {scene.Purpose.Trim()}");
                     AppendScenePart(sb, "起", scene.Opening);
                     AppendScenePart(sb, "承", scene.Development);
                     AppendScenePart(sb, "转", scene.Turning);
                     AppendScenePart(sb, "合", scene.Ending);
-
-                    if (!string.IsNullOrWhiteSpace(scene.InfoDrop))
-                    {
-                        sb.AppendLine();
-                        sb.AppendLine($"    信息投放: {scene.InfoDrop.Trim()}");
-                    }
+                    if (!string.IsNullOrWhiteSpace(scene.InfoDrop)) { sb.AppendLine(); sb.AppendLine($"    信息投放: {scene.InfoDrop.Trim()}"); }
                 }
             }
 
@@ -727,101 +650,79 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             sb.AppendLine($"{label}: {string.Join(", ", names)}");
         }
 
-        private static (IReadOnlyDictionary<string, string> characters,
+        private static async System.Threading.Tasks.Task<(IReadOnlyDictionary<string, string> characters,
             IReadOnlyDictionary<string, string> locations,
             IReadOnlyDictionary<string, string> factions,
-            IReadOnlyDictionary<string, string> plotRules) GetNameMappings()
+            IReadOnlyDictionary<string, string> plotRules)> GetNameMappingsAsync()
         {
-            lock (NameMapLock)
+            if (_characterNameMap != null && _locationNameMap != null && _factionNameMap != null && _plotRuleNameMap != null)
+                return (_characterNameMap, _locationNameMap, _factionNameMap, _plotRuleNameMap);
+
+            var charMap = new Dictionary<string, string>();
+            var locMap = new Dictionary<string, string>();
+            var facMap = new Dictionary<string, string>();
+            var plotMap = new Dictionary<string, string>();
+
+            try
             {
-                if (_characterNameMap != null && _locationNameMap != null && _factionNameMap != null && _plotRuleNameMap != null)
+                var elementsPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
+                if (File.Exists(elementsPath))
                 {
-                    return (_characterNameMap, _locationNameMap, _factionNameMap, _plotRuleNameMap);
-                }
-
-                _characterNameMap = new Dictionary<string, string>();
-                _locationNameMap = new Dictionary<string, string>();
-                _factionNameMap = new Dictionary<string, string>();
-                _plotRuleNameMap = new Dictionary<string, string>();
-
-                try
-                {
-                    var elementsPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
-                    if (!File.Exists(elementsPath))
-                    {
-                        return (_characterNameMap, _locationNameMap, _factionNameMap, _plotRuleNameMap);
-                    }
-
-                    var json = File.ReadAllText(elementsPath);
+                    var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
-                    if (!root.TryGetProperty("data", out var data))
+                    if (root.TryGetProperty("data", out var data))
                     {
-                        return (_characterNameMap, _locationNameMap, _factionNameMap, _plotRuleNameMap);
-                    }
-
-                    if (data.TryGetProperty("characterrules", out var charModule) &&
-                        charModule.TryGetProperty("character_rules", out var characters))
-                    {
-                        foreach (var item in characters.EnumerateArray())
-                        {
-                            var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
-                            var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
-                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                        if (data.TryGetProperty("characterrules", out var charModule) &&
+                            charModule.TryGetProperty("character_rules", out var characters))
+                            foreach (var item in characters.EnumerateArray())
                             {
-                                _characterNameMap[id] = name;
+                                var id = item.TryGetProperty("Id", out var idP) ? idP.GetString() : null;
+                                var name = item.TryGetProperty("Name", out var nameP) ? nameP.GetString() : null;
+                                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) charMap[id] = name;
                             }
-                        }
-                    }
-
-                    if (data.TryGetProperty("locationrules", out var locModule) &&
-                        locModule.TryGetProperty("location_rules", out var locations))
-                    {
-                        foreach (var item in locations.EnumerateArray())
-                        {
-                            var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
-                            var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
-                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                        if (data.TryGetProperty("locationrules", out var locModule) &&
+                            locModule.TryGetProperty("location_rules", out var locations))
+                            foreach (var item in locations.EnumerateArray())
                             {
-                                _locationNameMap[id] = name;
+                                var id = item.TryGetProperty("Id", out var idP) ? idP.GetString() : null;
+                                var name = item.TryGetProperty("Name", out var nameP) ? nameP.GetString() : null;
+                                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) locMap[id] = name;
                             }
-                        }
-                    }
-
-                    if (data.TryGetProperty("factionrules", out var facModule) &&
-                        facModule.TryGetProperty("faction_rules", out var factions))
-                    {
-                        foreach (var item in factions.EnumerateArray())
-                        {
-                            var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
-                            var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
-                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                        if (data.TryGetProperty("factionrules", out var facModule) &&
+                            facModule.TryGetProperty("faction_rules", out var factions))
+                            foreach (var item in factions.EnumerateArray())
                             {
-                                _factionNameMap[id] = name;
+                                var id = item.TryGetProperty("Id", out var idP) ? idP.GetString() : null;
+                                var name = item.TryGetProperty("Name", out var nameP) ? nameP.GetString() : null;
+                                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) facMap[id] = name;
                             }
-                        }
-                    }
-
-                    if (data.TryGetProperty("plotrules", out var plotModule) &&
-                        plotModule.TryGetProperty("plot_rules", out var plotRules))
-                    {
-                        foreach (var item in plotRules.EnumerateArray())
-                        {
-                            var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
-                            var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
-                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                        if (data.TryGetProperty("plotrules", out var plotModule) &&
+                            plotModule.TryGetProperty("plot_rules", out var plotRules))
+                            foreach (var item in plotRules.EnumerateArray())
                             {
-                                _plotRuleNameMap[id] = name;
+                                var id = item.TryGetProperty("Id", out var idP) ? idP.GetString() : null;
+                                var name = item.TryGetProperty("Name", out var nameP) ? nameP.GetString() : null;
+                                if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name)) plotMap[id] = name;
                             }
-                        }
                     }
                 }
-                catch (Exception ex)
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[PlanModeMapper] 名称映射加载失败: {ex.Message}");
+            }
+
+            lock (NameMapLock)
+            {
+                if (_characterNameMap == null)
                 {
-                    TM.App.Log($"[PlanModeMapper] 名称映射加载失败: {ex.Message}");
+                    _characterNameMap = charMap;
+                    _locationNameMap = locMap;
+                    _factionNameMap = facMap;
+                    _plotRuleNameMap = plotMap;
                 }
-
-                return (_characterNameMap, _locationNameMap, _factionNameMap, _plotRuleNameMap);
+                return (_characterNameMap, _locationNameMap ?? new(), _factionNameMap ?? new(), _plotRuleNameMap ?? new());
             }
         }
 
@@ -833,31 +734,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             }
         }
 
-        private static string? TryReadMdPreview(string chapterId)
-        {
-            if (string.IsNullOrWhiteSpace(chapterId))
-            {
-                return null;
-            }
-
-            var chapterPath = Path.Combine(StoragePathHelper.GetProjectChaptersPath(), $"{chapterId}.md");
-            if (!File.Exists(chapterPath))
-            {
-                return null;
-            }
-
-            var content = File.ReadAllText(chapterPath);
-            if (string.IsNullOrWhiteSpace(content))
-            {
-                return null;
-            }
-
-            var normalized = content.Replace("\r\n", "\n").Trim();
-            const int maxLength = 300;
-            return normalized.Length <= maxLength ? normalized : normalized.Substring(0, maxLength) + "...";
-        }
-
-        public ConversationMessage MapFromStreamingResult(
+        public async System.Threading.Tasks.Task<ConversationMessage> MapFromStreamingResultAsync(
             string userInput,
             string rawContent,
             string? thinking)
@@ -871,7 +748,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
             message.AnalysisRaw = thinking ?? string.Empty;
             message.AnalysisBlocks = ThinkingBlockParser.Parse(thinking);
 
-            var guideSteps = BuildPlanFromContentGuide(userInput, out var usedContentGuide, out var noMatch, out _);
+            var (guideSteps, usedContentGuide, noMatch, _) = await BuildPlanFromContentGuideAsync(userInput).ConfigureAwait(false);
             IReadOnlyList<PlanStep> normalizedSteps;
             if (guideSteps != null)
             {
@@ -904,7 +781,7 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
 
             if (usedContentGuide && noMatch)
             {
-                message.Summary = "⚠️ 未匹配到章节，请检查@续写/章节号是否存在，或重新打包后再试。";
+                message.Summary = "[提示] 未匹配到章节，请检查@续写/章节号是否存在，或重新打包后再试。";
             }
             else
             {
@@ -921,13 +798,13 @@ namespace TM.Services.Framework.AI.SemanticKernel.Conversation.Mapping
                 return $"已生成创作计划，共 {planPayload.Steps.Count} 个步骤。\n请在左侧「执行计划」面板查看详细步骤，确认后点击「开始执行」。";
             }
 
-            return "⚠️ 计划格式解析失败，请重新描述您的需求。\n\n提示：请明确说明要执行的任务，例如「生成第7章」或「批量生成3章」。";
+            return "[提示] 计划格式解析失败，请重新描述您的需求。\n\n提示：请明确说明要执行的任务，例如「生成第7章」或「批量生成3章」。";
         }
 
         private static IReadOnlyList<PlanStep> CreateSingleStepPlan(string userInput)
         {
-            var title = userInput.Length > 30 
-                ? userInput.Substring(0, 30) + "..." 
+            var title = userInput.Length > 30
+                ? userInput.Substring(0, 30) + "..."
                 : userInput;
 
             return new List<PlanStep>

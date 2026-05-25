@@ -1,11 +1,11 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Account.PasswordSecurity
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class PasswordSecurityView : UserControl
     {
         private PasswordSecurityViewModel ViewModel => (PasswordSecurityViewModel)DataContext;

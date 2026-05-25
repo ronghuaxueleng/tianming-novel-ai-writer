@@ -1,27 +1,32 @@
 using System;
+using System.Collections.Generic;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 using TM.Services.Modules.ProjectData.Interfaces;
+
 namespace TM.Services.Modules.ProjectData.Models.Design.Templates
 {
-    public class CreativeMaterialData : IIndexable, IDataItem, ISourceBookBound
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public class CreativeMaterialData : IIndexable, IDataItem, IDependencyTracked
     {
         [JsonPropertyName("Id")] public string Id { get; set; } = string.Empty;
+        [JsonPropertyName("DependencyModuleVersions")] public Dictionary<string, int> DependencyModuleVersions { get; set; } = new();
         [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("Icon")] public string Icon { get; set; } = "💡";
+        [JsonPropertyName("Icon")] public string Icon { get; set; } = "Icon.Lightbulb";
         [JsonPropertyName("Category")] public string Category { get; set; } = string.Empty;
         [JsonPropertyName("CategoryId")] public string CategoryId { get; set; } = string.Empty;
         [JsonPropertyName("IsEnabled")] public bool IsEnabled { get; set; } = true;
         [JsonPropertyName("CreatedTime")] public DateTime CreatedTime { get; set; } = DateTime.Now;
         [JsonPropertyName("ModifiedTime")] public DateTime ModifiedTime { get; set; } = DateTime.Now;
 
-        [JsonPropertyName("SourceBookId")] public string? SourceBookId { get; set; } = string.Empty;
-
         [JsonPropertyName("SourceBookName")] public string SourceBookName { get; set; } = string.Empty;
 
         [JsonPropertyName("Genre")] public string Genre { get; set; } = string.Empty;
 
         [JsonPropertyName("OverallIdea")] public string OverallIdea { get; set; } = string.Empty;
+
+        [JsonPropertyName("NovelSynopsis")] public string NovelSynopsis { get; set; } = string.Empty;
 
         [JsonPropertyName("WorldBuildingMethod")] public string WorldBuildingMethod { get; set; } = string.Empty;
 

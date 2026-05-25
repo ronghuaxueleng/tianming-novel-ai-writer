@@ -1,16 +1,16 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.AccountDeletion
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class AccountDeletionViewModel : INotifyPropertyChanged
     {
         private readonly ApiService _apiService;
@@ -88,13 +88,14 @@ namespace TM.Framework.User.Account.AccountDeletion
                 }
                 else
                 {
-                    GlobalToast.Error("注销失败", apiResult.Message ?? "请稍后重试");
+                    TM.App.Log($"[AccountDeletion] 注销失败: {apiResult.Message}");
+                    GlobalToast.Error("注销失败", "注销失败，请稍后重试");
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[AccountDeletion] 注销异常: {ex.Message}");
-                GlobalToast.Error("注销失败", ex.Message);
+                GlobalToast.Error("注销失败", $"注销失败：{ex.Message}");
             }
         }
 

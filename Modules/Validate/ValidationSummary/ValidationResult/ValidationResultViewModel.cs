@@ -1,16 +1,13 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Reflection;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Implementations;
@@ -19,12 +16,18 @@ using TM.Services.Modules.ProjectData.Models.Validate.ValidationSummary;
 namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ValidationResultViewModel : DataManagementViewModelBase<ValidationSummaryData, ValidationSummaryCategory, ValidationSummaryService>, TM.Framework.Common.ViewModels.IAIGeneratingState
     {
         private static readonly Regex VolumeCategoryRegex = new("^第(?<n>\\d+)卷", RegexOptions.Compiled);
 
         private readonly IUnifiedValidationService _validationService;
         private CancellationTokenSource? _validateCts;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, List<ProblemItem>> _problemItemsCache = new(StringComparer.Ordinal);
+        private int _passedCount;
+        private int _warningCount;
+        private int _failedCount;
+        private int _notValidatedCount;
         private readonly RelayCommand _cancelValidationCommand;
 
         public ValidationResultViewModel(IUnifiedValidationService validationService)
@@ -88,6 +91,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             set
             {
                 _selectedData = value;
+                RefreshCountCache();
                 OnPropertyChanged();
                 OnPropertyChanged(nameof(PassedCount));
                 OnPropertyChanged(nameof(WarningCount));
@@ -98,62 +102,100 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             }
         }
 
-        public int PassedCount => SelectedData?.ModuleResults.Count(m => m.Result == "通过") ?? 0;
+        public int PassedCount => _passedCount;
 
-        public int WarningCount => SelectedData?.ModuleResults.Count(m => m.Result == "警告") ?? 0;
+        public int WarningCount => _warningCount;
 
-        public int FailedCount => SelectedData?.ModuleResults.Count(m => m.Result == "失败") ?? 0;
+        public int FailedCount => _failedCount;
 
-        public int NotValidatedCount => SelectedData?.ModuleResults.Count(m => m.Result == "未校验") ?? 0;
+        public int NotValidatedCount => _notValidatedCount;
+
+        private void RefreshCountCache()
+        {
+            _passedCount = _warningCount = _failedCount = _notValidatedCount = 0;
+            if (_selectedData?.ModuleResults == null) return;
+            foreach (var m in _selectedData.ModuleResults)
+            {
+                if (m.Result == "通过") _passedCount++;
+                else if (m.Result == "警告") _warningCount++;
+                else if (m.Result == "失败") _failedCount++;
+                else if (m.Result == "未校验") _notValidatedCount++;
+            }
+        }
 
         public string OverallResultIcon => SelectedData?.OverallResult switch
         {
-            "通过" => "✅",
-            "警告" => "⚠️",
-            "失败" => "❌",
-            _ => "⏳"
+            "通过" => "Icon.CheckCircle",
+            "警告" => "Icon.Warning",
+            "失败" => "Icon.Error",
+            _ => "Icon.Clock"
         };
 
         #endregion
 
         #region 扁平问题清单
 
-        public ObservableCollection<ProblemItemDisplay> ProblemItems { get; } = new();
+        public RangeObservableCollection<ProblemItemDisplay> ProblemItems { get; } = new();
 
-        private void UpdateProblemItems()
+        private async void UpdateProblemItems()
         {
-            ProblemItems.Clear();
-
             if (SelectedData == null)
-                return;
-
-            foreach (var module in SelectedData.ModuleResults
-                .Where(m => m.Result is "警告" or "失败" or "未校验"))
             {
-                try
-                {
-                    var items = string.IsNullOrEmpty(module.ProblemItemsJson)
-                        ? new List<ProblemItem>()
-                        : JsonSerializer.Deserialize<List<ProblemItem>>(module.ProblemItemsJson) ?? new();
+                ProblemItems.ReplaceAll(System.Array.Empty<ProblemItemDisplay>());
+                return;
+            }
 
-                    foreach (var item in items)
-                    {
-                        ProblemItems.Add(new ProblemItemDisplay
-                        {
-                            ModuleName = module.DisplayName,
-                            Summary = item.Summary,
-                            Reason = item.Reason,
-                            Details = item.Details,
-                            Suggestion = item.Suggestion,
-                            ChapterId = item.ChapterId,
-                            ChapterTitle = item.ChapterTitle
-                        });
-                    }
-                }
-                catch (Exception ex)
+            try
+            {
+                var modules = SelectedData.ModuleResults
+                    .Where(m => m.Result is "警告" or "失败" or "未校验")
+                    .ToList();
+
+                var newItems = await Task.Run(() =>
                 {
-                    TM.App.Log($"[ValidationResultViewModel] 解析问题项失败: {module.ModuleName}, {ex.Message}");
-                }
+                    var result = new List<ProblemItemDisplay>();
+                    foreach (var module in modules)
+                    {
+                        try
+                        {
+                            List<ProblemItem> items;
+                            if (string.IsNullOrEmpty(module.ProblemItemsJson))
+                            {
+                                items = new List<ProblemItem>();
+                            }
+                            else if (!_problemItemsCache.TryGetValue(module.ModuleName, out items!))
+                            {
+                                items = JsonSerializer.Deserialize<List<ProblemItem>>(module.ProblemItemsJson) ?? new();
+                                _problemItemsCache[module.ModuleName] = items;
+                            }
+
+                            foreach (var item in items)
+                            {
+                                result.Add(new ProblemItemDisplay
+                                {
+                                    ModuleName = module.DisplayName,
+                                    Summary = item.Summary,
+                                    Reason = item.Reason,
+                                    Details = item.Details,
+                                    Suggestion = item.Suggestion,
+                                    ChapterId = item.ChapterId,
+                                    ChapterTitle = item.ChapterTitle
+                                });
+                            }
+                        }
+                        catch (Exception ex)
+                        {
+                            TM.App.Log($"[ValidationResultViewModel] 解析问题项失败: {module.ModuleName}, {ex.Message}");
+                        }
+                    }
+                    return result;
+                });
+
+                ProblemItems.ReplaceAll(newItems);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[ValidationResultViewModel] UpdateProblemItems 失败: {ex.Message}");
             }
         }
 
@@ -240,7 +282,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             catch (Exception ex)
             {
                 TM.App.Log($"[ValidationResultViewModel] AI校验失败: 第{volumeNumber}卷, {ex}");
-                GlobalToast.Error("校验失败", ex.Message);
+                GlobalToast.Error("校验失败", $"第{volumeNumber}卷校验失败：{ex.Message}");
             }
             finally
             {
@@ -277,7 +319,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 
         #region 抽象方法实现
 
-        protected override string DefaultDataIcon => "✅";
+        protected override string DefaultDataIcon => "Icon.CheckCircle";
 
         protected override ValidationSummaryData? CreateNewData(string? categoryName = null)
         {
@@ -316,31 +358,26 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 
         protected override TreeNodeItem ConvertToTreeNode(ValidationSummaryData data)
         {
-            var resultIcon = data.OverallResult switch
+            var resultIconKey = data.OverallResult switch
             {
-                "通过" => "✅",
-                "警告" => "⚠️",
-                "失败" => "❌",
-                _ => "⏳"
+                "通过" => "Icon.CheckCircle",
+                "警告" => "Icon.Warning",
+                "失败" => "Icon.Error",
+                _ => "Icon.Clock"
             };
 
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = resultIcon,
+                Icon = IconHelper.Get(resultIconKey),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(ValidationSummaryData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(ValidationSummaryData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword))
-                return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.TargetVolumeName.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.OverallResult.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.TargetVolumeName, data.OverallResult };
         }
 
         #endregion
@@ -377,7 +414,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             catch (Exception ex)
             {
                 TM.App.Log($"[ValidationResultViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
@@ -400,7 +437,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
         private void ResetForm()
         {
             FormName = string.Empty;
-            FormIcon = "📚";
+            FormIcon = "Icon.Books";
             FormStatus = "已启用";
             FormCategory = string.Empty;
             SelectedData = null;
@@ -467,7 +504,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             catch (Exception ex)
             {
                 TM.App.Log($"[ValidationResultViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -495,7 +532,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             catch (Exception ex)
             {
                 TM.App.Log($"[ValidationResultViewModel] 打开修复弹窗失败: {ex.Message}");
-                GlobalToast.Error("打开失败", ex.Message);
+                GlobalToast.Error("打开失败", $"打开失败：{ex.Message}");
             }
         });
 

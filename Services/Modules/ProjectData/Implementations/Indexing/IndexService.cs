@@ -9,47 +9,48 @@ using TM.Services.Modules.ProjectData.Models.Index;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
-    public class IndexService : IIndexService
+    public class IndexService
     {
         private const int UpstreamIndexMaxItemsPerLayer = 200;
 
         private static readonly Dictionary<string, string[]> LayerDependencies = new()
         {
             ["SmartParsing"] = Array.Empty<string>(),
-            ["Templates"]    = new[] { "SmartParsing" },
-            ["Worldview"]    = new[] { "Templates" },
-            ["Characters"]   = new[] { "Templates", "Worldview" },
-            ["Factions"]     = new[] { "Templates", "Worldview", "Characters" },
-            ["Locations"]    = new[] { "Templates", "Worldview", "Characters", "Factions" },
-            ["Plot"]         = new[] { "Templates", "Worldview", "Characters", "Factions", "Locations" },
+            ["Templates"] = new[] { "SmartParsing" },
+            ["Worldview"] = new[] { "Templates" },
+            ["Characters"] = new[] { "Templates", "Worldview" },
+            ["Factions"] = new[] { "Templates", "Worldview", "Characters" },
+            ["Locations"] = new[] { "Templates", "Worldview", "Characters", "Factions" },
+            ["Plot"] = new[] { "Templates", "Worldview", "Characters", "Factions", "Locations" },
 
-            ["Outline"]      = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot" },
-            ["Planning"]     = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline" },
-            ["Blueprint"]    = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline", "Planning" },
-            ["Content"]      = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline", "Planning", "Blueprint" }
+            ["Outline"] = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot" },
+            ["Planning"] = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline" },
+            ["Blueprint"] = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline", "Planning" },
+            ["Content"] = new[] { "Worldview", "Characters", "Factions", "Locations", "Plot", "Outline", "Planning", "Blueprint" }
         };
 
         public async Task<UpstreamIndex> BuildUpstreamIndexAsync(string targetLayer)
-        {
-            return await BuildUpstreamIndexAsync(targetLayer, null);
-        }
-
-        public async Task<UpstreamIndex> BuildUpstreamIndexAsync(string targetLayer, string? sourceBookId)
         {
             var index = new UpstreamIndex();
 
             if (!LayerDependencies.TryGetValue(targetLayer, out var dependencies))
                 return index;
 
-            TM.App.Log($"[IndexService] 构建上游索引: targetLayer={targetLayer}, sourceBookId={sourceBookId ?? "null"}");
+            if (InfoLogDedup.ShouldLog($"IndexService:BuildUpstream:{targetLayer}"))
+                TM.App.Log($"[IndexService] 构建上游索引: targetLayer={targetLayer}");
 
-            foreach (var dep in dependencies)
+            var layerTasks = dependencies.Select(async dep =>
             {
-                var items = await LoadLayerItemsAsync(dep, UpstreamIndexMaxItemsPerLayer, sourceBookId);
+                var items = await LoadLayerItemsAsync(dep, UpstreamIndexMaxItemsPerLayer).ConfigureAwait(false);
                 var indexItems = items.Select(i => BuildIndexItem(i, useDeepSummary: false)).ToList();
+                return (dep, indexItems);
+            });
+            var layerResults = await Task.WhenAll(layerTasks).ConfigureAwait(false);
+            foreach (var (dep, indexItems) in layerResults)
+            {
                 SetIndexProperty(index, dep, indexItems);
-
-                TM.App.Log($"[IndexService] 层级 {dep} 加载了 {indexItems.Count} 个实体");
+                if (InfoLogDedup.ShouldLog($"IndexService:Layer:{dep}"))
+                    TM.App.Log($"[IndexService] 层级 {dep} 加载了 {indexItems.Count} 个实体");
             }
 
             return index;
@@ -77,7 +78,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             foreach (var layer in LayerStoragePaths.Keys)
             {
-                var items = await LoadLayerItemsAsync(layer);
+                var items = await LoadLayerItemsAsync(layer).ConfigureAwait(false);
                 foreach (var item in items)
                 {
                     if (idSet.Contains(item.Id))
@@ -114,7 +115,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             foreach (var layer in LayerStoragePaths.Keys)
             {
-                var items = await LoadLayerItemsAsync(layer);
+                var items = await LoadLayerItemsAsync(layer).ConfigureAwait(false);
                 foreach (var item in items)
                 {
                     if (idSet.Contains(item.Id))
@@ -131,20 +132,20 @@ namespace TM.Services.Modules.ProjectData.Implementations
         }
 
         public async Task<List<IndexItem>> GetRelatedEntitiesAsync(
-            string focusId, 
+            string focusId,
             RelationStrengthService relationService,
-            int maxStrong = 5, 
+            int maxStrong = 5,
             int maxMedium = 10)
         {
             var result = new List<IndexItem>();
 
-            var allItems = await LoadLayerItemsAsync("Characters");
+            var allItems = await LoadLayerItemsAsync("Characters").ConfigureAwait(false);
 
             foreach (var item in allItems)
             {
                 if (item.Id == focusId) continue;
 
-                var strength = await relationService.GetStrengthAsync(focusId, item.Id);
+                var strength = await relationService.GetStrengthAsync(focusId, item.Id).ConfigureAwait(false);
 
                 if (strength == Models.Context.RelationStrength.Strong && result.Count(r => r.RelationStrength == "Strong") < maxStrong)
                 {
@@ -168,23 +169,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (string.IsNullOrEmpty(id))
                 return null;
 
-            var items = await LoadLayerItemsAsync(layer);
-            var item = items.FirstOrDefault(i => i.Id == id);
-
-            if (item != null)
-            {
-                return BuildIndexItem(item, useDeepSummary: true);
-            }
-
-            return null;
-        }
-
-        public async Task<IndexItem?> GetIndexItemAsync(string id, string layer, string? sourceBookId)
-        {
-            if (string.IsNullOrEmpty(id))
-                return null;
-
-            var items = await LoadLayerItemsAsync(layer, int.MaxValue, sourceBookId);
+            var items = await LoadLayerItemsAsync(layer).ConfigureAwait(false);
             var item = items.FirstOrDefault(i => i.Id == id);
 
             if (item != null)
@@ -204,25 +189,22 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static readonly Dictionary<string, string[]> LayerStoragePaths = new()
         {
             ["SmartParsing"] = new[] { "Design/SmartParsing/BookAnalysis" },
-            ["Templates"]    = new[] { "Design/Templates/CreativeMaterials" },
-            ["Worldview"]    = new[] { "Design/GlobalSettings/WorldRules" },
-            ["Characters"]   = new[] { "Design/Elements/CharacterRules" },
-            ["Factions"]     = new[] { "Design/Elements/FactionRules" },
-            ["Locations"]    = new[] { "Design/Elements/LocationRules" },
-            ["Plot"]         = new[] { "Design/Elements/PlotRules" },
+            ["Templates"] = new[] { "Design/Templates/CreativeMaterials" },
+            ["Worldview"] = new[] { "Design/GlobalSettings/WorldRules" },
+            ["Characters"] = new[] { "Design/Elements/CharacterRules" },
+            ["Factions"] = new[] { "Design/Elements/FactionRules" },
+            ["Locations"] = new[] { "Design/Elements/LocationRules" },
+            ["Plot"] = new[] { "Design/Elements/PlotRules" },
 
-            ["Outline"]      = new[] { "Generate/GlobalSettings/Outline" },
-            ["Planning"]     = new[] { "Generate/Elements/Chapter" },
-            ["Blueprint"]    = new[] { "Generate/Elements/Blueprint" }
+            ["Outline"] = new[] { "Generate/GlobalSettings/Outline" },
+            ["Planning"] = new[] { "Generate/Elements/Chapter" },
+            ["Blueprint"] = new[] { "Generate/Elements/Blueprint" }
         };
 
         private Task<List<IIndexable>> LoadLayerItemsAsync(string layer)
-            => LoadLayerItemsAsync(layer, int.MaxValue, null);
+            => LoadLayerItemsAsync(layer, int.MaxValue);
 
-        private Task<List<IIndexable>> LoadLayerItemsAsync(string layer, int maxItems)
-            => LoadLayerItemsAsync(layer, maxItems, null);
-
-        private async Task<List<IIndexable>> LoadLayerItemsAsync(string layer, int maxItems, string? sourceBookId)
+        private async Task<List<IIndexable>> LoadLayerItemsAsync(string layer, int maxItems)
         {
             var items = new List<IIndexable>();
 
@@ -255,7 +237,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                         var fileBaseName = Path.GetFileName(file);
 
-                        var json = await File.ReadAllTextAsync(file);
+                        var json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
                         using var doc = JsonDocument.Parse(json);
 
                         if (doc.RootElement.ValueKind != JsonValueKind.Array)
@@ -271,18 +253,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
                                 data[prop.Name] = prop.Value;
 
                             data["__file"] = JsonDocument.Parse($"\"{fileBaseName}\"").RootElement.Clone();
-
-                            if (!string.IsNullOrEmpty(sourceBookId))
-                            {
-                                var itemSourceBookId = GetJsonString(data, "SourceBookId");
-                                if ((string.IsNullOrEmpty(itemSourceBookId) || itemSourceBookId != sourceBookId)
-                                    && !(string.Equals(layer, "SmartParsing", StringComparison.OrdinalIgnoreCase)
-                                         && string.Equals(fileBaseName, "book_analysis.json", StringComparison.OrdinalIgnoreCase)
-                                         && GetJsonString(data, "Id") == sourceBookId))
-                                {
-                                    continue;
-                                }
-                            }
 
                             var indexable = ConvertToIndexable(data, layer);
                             if (indexable != null)
@@ -382,19 +352,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
 
             return string.Join("。", parts);
-        }
-
-        private static string GetMaterialItemType(Dictionary<string, JsonElement> data)
-        {
-            var file = GetJsonString(data, "__file");
-            if (string.Equals(file, "book_analysis.json", StringComparison.OrdinalIgnoreCase)
-                || !string.IsNullOrEmpty(GetJsonString(data, "SourceBookTitle"))
-                || !string.IsNullOrEmpty(GetJsonString(data, "SourceUrl")))
-            {
-                return "拆书";
-            }
-
-            return "素材";
         }
 
         private static string BuildBriefSummary(Dictionary<string, JsonElement> data, string layer, string itemType, string name)

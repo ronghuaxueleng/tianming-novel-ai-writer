@@ -1,6 +1,4 @@
-using System;
-
-namespace TM.Framework.Notifications.Sound.VolumeAndDevice
+﻿namespace TM.Framework.Notifications.Sound.VolumeAndDevice
 {
     public class AudioDeviceInfo
     {

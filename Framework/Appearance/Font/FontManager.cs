@@ -1,17 +1,16 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Windows;
 using System.Windows.Media;
 using TM.Framework.Appearance.Font.Models;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Appearance.Font
 {
     public static class FontManager
     {
+        private static ResourceDictionary? _uiFontDict;
+        private static ResourceDictionary? _editorFontDict;
         public static FontConfiguration LoadConfiguration()
         {
             return ServiceLocator.Get<FontConfigurationSettings>().GetConfiguration();
@@ -28,24 +27,28 @@ namespace TM.Framework.Appearance.Font
             {
                 void ApplyUIFontCore()
                 {
-                    Application.Current.Resources["GlobalFontFamily"] = new FontFamily(settings.FontFamily);
-                    Application.Current.Resources["GlobalFontSize"] = settings.FontSize;
-                    Application.Current.Resources["GlobalFontWeight"] = ParseFontWeight(settings.FontWeight);
-                    Application.Current.Resources["GlobalLineHeight"] = settings.LineHeight;
-                    Application.Current.Resources["GlobalLetterSpacing"] = settings.LetterSpacing;
-
-                    Application.Current.Resources["FontSizeXXL"] = settings.FontSize * 2.29;
-                    Application.Current.Resources["FontSizeXL"] = settings.FontSize * 1.71;
-                    Application.Current.Resources["FontSizeLarge"] = settings.FontSize * 1.29;
-                    Application.Current.Resources["FontSizeMedium"] = settings.FontSize * 1.14;
-                    Application.Current.Resources["FontSizeNormal"] = settings.FontSize;
-                    Application.Current.Resources["FontSizeSmall"] = settings.FontSize * 0.93;
-                    Application.Current.Resources["FontSizeXS"] = settings.FontSize * 0.86;
-                    Application.Current.Resources["FontSizeTiny"] = settings.FontSize * 0.79;
-
-                    Application.Current.Resources["GlobalTextRenderingMode"] = ParseTextRenderingMode(settings.TextRendering);
-                    Application.Current.Resources["GlobalTextFormattingMode"] = ParseTextFormattingMode(settings.TextFormatting);
-                    Application.Current.Resources["GlobalTextHintingMode"] = ParseTextHintingMode(settings.TextHinting);
+                    if (_uiFontDict == null)
+                    {
+                        _uiFontDict = new ResourceDictionary { ["_FontManagerTag"] = true };
+                        Application.Current.Resources.MergedDictionaries.Add(_uiFontDict);
+                    }
+                    var d = _uiFontDict;
+                    d["GlobalFontFamily"] = new FontFamily(settings.FontFamily);
+                    d["GlobalFontSize"] = settings.FontSize;
+                    d["GlobalFontWeight"] = ParseFontWeight(settings.FontWeight);
+                    d["GlobalLineHeight"] = settings.LineHeight;
+                    d["GlobalLetterSpacing"] = settings.LetterSpacing;
+                    d["FontSizeXXL"] = settings.FontSize * 2.29;
+                    d["FontSizeXL"] = settings.FontSize * 1.71;
+                    d["FontSizeLarge"] = settings.FontSize * 1.29;
+                    d["FontSizeMedium"] = settings.FontSize * 1.14;
+                    d["FontSizeNormal"] = settings.FontSize;
+                    d["FontSizeSmall"] = settings.FontSize * 0.93;
+                    d["FontSizeXS"] = settings.FontSize * 0.86;
+                    d["FontSizeTiny"] = settings.FontSize * 0.79;
+                    d["GlobalTextRenderingMode"] = ParseTextRenderingMode(settings.TextRendering);
+                    d["GlobalTextFormattingMode"] = ParseTextFormattingMode(settings.TextFormatting);
+                    d["GlobalTextHintingMode"] = ParseTextHintingMode(settings.TextHinting);
                 }
 
                 if (Application.Current.Dispatcher.CheckAccess())
@@ -68,14 +71,19 @@ namespace TM.Framework.Appearance.Font
             {
                 void ApplyEditorFontCore()
                 {
-                    Application.Current.Resources["EditorFontFamily"] = new FontFamily(settings.FontFamily);
-                    Application.Current.Resources["EditorFontSize"] = settings.FontSize;
-                    Application.Current.Resources["EditorFontWeight"] = ParseFontWeight(settings.FontWeight);
-                    Application.Current.Resources["EditorLineHeight"] = settings.LineHeight;
-                    Application.Current.Resources["EditorLetterSpacing"] = settings.LetterSpacing;
-
-                    Application.Current.Resources["EditorFontSizeLarge"] = settings.FontSize * 1.15;
-                    Application.Current.Resources["EditorFontSizeSmall"] = settings.FontSize * 0.85;
+                    if (_editorFontDict == null)
+                    {
+                        _editorFontDict = new ResourceDictionary { ["_EditorFontManagerTag"] = true };
+                        Application.Current.Resources.MergedDictionaries.Add(_editorFontDict);
+                    }
+                    var d = _editorFontDict;
+                    d["EditorFontFamily"] = new FontFamily(settings.FontFamily);
+                    d["EditorFontSize"] = settings.FontSize;
+                    d["EditorFontWeight"] = ParseFontWeight(settings.FontWeight);
+                    d["EditorLineHeight"] = settings.LineHeight;
+                    d["EditorLetterSpacing"] = settings.LetterSpacing;
+                    d["EditorFontSizeLarge"] = settings.FontSize * 1.15;
+                    d["EditorFontSizeSmall"] = settings.FontSize * 0.85;
                 }
 
                 if (Application.Current.Dispatcher.CheckAccess())
@@ -92,21 +100,21 @@ namespace TM.Framework.Appearance.Font
             }
         }
 
-        public static List<string> GetSystemFonts()
-        {
-            try
+        private static readonly Lazy<List<string>> _cachedSystemFonts = new(
+            () =>
             {
-                return Fonts.SystemFontFamilies
-                    .Select(f => f.Source)
-                    .OrderBy(f => f)
-                    .ToList();
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[FontManager] 获取系统字体失败: {ex.Message}");
-                return new List<string> { "Microsoft YaHei UI", "Consolas", "Arial" };
-            }
-        }
+                try
+                {
+                    return Fonts.SystemFontFamilies.Select(f => f.Source).OrderBy(f => f).ToList();
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[FontManager] 获取系统字体失败: {ex.Message}");
+                    return new List<string> { "Microsoft YaHei UI", "Consolas", "Arial" };
+                }
+            }, System.Threading.LazyThreadSafetyMode.ExecutionAndPublication);
+
+        public static List<string> GetSystemFonts() => _cachedSystemFonts.Value;
 
         private static FontWeight ParseFontWeight(string weightString)
         {
@@ -176,20 +184,14 @@ namespace TM.Framework.Appearance.Font
             }
         }
 
-        public static bool ExportConfiguration(string? filePath = null)
-        {
-            return ServiceLocator.Get<Services.FontImportExportService>().ExportConfiguration(filePath);
-        }
+        public static System.Threading.Tasks.Task<bool> ExportConfigurationAsync(string? filePath = null)
+            => ServiceLocator.Get<Services.FontImportExportService>().ExportConfigurationAsync(filePath);
 
-        public static bool ImportConfiguration(string? filePath = null)
-        {
-            return ServiceLocator.Get<Services.FontImportExportService>().ImportConfiguration(filePath);
-        }
+        public static System.Threading.Tasks.Task<bool> ImportConfigurationAsync(string? filePath = null)
+            => ServiceLocator.Get<Services.FontImportExportService>().ImportConfigurationAsync(filePath);
 
-        public static bool ExportAsShareable(string? filePath = null)
-        {
-            return ServiceLocator.Get<Services.FontImportExportService>().ExportAsShareable(filePath);
-        }
+        public static System.Threading.Tasks.Task<bool> ExportAsShareableAsync(string? filePath = null)
+            => ServiceLocator.Get<Services.FontImportExportService>().ExportAsShareableAsync(filePath);
 
         public static FontConfiguration ResetToDefault()
         {

@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.ComponentModel;
 using System.Windows;
@@ -8,10 +8,13 @@ using TM.Framework.Common.Controls.DataManagement;
 namespace TM.Modules.AIAssistant.ModelIntegration.ModelManagement;
 
 [Obfuscation(Exclude = true, ApplyToMembers = true)]
+[Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
 public partial class ModelManagementView : UserControl
 {
     private bool _isPasswordUpdating;
     private PasswordBox? _apiKeyPasswordBox;
+    private PasswordBox? _apiEndpointPasswordBox;
+    private bool _unloadedHandled;
 
     public ModelManagementView(ModelManagementViewModel viewModel)
     {
@@ -19,19 +22,20 @@ public partial class ModelManagementView : UserControl
         {
             InitializeComponent();
             DataContext = viewModel;
+            Unloaded += ModelManagementView_Unloaded;
 
             if (RootLayout?.HeaderTabs != null)
             {
                 if (RootLayout.HeaderTabs.Count >= 1)
                 {
                     RootLayout.HeaderTabs[0].Header = "详细信息";
-                    RootLayout.HeaderTabs[0].Icon = "📝";
+                    RootLayout.HeaderTabs[0].Icon = IconHelper.TryGet("Icon.Edit");
                 }
 
                 if (RootLayout.HeaderTabs.Count >= 2)
                 {
                     RootLayout.HeaderTabs[1].Header = "参数与速率";
-                    RootLayout.HeaderTabs[1].Icon = "⚙️";
+                    RootLayout.HeaderTabs[1].Icon = IconHelper.TryGet("Icon.Settings");
                 }
 
                 if (RootLayout.HeaderTabs.Count < 3)
@@ -39,8 +43,19 @@ public partial class ModelManagementView : UserControl
                     RootLayout.HeaderTabs.Add(new TabItemData
                     {
                         Header = "全局参数",
-                        Icon = "🔧",
+                        Icon = IconHelper.TryGet("Icon.Wrench"),
                         IsSelected = false
+                    });
+                }
+
+                if (RootLayout.HeaderTabs.Count < 4)
+                {
+                    RootLayout.HeaderTabs.Add(new TabItemData
+                    {
+                        Header = "写作配置",
+                        Icon = IconHelper.TryGet("Icon.Write"),
+                        IsSelected = false,
+                        IsEnabled = true
                     });
                 }
 
@@ -65,6 +80,47 @@ public partial class ModelManagementView : UserControl
         {
             TM.App.Log($"[ModelManagement] 初始化失败: {ex.Message}");
             throw;
+        }
+    }
+
+    private void ModelManagementView_Unloaded(object sender, RoutedEventArgs e)
+    {
+        if (_unloadedHandled) return;
+        _unloadedHandled = true;
+
+        if (DataContext is INotifyPropertyChanged inpc)
+        {
+            inpc.PropertyChanged -= ViewModel_PropertyChanged;
+        }
+
+        if (DataContext is IDisposable disposable)
+        {
+            disposable.Dispose();
+        }
+    }
+
+    private void ApiEndpointBox_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is PasswordBox passwordBox)
+        {
+            _apiEndpointPasswordBox = passwordBox;
+            if (DataContext is ModelManagementViewModel viewModel && !string.IsNullOrEmpty(viewModel.FormApiEndpoint))
+            {
+                _isPasswordUpdating = true;
+                passwordBox.Password = viewModel.FormApiEndpoint;
+                _isPasswordUpdating = false;
+            }
+        }
+    }
+
+    private void ApiEndpointBox_PasswordChanged(object sender, RoutedEventArgs e)
+    {
+        if (_isPasswordUpdating) return;
+        if (sender is PasswordBox passwordBox && DataContext is ModelManagementViewModel viewModel)
+        {
+            _isPasswordUpdating = true;
+            viewModel.FormApiEndpoint = passwordBox.Password;
+            _isPasswordUpdating = false;
         }
     }
 
@@ -97,6 +153,16 @@ public partial class ModelManagementView : UserControl
     {
         if (sender is not ModelManagementViewModel vm)
             return;
+
+        if (e.PropertyName == nameof(ModelManagementViewModel.FormApiEndpoint) && !_isPasswordUpdating)
+        {
+            if (_apiEndpointPasswordBox != null)
+            {
+                _isPasswordUpdating = true;
+                _apiEndpointPasswordBox.Password = vm.FormApiEndpoint ?? string.Empty;
+                _isPasswordUpdating = false;
+            }
+        }
 
         if (e.PropertyName == nameof(ModelManagementViewModel.FormApiKey) && !_isPasswordUpdating)
         {

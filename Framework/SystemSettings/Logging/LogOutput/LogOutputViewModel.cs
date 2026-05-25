@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
@@ -13,13 +13,13 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Threading;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Proxy.Services;
 
 namespace TM.Framework.SystemSettings.Logging.LogOutput
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LogOutputViewModel : INotifyPropertyChanged
     {
         private LogOutputSettings _settings;
@@ -72,10 +72,10 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                 "failures.json"
             );
 
-            OutputTargets = new ObservableCollection<OutputTarget>();
+            OutputTargets = new RangeObservableCollection<OutputTarget>();
             TestResults = new ObservableCollection<TestResult>();
-            Statistics = new ObservableCollection<OutputStatistics>();
-            FailureRecords = new ObservableCollection<FailureRecord>();
+            Statistics = new RangeObservableCollection<OutputStatistics>();
+            FailureRecords = new RangeObservableCollection<FailureRecord>();
 
             AsyncSettingsLoader.LoadOrDefer<LogOutputSettings>(_settingsFilePath, s =>
             {
@@ -86,20 +86,12 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
 
             AsyncSettingsLoader.LoadOrDefer<List<OutputStatistics>>(_statisticsFilePath, stats =>
             {
-                Statistics.Clear();
-                foreach (var stat in stats)
-                {
-                    Statistics.Add(stat);
-                }
+                Statistics.ReplaceAll(stats);
             }, "LogOutput.Stats");
 
             AsyncSettingsLoader.LoadOrDefer<List<FailureRecord>>(_failuresFilePath, failures =>
             {
-                FailureRecords.Clear();
-                foreach (var failure in failures)
-                {
-                    FailureRecords.Add(failure);
-                }
+                FailureRecords.ReplaceAll(failures);
             }, "LogOutput.Failures");
 
             OutputTargetTypes = new List<OutputTargetType>
@@ -123,9 +115,9 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
 
             _statsTimer = new DispatcherTimer { Interval = TimeSpan.FromSeconds(5) };
 
-            SaveCommand = new RelayCommand(SaveSettings);
+            SaveCommand = new RelayCommand(() => SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}")));
             TestOutputCommand = new RelayCommand(TestAllTargets);
-            TestFileOutputCommand = new RelayCommand(TestFileOutput);
+            TestFileOutputCommand = new RelayCommand(() => TestFileOutput().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}")));
             TestRemoteOutputCommand = new RelayCommand(TestRemoteOutput);
             AddTargetCommand = new RelayCommand(AddTarget);
             RemoveTargetCommand = new RelayCommand(RemoveTarget);
@@ -240,10 +232,10 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
         public List<OutputTargetType> OutputTargetTypes { get; }
         public List<FileEncodingType> FileEncodings { get; }
         public List<string> RemoteProtocols { get; }
-        public ObservableCollection<OutputTarget> OutputTargets { get; }
+        public RangeObservableCollection<OutputTarget> OutputTargets { get; }
         public ObservableCollection<TestResult> TestResults { get; }
-        public ObservableCollection<OutputStatistics> Statistics { get; }
-        public ObservableCollection<FailureRecord> FailureRecords { get; }
+        public RangeObservableCollection<OutputStatistics> Statistics { get; }
+        public RangeObservableCollection<FailureRecord> FailureRecords { get; }
 
         public ICommand SaveCommand { get; }
         public ICommand TestOutputCommand { get; }
@@ -258,14 +250,10 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
 
         private void LoadOutputTargets()
         {
-            OutputTargets.Clear();
-            foreach (var target in _settings.OutputTargets)
-            {
-                OutputTargets.Add(target);
-            }
+            OutputTargets.ReplaceAll(_settings.OutputTargets.ToList());
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
@@ -281,9 +269,11 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpLos = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLos, json);
+                var tmpLos = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLos))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default);
+                }
                 File.Move(tmpLos, _settingsFilePath, overwrite: true);
 
                 TM.App.Log($"[LogOutput] 保存设置成功");
@@ -292,7 +282,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             catch (Exception ex)
             {
                 TM.App.Log($"[LogOutput] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"无法保存日志输出设置: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         }
 
@@ -350,7 +340,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             GlobalToast.Success("测试完成", $"已测试 {TestResults.Count} 个输出目标");
         }
 
-        private async void TestFileOutput()
+        private async Task TestFileOutput()
         {
             TestResults.Clear();
             var result = await TestFileOutputInternalAsync();
@@ -429,7 +419,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Status = TestStatus.Failed,
                     TestTime = DateTime.Now,
                     ResponseTime = sw.ElapsedMilliseconds,
-                    Message = $"文件写入异常: {ex.Message}",
+                    Message = $"文件写入异常：{ex.Message}",
                     Details = ex.ToString()
                 };
             }
@@ -467,7 +457,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                 }
                 else if (RemoteProtocol == "TCP")
                 {
-                    return TestTcpRemote(sw);
+                    return await TestTcpRemoteAsync(sw);
                 }
                 else
                 {
@@ -497,7 +487,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Status = TestStatus.Failed,
                     TestTime = DateTime.Now,
                     ResponseTime = sw.ElapsedMilliseconds,
-                    Message = $"远程连接异常: {ex.Message}",
+                    Message = $"远程连接异常：{ex.Message}",
                     Details = ex.ToString()
                 };
             }
@@ -509,7 +499,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             {
                 using var client = _proxyService.CreateHttpClient(TimeSpan.FromSeconds(5));
                 var testContent = $"{{\"timestamp\":\"{DateTime.Now:o}\",\"level\":\"INFO\",\"message\":\"测试日志\"}}";
-                var content = new StringContent(testContent, Encoding.UTF8, "application/json");
+                using var content = new StringContent(testContent, Encoding.UTF8, "application/json");
 
                 var response = await client.PostAsync(RemoteAddress, content);
                 sw.Stop();
@@ -563,23 +553,23 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             }
         }
 
-        private TestResult TestTcpRemote(Stopwatch sw)
+        private async Task<TestResult> TestTcpRemoteAsync(Stopwatch sw)
         {
+            var uri = new Uri(RemoteAddress.StartsWith("tcp://", StringComparison.Ordinal) ? RemoteAddress : $"tcp://{RemoteAddress}");
+            var host = uri.Host;
+            var port = uri.Port > 0 ? uri.Port : 514;
             try
             {
-                var uri = new Uri(RemoteAddress.StartsWith("tcp://") ? RemoteAddress : $"tcp://{RemoteAddress}");
-                var host = uri.Host;
-                var port = uri.Port > 0 ? uri.Port : 514;
-
+                using var cts = new System.Threading.CancellationTokenSource(TimeSpan.FromSeconds(5));
                 using var client = new TcpClient();
-                client.Connect(host, port);
+                await client.ConnectAsync(host, port, cts.Token);
 
                 if (client.Connected)
                 {
                     var testContent = $"<14>1 {DateTime.Now:o} TM - - - 测试日志";
                     var bytes = Encoding.UTF8.GetBytes(testContent);
                     var stream = client.GetStream();
-                    stream.Write(bytes, 0, bytes.Length);
+                    await stream.WriteAsync(bytes, 0, bytes.Length, cts.Token);
                     sw.Stop();
 
                     UpdateStatistics("远程输出", OutputTargetType.RemoteTcp, true, sw.ElapsedMilliseconds, bytes.Length);
@@ -612,6 +602,22 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     };
                 }
             }
+            catch (OperationCanceledException)
+            {
+                sw.Stop();
+                UpdateStatistics("远程输出", OutputTargetType.RemoteTcp, false, sw.ElapsedMilliseconds, 0);
+
+                return new TestResult
+                {
+                    TargetName = "远程输出 (TCP)",
+                    TargetType = OutputTargetType.RemoteTcp,
+                    Status = TestStatus.Timeout,
+                    TestTime = DateTime.Now,
+                    ResponseTime = sw.ElapsedMilliseconds,
+                    Message = "TCP连接超时",
+                    Details = $"地址: {host}:{port}\n超时: 5秒"
+                };
+            }
             catch (SocketException ex)
             {
                 sw.Stop();
@@ -624,7 +630,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Status = TestStatus.Failed,
                     TestTime = DateTime.Now,
                     ResponseTime = sw.ElapsedMilliseconds,
-                    Message = $"TCP连接错误: {ex.Message}",
+                    Message = $"TCP连接异常：{ex.Message}",
                     Details = ex.ToString()
                 };
             }
@@ -703,7 +709,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             stat.TotalBytes += bytes;
             stat.LastUpdateTime = DateTime.Now;
 
-            SaveStatistics();
+            SaveStatistics().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}"));
         }
 
         private void RecordFailure(string targetName, OutputTargetType targetType, string errorMessage, string logContent)
@@ -726,7 +732,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                 FailureRecords.RemoveAt(FailureRecords.Count - 1);
             }
 
-            SaveFailures();
+            SaveFailures().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}"));
         }
 
         private void LoadStatistics()
@@ -736,52 +742,50 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
 
         private void LoadStatistics(bool showToast)
         {
-            AsyncSettingsLoader.RunOrDefer(() =>
-            {
-                List<OutputStatistics> stats = new();
-                string? error = null;
-                try
-                {
-                    if (File.Exists(_statisticsFilePath))
-                    {
-                        var json = File.ReadAllText(_statisticsFilePath);
-                        stats = JsonSerializer.Deserialize<List<OutputStatistics>>(json) ?? new List<OutputStatistics>();
-                    }
-                }
-                catch (Exception ex)
-                {
-                    error = ex.Message;
-                }
-
-                return () =>
-                {
-                    Statistics.Clear();
-                    foreach (var stat in stats)
-                    {
-                        Statistics.Add(stat);
-                    }
-
-                    if (error == null)
-                    {
-                        TM.App.Log($"[LogOutput] 加载统计信息成功");
-                        if (showToast)
-                        {
-                            GlobalToast.Success("刷新完成", "已刷新输出统计信息");
-                        }
-                    }
-                    else
-                    {
-                        TM.App.Log($"[LogOutput] 加载统计信息失败: {error}");
-                        if (showToast)
-                        {
-                            GlobalToast.Error("刷新失败", $"无法刷新统计信息: {error}");
-                        }
-                    }
-                };
-            }, "LogOutput.Stats");
+            _ = LoadStatisticsAsync(showToast);
         }
 
-        private async void SaveStatistics()
+        private async Task LoadStatisticsAsync(bool showToast)
+        {
+            List<OutputStatistics> stats = new();
+            string? error = null;
+            try
+            {
+                if (File.Exists(_statisticsFilePath))
+                {
+                    var json = await File.ReadAllTextAsync(_statisticsFilePath).ConfigureAwait(false);
+                    stats = JsonSerializer.Deserialize<List<OutputStatistics>>(json) ?? new List<OutputStatistics>();
+                }
+            }
+            catch (Exception ex)
+            {
+                error = ex.Message;
+            }
+
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
+            {
+                Statistics.ReplaceAll(stats);
+
+                if (error == null)
+                {
+                    TM.App.Log($"[LogOutput] 加载统计信息成功");
+                    if (showToast)
+                    {
+                        GlobalToast.Success("刷新完成", "已刷新输出统计信息");
+                    }
+                }
+                else
+                {
+                    TM.App.Log($"[LogOutput] 加载统计信息失败: {error}");
+                    if (showToast)
+                    {
+                        GlobalToast.Error("刷新失败", $"无法刷新统计信息：{error}");
+                    }
+                }
+            });
+        }
+
+        private async Task SaveStatistics()
         {
             try
             {
@@ -791,9 +795,11 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(Statistics.ToList(), JsonHelper.Default);
-                var tmpStat = _statisticsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpStat, json);
+                var tmpStat = _statisticsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpStat))
+                {
+                    await JsonSerializer.SerializeAsync(stream, Statistics.ToList(), JsonHelper.Default);
+                }
                 File.Move(tmpStat, _statisticsFilePath, overwrite: true);
             }
             catch (Exception ex)
@@ -802,7 +808,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             }
         }
 
-        private async void SaveFailures()
+        private async Task SaveFailures()
         {
             try
             {
@@ -812,9 +818,11 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(FailureRecords.ToList(), JsonHelper.Default);
-                var tmpFail = _failuresFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpFail, json);
+                var tmpFail = _failuresFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpFail))
+                {
+                    await JsonSerializer.SerializeAsync(stream, FailureRecords.ToList(), JsonHelper.Default);
+                }
                 File.Move(tmpFail, _failuresFilePath, overwrite: true);
             }
             catch (Exception ex)
@@ -834,7 +842,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             if (result)
             {
                 Statistics.Clear();
-                SaveStatistics();
+                SaveStatistics().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}"));
                 TM.App.Log($"[LogOutput] 重置统计信息");
                 GlobalToast.Success("重置完成", "已清空所有输出统计信息");
             }
@@ -846,7 +854,7 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
             if (result)
             {
                 FailureRecords.Clear();
-                SaveFailures();
+                SaveFailures().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}"));
                 TM.App.Log($"[LogOutput] 清空失败记录");
                 GlobalToast.Success("清空完成", "已清空所有失败记录");
             }
@@ -897,13 +905,9 @@ namespace TM.Framework.SystemSettings.Logging.LogOutput
                 }
             }
 
-            SaveFailures();
+            SaveFailures().SafeFireAndForget(ex => TM.App.Log($"[LogOutputViewModel] {ex.Message}"));
             TM.App.Log($"[LogOutput] 重试完成，成功: {successCount}/{unresolvedFailures.Count}");
             GlobalToast.Success("重试完成", $"成功重试 {successCount}/{unresolvedFailures.Count} 条失败记录");
-        }
-
-        private void SimulateOutputActivity()
-        {
         }
 
         protected void OnPropertyChanged(string propertyName)

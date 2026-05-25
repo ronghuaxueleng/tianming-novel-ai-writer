@@ -3,7 +3,6 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
 using System.Timers;
 using TM.Framework.Appearance.ThemeManagement;
 
@@ -14,13 +13,18 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
         private readonly ThemeManager _themeManager;
         private readonly HolidayLibrary _holidayLibrary;
         private readonly Timer _timer;
-        private TimeBasedSettings _settings;
+        private volatile TimeBasedSettings _settings;
+        private int _settingsVersion;
+        private readonly System.Threading.SemaphoreSlim _saveLock = new(1, 1);
+        private readonly System.Threading.Tasks.Task<TimeBasedSettings> _settingsTask;
+        private volatile List<TimeSchedule>? _sortedSchedulesCache;
 
         public TimeScheduleService(ThemeManager themeManager, HolidayLibrary holidayLibrary)
         {
             _themeManager = themeManager;
             _holidayLibrary = holidayLibrary;
-            _settings = LoadSettings();
+            _settings = new TimeBasedSettings();
+            _settingsTask = LoadSettingsAsync();
 
             _timer = new Timer(60000);
             _timer.Elapsed += OnTimerElapsed;
@@ -28,8 +32,14 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             TM.App.Log("[TimeScheduleService] 初始化完成");
         }
 
-        public void Initialize()
+        public async System.Threading.Tasks.Task InitializeAsync()
         {
+            var loadVersion = System.Threading.Volatile.Read(ref _settingsVersion);
+            var loaded = await _settingsTask.ConfigureAwait(false);
+            if (loadVersion != System.Threading.Volatile.Read(ref _settingsVersion))
+                return;
+            _settings = loaded;
+            _sortedSchedulesCache = null;
             if (_settings.Enabled && !_settings.TemporaryDisabled)
             {
                 StartSchedule();
@@ -73,7 +83,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                 {
                     _settings.TemporaryDisabled = false;
                     _settings.DisabledUntil = null;
-                    SaveSettings();
+                    SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[TimeSchedule] 保存失败: {ex.Message}"));
                 }
                 else
                 {
@@ -139,7 +149,11 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                     }
 
                 case TimeScheduleMode.Flexible:
-                    foreach (var schedule in _settings.Schedules.OrderByDescending(s => s.Priority).ThenByDescending(s => s.StartTime))
+                    var sorted = _sortedSchedulesCache ??= _settings.Schedules
+                        .OrderByDescending(s => s.Priority)
+                        .ThenByDescending(s => s.StartTime)
+                        .ToList();
+                    foreach (var schedule in sorted)
                     {
                         if ((schedule.EnabledWeekdays & currentWeekday) != currentWeekday)
                             continue;
@@ -171,6 +185,21 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
         private void SwitchTheme(ThemeType targetTheme, string scheduleName)
         {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null) return;
+
+            if (dispatcher.CheckAccess())
+            {
+                SwitchThemeCore(targetTheme, scheduleName);
+            }
+            else
+            {
+                dispatcher.BeginInvoke(() => SwitchThemeCore(targetTheme, scheduleName));
+            }
+        }
+
+        private void SwitchThemeCore(ThemeType targetTheme, string scheduleName)
+        {
             try
             {
                 _themeManager.SwitchTheme(targetTheme);
@@ -197,7 +226,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
                     }
                 }
 
-                SaveSettings();
+                SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[TimeSchedule] 保存失败: {ex.Message}"));
 
                 if (_settings.EnableVerboseLog)
                 {
@@ -295,8 +324,10 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
         public void UpdateSettings(TimeBasedSettings settings)
         {
+            System.Threading.Interlocked.Increment(ref _settingsVersion);
             _settings = settings;
-            SaveSettings();
+            _sortedSchedulesCache = null;
+            SaveSettingsAsync().SafeFireAndForget(ex => TM.App.Log($"[TimeSchedule] 保存失败: {ex.Message}"));
 
             if (_settings.Enabled && !_settings.TemporaryDisabled)
             {
@@ -310,7 +341,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             TM.App.Log("[TimeScheduleService] 设置已更新");
         }
 
-        private TimeBasedSettings LoadSettings()
+        private async System.Threading.Tasks.Task<TimeBasedSettings> LoadSettingsAsync()
         {
             try
             {
@@ -318,7 +349,7 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
 
                 if (File.Exists(filePath))
                 {
-                    var json = File.ReadAllText(filePath);
+                    var json = await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
                     var settings = JsonSerializer.Deserialize<TimeBasedSettings>(json);
                     if (settings != null)
                     {
@@ -335,41 +366,20 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             return TimeBasedSettings.CreateDefault();
         }
 
-        private void SaveSettings()
-        {
-            try
-            {
-                var filePath = StoragePathHelper.GetFilePath("Framework", "Appearance/AutoTheme/TimeBased", "settings.json");
-                var dir = Path.GetDirectoryName(filePath);
-                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
-                    Directory.CreateDirectory(dir);
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpTs = filePath + ".tmp";
-                File.WriteAllText(tmpTs, json);
-                File.Move(tmpTs, filePath, overwrite: true);
-
-                if (_settings.EnableVerboseLog)
-                {
-                    TM.App.Log("[TimeScheduleService] 设置已保存");
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[TimeScheduleService] 保存设置失败: {ex.Message}");
-            }
-        }
-
         private async System.Threading.Tasks.Task SaveSettingsAsync()
         {
+            await _saveLock.WaitAsync().ConfigureAwait(false);
             try
             {
                 var filePath = StoragePathHelper.GetFilePath("Framework", "Appearance/AutoTheme/TimeBased", "settings.json");
                 var dir = Path.GetDirectoryName(filePath);
                 if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                     Directory.CreateDirectory(dir);
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpTsA = filePath + ".tmp";
-                await File.WriteAllTextAsync(tmpTsA, json).ConfigureAwait(false);
+                var tmpTsA = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpTsA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default).ConfigureAwait(false);
+                }
                 File.Move(tmpTsA, filePath, overwrite: true);
 
                 if (_settings.EnableVerboseLog)
@@ -380,6 +390,10 @@ namespace TM.Framework.Appearance.AutoTheme.TimeBased
             catch (Exception ex)
             {
                 TM.App.Log($"[TimeScheduleService] 异步保存设置失败: {ex.Message}");
+            }
+            finally
+            {
+                _saveLock.Release();
             }
         }
     }

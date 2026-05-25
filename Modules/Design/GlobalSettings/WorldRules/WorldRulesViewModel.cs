@@ -4,20 +4,18 @@ using System.Reflection;
 using System.Linq;
 using System.Windows.Input;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.ViewModels;
 using TM.Services.Modules.ProjectData.Models.Design.Worldview;
 using TM.Modules.Design.GlobalSettings.WorldRules.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Framework.AI.Interfaces.Prompts;
-using TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
+using TM.Services.Modules.ProjectData.Metadata;
 
 namespace TM.Modules.Design.GlobalSettings.WorldRules
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class WorldRulesViewModel : DataManagementViewModelBase<WorldRulesData, WorldRulesCategory, WorldRulesService>
     {
         private readonly IPromptRepository _promptRepository;
@@ -29,7 +27,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             _contextService = contextService;
         }
         private string _formName = string.Empty;
-        private string _formIcon = "🌍";
+        private string _formIcon = "Icon.Globe";
         private string _formStatus = "已启用";
         private string _formCategory = string.Empty;
 
@@ -77,7 +75,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
 
         public List<string> StatusOptions { get; } = new() { "已禁用", "已启用" };
 
-        protected override string DefaultDataIcon => "🌍";
+        protected override string DefaultDataIcon => "Icon.Globe";
 
         protected override WorldRulesData? CreateNewData(string? categoryName = null)
         {
@@ -101,6 +99,8 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
 
         protected override int ClearAllDataItems() => Service.ClearAllWorldRules();
 
+        protected override string GetModuleNameForVersionTracking() => "WorldRules";
+
         protected override void SaveCurrentEditingData()
         {
             if (_currentEditingData != null)
@@ -118,20 +118,15 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             return new TreeNodeItem
             {
                 Name = data.Name,
-                Icon = "🌍",
+                Icon = IconHelper.Get("Icon.Globe"),
                 Tag = data,
                 ShowChildCount = false
             };
         }
 
-        protected override bool MatchesSearchKeyword(WorldRulesData data, string keyword)
+        protected override string[] GetSearchAdditionalFields(WorldRulesData data)
         {
-            if (string.IsNullOrWhiteSpace(keyword)) return true;
-
-            return data.Name.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.OneLineSummary.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.PowerSystem.Contains(keyword, StringComparison.OrdinalIgnoreCase)
-                   || data.HardRules.Contains(keyword, StringComparison.OrdinalIgnoreCase);
+            return new[] { data.OneLineSummary, data.PowerSystem, data.HardRules };
         }
 
         private ICommand? _selectNodeCommand;
@@ -150,21 +145,29 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
                 {
                     _currentEditingCategory = category;
                     _currentEditingData = null;
-                    LoadCategoryToForm(category);
-                    EnterEditMode();
+                    if (category.IsBuiltIn)
+                    {
+                        ResetForm();
+                        EnterEditMode();
+                    }
+                    else
+                    {
+                        LoadCategoryToForm(category);
+                        EnterEditMode();
+                    }
                 }
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[WorldRulesViewModel] 节点选中失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         });
 
         private void LoadDataToForm(WorldRulesData data)
         {
             FormName = data.Name;
-            FormIcon = "🌍";
+            FormIcon = "Icon.Globe";
             FormStatus = data.IsEnabled ? "已启用" : "已禁用";
             FormCategory = data.Category;
 
@@ -231,7 +234,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             catch (Exception ex)
             {
                 TM.App.Log($"[WorldRulesViewModel] 新建失败: {ex.Message}");
-                GlobalToast.Error("新建失败", ex.Message);
+                GlobalToast.Error("新建失败", $"新建失败：{ex.Message}");
             }
         });
 
@@ -252,7 +255,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             catch (Exception ex)
             {
                 TM.App.Log($"[WorldRulesViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         });
 
@@ -356,7 +359,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             var newIsEnabled = (FormStatus == "已启用");
             if (newIsEnabled && !data.IsEnabled)
             {
-                if (!CheckScopeBeforeEnable(data.SourceBookId, data.Name))
+                if (!CheckBeforeEnable(null, data.Name))
                 {
                     FormStatus = "已禁用";
                     return;
@@ -398,10 +401,15 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
 
                     int totalDataDeleted = 0;
 
+                    var categoryIdLookup = Service.GetAllCategories()
+                        .ToDictionary(c => c.Name, c => c.Id, StringComparer.Ordinal);
                     foreach (var categoryName in allCategoriesToDelete)
                     {
+                        categoryIdLookup.TryGetValue(categoryName, out var cId);
                         var dataInCategory = Service.GetAllWorldRules()
-                            .Where(d => d.Category == categoryName)
+                            .Where(d =>
+                                (!string.IsNullOrWhiteSpace(cId) && d.CategoryId == cId) ||
+                                (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName))
                             .ToList();
 
                         foreach (var item in dataInCategory)
@@ -442,7 +450,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             catch (Exception ex)
             {
                 TM.App.Log($"[WorldRulesViewModel] 删除失败: {ex.Message}");
-                GlobalToast.Error("删除失败", ex.Message);
+                GlobalToast.Error("删除失败", $"删除失败：{ex.Message}");
             }
         });
 
@@ -453,6 +461,7 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
             return new TM.Framework.Common.ViewModels.AIGenerationConfig
             {
                 Category = "小说设计师",
+                ActiveModuleHint = "世界观规则",
                 ServiceType = TM.Framework.Common.ViewModels.AIServiceType.ChatEngine,
                 ResponseFormat = TM.Framework.Common.ViewModels.ResponseFormat.Json,
                 MessagePrefix = "世界观设计",
@@ -510,24 +519,13 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
 
                     return sb.ToString();
                 },
-                BatchFieldKeyMap = new()
-                {
-                    ["一句话简介"] = "OneLineSummary",
-                    ["力量体系"] = "PowerSystem",
-                    ["宇宙观"] = "Cosmology",
-                    ["特殊法则"] = "SpecialLaws",
-
-                    ["硬规则"] = "HardRules",
-                    ["软规则"] = "SoftRules",
-
-                    ["创世古代纪元"] = "AncientEra",
-                    ["关键历史事件"] = "KeyEvents",
-                    ["近代史"] = "ModernHistory",
-                    ["故事开始前现状"] = "StatusQuo"
-                },
+                BatchFieldKeyMap = CreateBatchFieldKeyMap(),
                 BatchIndexFields = new() { "Name", "OneLineSummary", "PowerSystem" }
             };
         }
+
+        public static Dictionary<string, string> CreateBatchFieldKeyMap()
+            => EntityFieldMeta.GetFieldKeyMap("worldrules");
 
         protected override bool IsBatchGenerationDisabledForCurrentModule() => false;
 
@@ -535,7 +533,9 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
 
         protected override IEnumerable<string> GetExistingNamesForDedup()
             => Service.GetAllWorldRules().Select(r => r.Name);
-        protected override int GetDefaultBatchSize() => 5;
+        protected override int GetBaseBatchSize() => 5;
+        protected override int GetBatchSize64K() => 7;
+        protected override int GetBatchSize128K() => 8;
 
         protected override async System.Threading.Tasks.Task<List<Dictionary<string, object>>> SaveBatchEntitiesAsync(
             List<Dictionary<string, object>> entities,
@@ -548,63 +548,72 @@ namespace TM.Modules.Design.GlobalSettings.WorldRules
                 StringComparer.OrdinalIgnoreCase);
             var batchNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-            foreach (var entity in entities)
+            Service.BeginBatchSave();
+            try
             {
-                try
+                foreach (var entity in entities)
                 {
-                    var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
-                    var name = reader.GetString("Name");
-                    if (string.IsNullOrWhiteSpace(name))
-                        name = $"世界观规则_{DateTime.Now:HHmmss}_{result.Count + 1}";
-
-                    var baseName = name;
-
-                    if (dbNames.Contains(baseName))
+                    try
                     {
-                        TM.App.Log($"[WorldRulesViewModel] 跳过已存在规则: {baseName}");
-                        continue;
+                        var reader = new TM.Framework.Common.Services.BatchEntityReader(entity);
+                        var name = reader.GetString("Name");
+                        if (string.IsNullOrWhiteSpace(name))
+                            name = $"世界观规则_{DateTime.Now:HHmmss}_{result.Count + 1}";
+
+                        var baseName = name;
+
+                        if (dbNames.Contains(baseName))
+                        {
+                            TM.App.Log($"[WorldRulesViewModel] 跳过已存在规则: {baseName}");
+                            continue;
+                        }
+
+                        int suffix = 1;
+                        while (batchNames.Contains(name))
+                        {
+                            name = $"{baseName}_{suffix++}";
+                        }
+                        batchNames.Add(name);
+                        dbNames.Add(name);
+
+                        var data = new WorldRulesData
+                        {
+                            Id = ShortIdGenerator.New("D"),
+                            Name = name,
+                            Category = categoryName,
+                            IsEnabled = true,
+                            CreatedAt = DateTime.Now,
+                            UpdatedAt = DateTime.Now,
+                            OneLineSummary = reader.GetString("OneLineSummary"),
+                            PowerSystem = reader.GetString("PowerSystem"),
+                            Cosmology = reader.GetString("Cosmology"),
+                            SpecialLaws = reader.GetString("SpecialLaws"),
+                            HardRules = reader.GetString("HardRules"),
+                            SoftRules = reader.GetString("SoftRules"),
+                            AncientEra = reader.GetString("AncientEra"),
+                            KeyEvents = reader.GetString("KeyEvents"),
+                            ModernHistory = reader.GetString("ModernHistory"),
+                            StatusQuo = reader.GetString("StatusQuo"),
+                            DependencyModuleVersions = versionSnapshot ?? new()
+                        };
+
+                        entity["Name"] = name;
+                        await Service.AddWorldRuleAsync(data);
+                        result.Add(entity);
                     }
-
-                    int suffix = 1;
-                    while (batchNames.Contains(name))
+                    catch (Exception ex)
                     {
-                        name = $"{baseName}_{suffix++}";
+                        TM.App.Log($"[WorldRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
                     }
-                    batchNames.Add(name);
-                    dbNames.Add(name);
-
-                    var data = new WorldRulesData
-                    {
-                        Id = ShortIdGenerator.New("D"),
-                        Name = name,
-                        Category = categoryName,
-                        IsEnabled = true,
-                        CreatedAt = DateTime.Now,
-                        UpdatedAt = DateTime.Now,
-                        OneLineSummary = reader.GetString("OneLineSummary"),
-                        PowerSystem = reader.GetString("PowerSystem"),
-                        Cosmology = reader.GetString("Cosmology"),
-                        SpecialLaws = reader.GetString("SpecialLaws"),
-                        HardRules = reader.GetString("HardRules"),
-                        SoftRules = reader.GetString("SoftRules"),
-                        AncientEra = reader.GetString("AncientEra"),
-                        KeyEvents = reader.GetString("KeyEvents"),
-                        ModernHistory = reader.GetString("ModernHistory"),
-                        StatusQuo = reader.GetString("StatusQuo")
-                    };
-
-                    entity["Name"] = name;
-                    await Service.AddWorldRuleAsync(data);
-                    result.Add(entity);
                 }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[WorldRulesViewModel] SaveBatchEntitiesAsync: 保存实体失败 - {ex.Message}");
-                }
+
+                TM.App.Log($"[WorldRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
+                return result;
             }
-
-            TM.App.Log($"[WorldRulesViewModel] SaveBatchEntitiesAsync: 成功保存 {result.Count}/{entities.Count} 个实体");
-            return result;
+            finally
+            {
+                Service.EndBatchSave();
+            }
         }
     }
 }

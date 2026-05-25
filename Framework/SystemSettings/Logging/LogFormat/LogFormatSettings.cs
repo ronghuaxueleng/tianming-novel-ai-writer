@@ -79,8 +79,8 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
     public class LogFormatSettings
     {
-        [JsonPropertyName("FormatTemplate")] public string FormatTemplate { get; set; } = "[{timestamp}] [{level}] {message}";
-        [JsonPropertyName("SelectedFields")] public FormatField SelectedFields { get; set; } = FormatField.Timestamp | FormatField.Level | FormatField.Message;
+        [JsonPropertyName("FormatTemplate")] public string FormatTemplate { get; set; } = "[{timestamp}] [{level}] [{caller}] {message}";
+        [JsonPropertyName("SelectedFields")] public FormatField SelectedFields { get; set; } = FormatField.Timestamp | FormatField.Level | FormatField.Caller | FormatField.Message;
         [JsonPropertyName("TimestampFormat")] public string TimestampFormat { get; set; } = "yyyy-MM-dd HH:mm:ss.fff";
         [JsonPropertyName("FieldSeparator")] public string FieldSeparator { get; set; } = " | ";
         [JsonPropertyName("OutputFormat")] public OutputFormatType OutputFormat { get; set; } = OutputFormatType.Text;

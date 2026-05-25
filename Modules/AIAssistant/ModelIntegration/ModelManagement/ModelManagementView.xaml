@@ -4,10 +4,15 @@
              xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
              xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
              xmlns:helpers="clr-namespace:TM.Framework.Common.Helpers.UI"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+             xmlns:converters="clr-namespace:TM.Framework.Common.Converters">
+
+    <UserControl.Resources>
+        <converters:IconKeyToImageSourceConverter x:Key="IconKeyToImageSourceConverter"/>
+    </UserControl.Resources>
 
     <dm:TwoColumnEditorLayout
         x:Name="RootLayout"
+        LeftColumnWidth="320"
         LeftTitle="模型管理"
         IsEditAreaEnabled="{Binding IsTab1Enabled}"
         ItemsSource="{Binding TreeData}"
@@ -23,41 +28,53 @@
         IsAIGenerateEnabled="False"
         ShowAIGenerateButton="True"
         UseStandardScheme2Layout="True"
-        Tab3Header="全局配置">
+        SelectedHeaderTabIndex="{Binding CurrentTabIndex, Mode=TwoWay}"
+        Tab3Header="全局配置"
+        Tab4Header="写作配置">
 
         <dm:TwoColumnEditorLayout.EditAdditionalContent>
             <Grid>
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
+                    <RowDefinition Height="*" MinHeight="80"/>
                 </Grid.RowDefinitions>
 
-                <layout:IconHeaderGroupBox Grid.Row="0" Icon="🔌" Title="API配置" Margin="0,0,0,10"
+                <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Plugin}" Title="API配置" Margin="0,0,0,10"
                                           IsEnabled="{Binding IsApiConfigEditable}">
                     <StackPanel>
                         <TextBlock Text="API端点" Margin="0,0,0,3"
                                   Foreground="{DynamicResource TextPrimary}"/>
-                        <Border BorderBrush="{DynamicResource BorderBrush}"
+                        <Border BorderBrush="{DynamicResource GlassBorderBrush}"
                                BorderThickness="1"
                                CornerRadius="4"
-                               Background="{DynamicResource Surface}"
+                               Background="{DynamicResource SurfaceGlass}"
                                Margin="0,0,0,10">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
                                     <ColumnDefinition Width="Auto"/>
                                 </Grid.ColumnDefinitions>
+
+                                <PasswordBox Grid.Column="0"
+                                            Loaded="ApiEndpointBox_Loaded"
+                                            PasswordChanged="ApiEndpointBox_PasswordChanged"
+                                            BorderThickness="0"
+                                            Padding="8,0"
+                                            Visibility="{Binding IsBuiltInCategory, Converter={StaticResource BoolToVisibilityConverter}}"/>
+
                                 <TextBox Grid.Column="0"
-                                        Text="{Binding FormApiEndpoint, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormApiEndpoint, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                         BorderThickness="0"
-                                        Padding="8,0"/>
-                                <Border Grid.Column="1" 
+                                        Padding="8,0"
+                                        Visibility="{Binding IsBuiltInCategory, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
+
+                                <Border Grid.Column="1"
                                         Width="32"
                                         VerticalAlignment="Center"
                                         Visibility="{Binding ShowEndpointVerificationStatus, Converter={StaticResource BoolToVisibilityConverter}}"
                                         ToolTip="{Binding EndpointVerificationTooltip}">
-                                    <emoji:TextBlock Text="{Binding EndpointVerificationIcon}" FontSize="14" HorizontalAlignment="Center"/>
+                                    <Image Source="{Binding EndpointVerificationIcon, Converter={StaticResource IconKeyToImageSourceConverter}}" Width="14" Height="14" HorizontalAlignment="Center"/>
                                 </Border>
                             </Grid>
                         </Border>
@@ -79,17 +96,18 @@
                                    Cursor="Hand"
                                    ToolTip="管理 API 密钥">
                                 <StackPanel Orientation="Horizontal">
-                                    <emoji:TextBlock Text="⚙️" FontSize="12" VerticalAlignment="Center"/>
+                                    <Image Source="{DynamicResource Icon.Settings}" Width="12" Height="12" VerticalAlignment="Center"/>
                                     <TextBlock Text=" 增加轮询key" FontSize="12"
                                               Foreground="{DynamicResource TextTertiary}"
                                               VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
                         </Grid>
-                        <Border BorderBrush="{DynamicResource BorderBrush}"
+
+                        <Border BorderBrush="{DynamicResource GlassBorderBrush}"
                                BorderThickness="1"
                                CornerRadius="4"
-                               Background="{DynamicResource Surface}">
+                               Background="{DynamicResource SurfaceGlass}">
                             <Grid>
                                 <Grid.ColumnDefinitions>
                                     <ColumnDefinition Width="*"/>
@@ -104,7 +122,7 @@
                                             Visibility="{Binding IsApiKeyVisible, Converter={StaticResource InverseBoolToVisibilityConverter}}"/>
 
                                 <TextBox Grid.Column="0"
-                                        Text="{Binding FormApiKey, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormApiKey, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                         BorderThickness="0"
                                         Padding="8,0"
                                         Visibility="{Binding IsApiKeyVisible, Converter={StaticResource BoolToVisibilityConverter}}"/>
@@ -118,15 +136,15 @@
                                        BorderThickness="0"
                                        Cursor="Hand"
                                        ToolTip="显示/隐藏密钥">
-                                    <emoji:TextBlock Text="{Binding ApiKeyVisibilityIcon}" FontSize="14"/>
+                                    <Image Source="{Binding ApiKeyVisibilityIcon, Converter={StaticResource IconKeyToImageSourceConverter}}" Width="14" Height="14"/>
                                 </Button>
                             </Grid>
                         </Border>
                     </StackPanel>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="1" Icon="📦" Title="模型获取方式" Margin="0,0,0,10"
-                                          IsEnabled="{Binding IsApiConfigEditable}">
+                <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Package}" Title="模型获取方式" Margin="0,0,0,10"
+                                          IsEnabled="{Binding IsApiActionEnabled}">
                     <StackPanel>
                         <Grid Margin="0,0,0,12">
                             <Grid.ColumnDefinitions>
@@ -134,13 +152,13 @@
                                 <ColumnDefinition Width="Auto"/>
                             </Grid.ColumnDefinitions>
 
-                            <Button Grid.Column="1" 
+                            <Button Grid.Column="1"
                                     Command="{Binding TestApiConnectionCommand}"
                                     Height="36"
                                     Padding="12,0"
                                     VerticalAlignment="Center">
                                 <StackPanel Orientation="Horizontal">
-                                    <emoji:TextBlock Text="🔗" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                    <Image Source="{DynamicResource Icon.Link}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                     <TextBlock Text="测试API连接" FontSize="12" VerticalAlignment="Center"/>
                                 </StackPanel>
                             </Button>
@@ -159,7 +177,7 @@
                                 </RadioButton>
                                 <Button Command="{Binding FetchModelsCommand}" HorizontalAlignment="Stretch" Height="36">
                                     <StackPanel Orientation="Horizontal">
-                                        <emoji:TextBlock Text="🔍" FontSize="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                        <Image Source="{DynamicResource Icon.Search}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                         <TextBlock Text="获取可用模型列表" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
@@ -171,7 +189,7 @@
                                         <TextBlock Text="手动获取输入指定模型" FontWeight="SemiBold"
                                                   Foreground="{DynamicResource TextPrimary}"/>
                                         <StackPanel Orientation="Horizontal" Margin="10,0,0,0">
-                                            <emoji:TextBlock Text="💡" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                            <Image Source="{DynamicResource Icon.Lightbulb}" Width="11" Height="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
                                             <TextBlock Text="例如: gpt-4o" FontSize="11"
                                                       Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
                                         </StackPanel>
@@ -183,14 +201,14 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBox Grid.Column="0"
-                                            Text="{Binding ManualModelName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Text="{Binding ManualModelName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             Margin="0,0,10,0" VerticalContentAlignment="Center" Height="36"
                                             IsEnabled="{Binding IsManualInputMode}"/>
                                     <Button Grid.Column="1"
                                            Command="{Binding FetchManualModelCommand}" Height="36"
                                            Padding="12,6" MinWidth="88" HorizontalContentAlignment="Center">
                                         <StackPanel Orientation="Horizontal">
-                                            <emoji:TextBlock Text="🔍" FontSize="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                            <Image Source="{DynamicResource Icon.Search}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                             <TextBlock Text="获取" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Button>
@@ -199,7 +217,7 @@
                         </Grid>
 
                         <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
-                            <emoji:TextBlock Text="ℹ️" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                            <Image Source="{DynamicResource Icon.Info}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
                             <TextBlock Text="若 Chat 端点测试失败，可在下方选择已获取的模型或手动输入模型名称进行重试" FontSize="12"
                                       Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
                         </StackPanel>
@@ -230,7 +248,7 @@
                                            Command="{Binding RetryWithDropdownCommand}" Height="36"
                                            Padding="12,6" MinWidth="88" HorizontalContentAlignment="Center">
                                         <StackPanel Orientation="Horizontal">
-                                            <emoji:TextBlock Text="🔄" FontSize="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                            <Image Source="{DynamicResource Icon.Refresh}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                             <TextBlock Text="重试" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Button>
@@ -248,14 +266,14 @@
                                         <ColumnDefinition Width="Auto"/>
                                     </Grid.ColumnDefinitions>
                                     <TextBox Grid.Column="0"
-                                            Text="{Binding RetryManualModelName, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                            Text="{Binding RetryManualModelName, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             Margin="0,0,10,0" VerticalContentAlignment="Center" Height="36"
                                             IsEnabled="{Binding IsManualRetryInputEnabled}"/>
                                     <Button Grid.Column="1"
                                            Command="{Binding RetryWithManualCommand}" Height="36"
                                            Padding="12,6" MinWidth="88" HorizontalContentAlignment="Center">
                                         <StackPanel Orientation="Horizontal">
-                                            <emoji:TextBlock Text="🔄" FontSize="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                            <Image Source="{DynamicResource Icon.Refresh}" Width="14" Height="14" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                             <TextBlock Text="重试" VerticalAlignment="Center"/>
                                         </StackPanel>
                                     </Button>
@@ -265,8 +283,8 @@
                     </StackPanel>
                 </layout:IconHeaderGroupBox>
 
-                <layout:IconHeaderGroupBox Grid.Row="2" Icon="📝" Title="描述" Margin="0">
-                    <TextBox Text="{Binding FormDescription, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Edit}" Title="描述" Margin="0">
+                    <TextBox Text="{Binding FormDescription, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                             AcceptsReturn="True"
                             TextWrapping="Wrap"
                             VerticalScrollBarVisibility="Auto"
@@ -275,6 +293,7 @@
                 </layout:IconHeaderGroupBox>
 
             </Grid>
+
         </dm:TwoColumnEditorLayout.EditAdditionalContent>
 
         <dm:TwoColumnEditorLayout.DetailsContent>
@@ -290,7 +309,7 @@
                     </Style>
                 </ScrollViewer.Style>
                 <StackPanel Margin="0">
-                    <layout:IconHeaderGroupBox Icon="🎚️" Title="参数调整" Margin="0,0,0,15">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Slider}" Title="参数调整" Margin="0,0,0,15">
                         <StackPanel>
                             <TextBlock Text="Temperature（随机性）" Margin="0,0,0,5"
                                       Foreground="{DynamicResource TextPrimary}"/>
@@ -307,7 +326,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,15,0"/>
                                 <TextBox Grid.Column="1"
-                                        Text="{Binding FormTemperature, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormTemperature, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=LostFocus}"
                                         VerticalAlignment="Center"
                                         HorizontalContentAlignment="Center"/>
                             </Grid>
@@ -327,7 +346,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,15,0"/>
                                 <TextBox Grid.Column="1"
-                                        Text="{Binding FormTopP, Mode=TwoWay, StringFormat={}{0:F2}, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormTopP, Mode=TwoWay, StringFormat={}{0:F2}, UpdateSourceTrigger=LostFocus}"
                                         VerticalAlignment="Center"
                                         HorizontalContentAlignment="Center"/>
                             </Grid>
@@ -347,7 +366,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,15,0"/>
                                 <TextBox Grid.Column="1"
-                                        Text="{Binding FormFrequencyPenalty, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormFrequencyPenalty, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=LostFocus}"
                                         VerticalAlignment="Center"
                                         HorizontalContentAlignment="Center"/>
                             </Grid>
@@ -367,7 +386,7 @@
                                        VerticalAlignment="Center"
                                        Margin="0,0,15,0"/>
                                 <TextBox Grid.Column="1"
-                                        Text="{Binding FormPresencePenalty, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=PropertyChanged}"
+                                        Text="{Binding FormPresencePenalty, Mode=TwoWay, StringFormat={}{0:F1}, UpdateSourceTrigger=LostFocus}"
                                         VerticalAlignment="Center"
                                         HorizontalContentAlignment="Center"/>
                             </Grid>
@@ -376,89 +395,177 @@
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="随机种子" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding FormSeed, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormSeed, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="停止序列" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding FormStopSequences, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormStopSequences, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="重试次数" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding FormRetryCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormRetryCount, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel>
                                     <TextBlock Text="超时时间（秒）" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding FormTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormTimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
                             </UniformGrid>
                         </StackPanel>
                     </layout:IconHeaderGroupBox>
 
-                    <layout:IconHeaderGroupBox Icon="⚡" Title="速率限制" Margin="0,0,0,5">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Lightning}" Title="速率限制" Margin="0,0,0,5">
                         <StackPanel>
                             <UniformGrid Columns="4" HorizontalAlignment="Stretch" Margin="0">
                                 <StackPanel Margin="0,0,10,0">
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <emoji:TextBlock Text="📊" FontSize="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <Image Source="{DynamicResource Icon.Chart}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
                                         <TextBlock Text="最大Token数" FontSize="12"
                                                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBox Text="{Binding FormMaxTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormMaxTokens, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <emoji:TextBlock Text="🕐" FontSize="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <Image Source="{DynamicResource Icon.Clock}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
                                         <TextBlock Text="每分钟请求数上限" FontSize="12"
                                                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBox Text="{Binding FormRateLimitRPM, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormRateLimitRPM, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <emoji:TextBlock Text="📅" FontSize="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <Image Source="{DynamicResource Icon.Calendar}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
                                         <TextBlock Text="每分钟令牌数上限" FontSize="12"
                                                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBox Text="{Binding FormRateLimitTPM, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormRateLimitTPM, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel>
                                     <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
-                                        <emoji:TextBlock Text="🔀" FontSize="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <Image Source="{DynamicResource Icon.Shuffle}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
                                         <TextBlock Text="最大并发请求数" FontSize="12"
                                                   Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
                                     </StackPanel>
-                                    <TextBox Text="{Binding FormMaxConcurrency, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding FormMaxConcurrency, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
                             </UniformGrid>
 
                             <StackPanel Orientation="Horizontal">
-                                <emoji:TextBlock Text="💡" FontSize="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
-                                <TextBlock Text="设置为 0 表示无限制，速率限制依据厂商政策建议不要过高" FontSize="11"
+                                <Image Source="{DynamicResource Icon.Lightbulb}" Width="11" Height="11" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                <TextBlock Text="最大Token数=0 自动使用模型声明最大值；每分钟请求数/令牌数=0 表示无限制，依据厂商政策不要过高" FontSize="11"
                                           Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"/>
                             </StackPanel>
                         </StackPanel>
                     </layout:IconHeaderGroupBox>
 
-                    <CheckBox Content="启用流式输出" 
-                             IsChecked="{Binding FormEnableStreaming}"
-                             Margin="0,10,0,0"/>
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Brain}" Title="推理与思考" Margin="0,10,0,5">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,10">
+                                <CheckBox Content="支持推理参数"
+                                          IsChecked="{Binding FormSupportsReasoningEffort, Mode=TwoWay}"
+                                          Foreground="{DynamicResource TextPrimary}"
+                                          VerticalContentAlignment="Center"
+                                          Margin="0,0,20,0"/>
+                                <CheckBox Content="支持思考参数"
+                                          IsChecked="{Binding FormSupportsThinking, Mode=TwoWay}"
+                                          Foreground="{DynamicResource TextPrimary}"
+                                          VerticalContentAlignment="Center"
+                                          Margin="0,0,20,0"/>
+                                <CheckBox Content="支持 1M 上下文"
+                                          IsChecked="{Binding FormSupportsLongContext, Mode=TwoWay}"
+                                          Foreground="{DynamicResource TextPrimary}"
+                                          VerticalContentAlignment="Center"
+                                          ToolTip="探测命中后自动勾选；勾选后快捷面板可显示 1M 开关，但默认不启用"/>
+                            </StackPanel>
+
+                            <Grid HorizontalAlignment="Stretch" Margin="0,0,0,5"
+                                  IsEnabled="{Binding FormReasoningEffortEnabled}"
+                                  Visibility="{Binding FormShowThinkingToggle, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Opacity" Value="0.45"/>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Image Source="{DynamicResource Icon.Package}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <TextBlock Text="深度思考" FontSize="12"
+                                                  Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <ComboBox ItemsSource="{Binding FormAvailableThinkingStates}"
+                                              SelectedValuePath="State"
+                                              SelectedValue="{Binding FormThinkingEnabled, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayLabel}"/>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Grid>
+
+                            <Grid HorizontalAlignment="Stretch" Margin="0,0,0,5"
+                                  IsEnabled="{Binding FormCanSelectEffort}"
+                                  Visibility="{Binding FormShowEffortDropdown, Converter={StaticResource BoolToVisibilityConverter}}">
+                                <Grid.Style>
+                                    <Style TargetType="Grid">
+                                        <Style.Triggers>
+                                            <Trigger Property="IsEnabled" Value="False">
+                                                <Setter Property="Opacity" Value="0.45"/>
+                                            </Trigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Grid.Style>
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <Image Source="{DynamicResource Icon.Package}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,3,0"/>
+                                        <TextBlock Text="思考强度" FontSize="12"
+                                                  Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"/>
+                                    </StackPanel>
+                                    <ComboBox ItemsSource="{Binding FormAvailableThinkingEfforts}"
+                                              SelectedValuePath="WireValue"
+                                              SelectedValue="{Binding FormReasoningEffort, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}">
+                                        <ComboBox.ItemTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding DisplayLabel}"/>
+                                            </DataTemplate>
+                                        </ComboBox.ItemTemplate>
+                                    </ComboBox>
+                                </StackPanel>
+                            </Grid>
+                        </StackPanel>
+                    </layout:IconHeaderGroupBox>
+
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Lightning}" Title="生成批次档位" Margin="0,10,0,5">
+                        <StackPanel>
+                            <ComboBox ItemsSource="{Binding BatchTierOptions}"
+                                     DisplayMemberPath="Display"
+                                     SelectedValuePath="Value"
+                                     SelectedValue="{Binding FormBatchTier, Mode=TwoWay}"
+                                     Height="36" VerticalContentAlignment="Center"/>
+                        </StackPanel>
+                    </layout:IconHeaderGroupBox>
 
                 </StackPanel>
             </ScrollViewer>
@@ -477,7 +584,8 @@
                     </Style>
                 </ScrollViewer.Style>
                 <StackPanel Margin="0">
-                    <layout:IconHeaderGroupBox Icon="⚙️" Title="全局参数模板" Margin="0,0,0,10">
+
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Settings}" Title="全局参数模板" Margin="0,0,0,10">
                         <UniformGrid Columns="2" HorizontalAlignment="Stretch">
                             <StackPanel Margin="0,0,10,0">
                                 <TextBlock Text="当前供应商" Margin="0,0,0,5" FontWeight="SemiBold"
@@ -498,82 +606,78 @@
                         </UniformGrid>
                     </layout:IconHeaderGroupBox>
 
-                    <layout:IconHeaderGroupBox Icon="📚" Title="模板参数配置" Margin="0,0,0,10">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Books}" Title="模板参数配置" Margin="0,0,0,10">
                         <StackPanel>
                             <TextBlock Text="模板名称" Margin="0,0,0,5" FontWeight="SemiBold"
                                       Foreground="{DynamicResource TextPrimary}"/>
-                            <TextBox Text="{Binding SelectedProfile.Name, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                            <TextBox Text="{Binding SelectedProfile.Name, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                      IsEnabled="{Binding HasSelectedProfile}"
                                      Margin="0,0,0,10"/>
 
                             <UniformGrid Columns="4" HorizontalAlignment="Stretch" Margin="0,0,0,10"
                                          IsEnabled="{Binding HasSelectedProfile}">
+
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="随机性" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.Temperature, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.Temperature, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="采样比例" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.TopP, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.TopP, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="最大Token数" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.MaxTokens, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.MaxTokens, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel>
                                     <TextBlock Text="最大并发请求数" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.MaxConcurrency, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.MaxConcurrency, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,10,10,0">
                                     <TextBlock Text="每分钟请求数上限" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.RateLimitRPM, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.RateLimitRPM, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,10,10,0">
                                     <TextBlock Text="每分钟令牌数上限" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.RateLimitTPM, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.RateLimitTPM, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,10,10,0">
                                     <TextBlock Text="重试次数" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.RetryCount, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.RetryCount, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
 
                                 <StackPanel Margin="0,10,0,0">
                                     <TextBlock Text="超时时间（秒）" Margin="0,0,0,5"
                                               Foreground="{DynamicResource TextPrimary}"/>
-                                    <TextBox Text="{Binding SelectedProfile.TimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                    <TextBox Text="{Binding SelectedProfile.TimeoutSeconds, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
                                             HorizontalAlignment="Stretch"/>
                                 </StackPanel>
                             </UniformGrid>
 
-                            <CheckBox Content="启用流式输出" 
-                                      IsChecked="{Binding SelectedProfile.EnableStreaming, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                      IsEnabled="{Binding HasSelectedProfile}"
-                                      Margin="0,0,0,10"/>
-
                             <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                                 <Button Command="{Binding SaveProfilesCommand}" Margin="0,0,10,0">
                                     <StackPanel Orientation="Horizontal">
-                                        <emoji:TextBlock Text="💾" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                        <Image Source="{DynamicResource Icon.Save}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                         <TextBlock Text="保存模板更改" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
@@ -581,7 +685,7 @@
                                 <Button Command="{Binding ApplyProfileToAllModelsCommand}"
                                         IsEnabled="{Binding HasCurrentProvider}">
                                     <StackPanel Orientation="Horizontal">
-                                        <emoji:TextBlock Text="🌐" FontSize="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                        <Image Source="{DynamicResource Icon.Globe}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
                                         <TextBlock Text="将模板应用到当前供应商全部模型" VerticalAlignment="Center"/>
                                     </StackPanel>
                                 </Button>
@@ -589,8 +693,9 @@
                         </StackPanel>
                     </layout:IconHeaderGroupBox>
 
-                    <layout:IconHeaderGroupBox Icon="📄" Title="当前模型参数（实际生效）" Margin="0">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Document}" Title="当前模型参数（实际生效）" Margin="0">
                         <UniformGrid Columns="4" HorizontalAlignment="Stretch" Margin="0">
+
                                 <StackPanel Margin="0,0,10,0">
                                     <TextBlock Text="随机性" Margin="0,0,0,3"
                                               Foreground="{DynamicResource TextSecondary}"/>
@@ -652,6 +757,137 @@
                 </StackPanel>
             </ScrollViewer>
         </dm:TwoColumnEditorLayout.Tab3Content>
+
+        <dm:TwoColumnEditorLayout.Tab4Content>
+            <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel Margin="0">
+                    <layout:IconHeaderGroupBox Icon="{DynamicResource Icon.Write}" Title="API路由配置" Margin="0,0,0,15">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <Image Source="{DynamicResource Icon.Lightbulb}" Width="12" Height="12" VerticalAlignment="Center" Margin="0,0,5,0"/>
+                                <TextBlock Text="下拉列表仅显示已启用的模型，禁用模型后将自动从列表中移除。两项可选同一模型。" FontSize="12"
+                                          Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center" TextWrapping="Wrap"/>
+                            </StackPanel>
+
+                            <TextBlock Text="对话 API 调用" Margin="0,0,0,5" FontWeight="SemiBold"
+                                      Foreground="{DynamicResource TextPrimary}"/>
+                            <TextBlock Text="章节生成、AI对话使用此模型，选择后同时切换当前激活模型" FontSize="11"
+                                      Foreground="{DynamicResource TextTertiary}" Margin="0,0,0,6"/>
+                            <ComboBox ItemsSource="{Binding EnabledConfigs}"
+                                      SelectedItem="{Binding SelectedChatConfig, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      Height="36"
+                                      Margin="0,0,0,16"
+                                      Tag="{Binding}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayNameWithPrefix}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   ToolTip="{Binding DisplayNameWithPrefix}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="Tag" Value="{Binding RelativeSource={RelativeSource AncestorType=ComboBox}, Path=Tag}"/>
+                                        <Setter Property="ContextMenu">
+                                            <Setter.Value>
+                                                <ContextMenu>
+                                                    <MenuItem Header="禁用此模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableWritingConfigModelCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Separator Margin="0,2,0,2"/>
+                                                    <MenuItem Header="禁用全模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableAllWritingConfigModelsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                </ContextMenu>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
+
+                            <TextBlock Text="备用 API 调用" Margin="0,0,0,5" FontWeight="SemiBold"
+                                      Foreground="{DynamicResource TextPrimary}"/>
+                            <TextBlock Text="主API所有Key耗尽时自动切换，指定分钟数后自动恢复主API（默认720分钟/12小时）" FontSize="11"
+                                      Foreground="{DynamicResource TextTertiary}" Margin="0,0,0,6"/>
+                            <ComboBox ItemsSource="{Binding EnabledConfigs}"
+                                      SelectedItem="{Binding SelectedBackupChatConfig, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      Height="36"
+                                      Margin="0,0,0,8"
+                                      Tag="{Binding}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayNameWithPrefix}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   ToolTip="{Binding DisplayNameWithPrefix}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="Tag" Value="{Binding RelativeSource={RelativeSource AncestorType=ComboBox}, Path=Tag}"/>
+                                        <Setter Property="ContextMenu">
+                                            <Setter.Value>
+                                                <ContextMenu>
+                                                    <MenuItem Header="禁用此模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableWritingConfigModelCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Separator Margin="0,2,0,2"/>
+                                                    <MenuItem Header="禁用全模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableAllWritingConfigModelsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                </ContextMenu>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
+                            <TextBlock Text="{Binding FallbackStatusText}" FontSize="11"
+                                       Foreground="{DynamicResource TextSecondary}" Margin="0,0,0,6"/>
+                            <Button Content="立即恢复主API" Command="{Binding ManualResetFallbackCommand}"
+                                    Height="28" FontSize="11" Margin="0,0,0,16"
+                                    HorizontalAlignment="Left" Padding="12,0"
+                                    Style="{DynamicResource SecondaryButtonStyle}"/>
+
+                            <Rectangle Height="1" Fill="{DynamicResource GlassBorderBrush}" Margin="0,4,0,16"/>
+
+                            <TextBlock Text="润色 API 调用" Margin="0,0,0,5" FontWeight="SemiBold"
+                                      Foreground="{DynamicResource TextPrimary}"/>
+                            <TextBlock Text="章节生成后润色、AIGC润色使用此模型（未选则自动使用对话模型）" FontSize="11"
+                                      Foreground="{DynamicResource TextTertiary}" Margin="0,0,0,6"/>
+                            <ComboBox ItemsSource="{Binding EnabledConfigs}"
+                                      SelectedItem="{Binding SelectedPolishConfig, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                      Height="36"
+                                      Tag="{Binding}">
+                                <ComboBox.ItemTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DisplayNameWithPrefix}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                                   ToolTip="{Binding DisplayNameWithPrefix}"/>
+                                    </DataTemplate>
+                                </ComboBox.ItemTemplate>
+                                <ComboBox.ItemContainerStyle>
+                                    <Style TargetType="ComboBoxItem">
+                                        <Setter Property="Tag" Value="{Binding RelativeSource={RelativeSource AncestorType=ComboBox}, Path=Tag}"/>
+                                        <Setter Property="ContextMenu">
+                                            <Setter.Value>
+                                                <ContextMenu>
+                                                    <MenuItem Header="禁用此模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableWritingConfigModelCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"
+                                                              CommandParameter="{Binding PlacementTarget.DataContext, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                    <Separator Margin="0,2,0,2"/>
+                                                    <MenuItem Header="禁用全模型"
+                                                              Padding="8,0,8,0" Height="20" FontSize="11"
+                                                              Command="{Binding PlacementTarget.Tag.DisableAllWritingConfigModelsCommand, RelativeSource={RelativeSource AncestorType=ContextMenu}}"/>
+                                                </ContextMenu>
+                                            </Setter.Value>
+                                        </Setter>
+                                    </Style>
+                                </ComboBox.ItemContainerStyle>
+                            </ComboBox>
+                        </StackPanel>
+                    </layout:IconHeaderGroupBox>
+                </StackPanel>
+            </ScrollViewer>
+        </dm:TwoColumnEditorLayout.Tab4Content>
 
     </dm:TwoColumnEditorLayout>
 

@@ -5,7 +5,6 @@ namespace TM.Services.Modules.ProjectData.Models.Guides
     public class TimelineGuide
     {
         [System.Text.Json.Serialization.JsonPropertyName("Module")] public string Module { get; set; } = "TimelineGuide";
-        [System.Text.Json.Serialization.JsonPropertyName("SourceBookId")] public string SourceBookId { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("ChapterTimeline")] public List<ChapterTimeEntry> ChapterTimeline { get; set; } = new();
         [System.Text.Json.Serialization.JsonPropertyName("CharacterLocations")] public Dictionary<string, CharacterLocationEntry> CharacterLocations { get; set; } = new();
     }

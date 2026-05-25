@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -29,7 +28,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 return;
 
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile).ConfigureAwait(false);
 
             guide.ChapterTimeline.RemoveAll(t =>
                 string.Equals(t.ChapterId, chapterId, StringComparison.Ordinal));
@@ -52,7 +51,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (movements == null || movements.Count == 0) return;
 
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile).ConfigureAwait(false);
 
             foreach (var move in movements)
             {
@@ -66,7 +65,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     {
                         var csVolNum = ChapterParserHelper.ParseChapterIdOrDefault(chapterId).volumeNumber;
                         var csVolFile = GuideManager.GetVolumeFileName("character_state_guide.json", csVolNum);
-                        var csGuide = await _guideManager.GetGuideAsync<CharacterStateGuide>(csVolFile);
+                        var csGuide = await _guideManager.GetGuideAsync<CharacterStateGuide>(csVolFile).ConfigureAwait(false);
                         if (csGuide.Characters.TryGetValue(move.CharacterId, out var csEntry) && !string.IsNullOrWhiteSpace(csEntry.Name))
                             resolvedName = csEntry.Name;
                     }
@@ -99,7 +98,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<TimelineGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             var removed = guide.ChapterTimeline.RemoveAll(t =>
@@ -139,13 +138,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<List<ChapterTimeEntry>> GetRecentTimelineAsync(int count = 5)
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<TimelineGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var allEntries = new List<ChapterTimeEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<TimelineGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 allEntries.AddRange(guide.ChapterTimeline);
-            }
             var comparer = Comparer<string>.Create(ChapterParserHelper.CompareChapterId);
             return allEntries.OrderBy(t => t.ChapterId, comparer).TakeLast(count).ToList();
         }
@@ -153,14 +150,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<Dictionary<string, CharacterLocationEntry>> GetAllCharacterLocationsAsync()
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<TimelineGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var merged = new Dictionary<string, CharacterLocationEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<TimelineGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 foreach (var (id, entry) in guide.CharacterLocations)
                     merged[id] = entry;
-            }
             return merged;
         }
     }

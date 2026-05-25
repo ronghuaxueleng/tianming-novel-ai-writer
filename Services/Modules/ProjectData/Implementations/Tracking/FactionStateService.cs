@@ -4,8 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
@@ -28,11 +26,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task UpdateFactionStateAsync(string chapterId, FactionStateChange change)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<FactionStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<FactionStateGuide>(volFile).ConfigureAwait(false);
 
             if (!guide.Factions.ContainsKey(change.FactionId))
             {
-                var displayName = await TryResolveFactionDisplayNameAsync(change.FactionId) ?? change.FactionId;
+                var displayName = await TryResolveFactionDisplayNameAsync(change.FactionId).ConfigureAwait(false) ?? change.FactionId;
                 guide.Factions[change.FactionId] = new FactionStateEntry
                 {
                     Name = displayName,
@@ -49,7 +47,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Chapter = chapterId,
                 Status = change.NewStatus,
                 Event = change.Event,
-                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance
+                Importance = string.IsNullOrWhiteSpace(change.Importance) ? "normal" : change.Importance,
+                CausedBy = change.CausedBy ?? string.Empty
             });
 
             _guideManager.MarkDirty(volFile);
@@ -64,7 +63,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
                 if (!File.Exists(elementsPath)) return null;
 
-                var json = await File.ReadAllTextAsync(elementsPath);
+                var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return null;
@@ -81,14 +80,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
             }
-            catch { }
+            catch (Exception ex) { TM.App.Log($"[FactionState] 读取势力名失败: {ex.Message}"); }
             return null;
         }
 
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var volFile = VolumeFileName(chapterId);
-            var guide = await _guideManager.GetGuideAsync<FactionStateGuide>(volFile);
+            var guide = await _guideManager.GetGuideAsync<FactionStateGuide>(volFile).ConfigureAwait(false);
             var modified = false;
 
             foreach (var (_, entry) in guide.Factions)
@@ -117,14 +116,12 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task<Dictionary<string, FactionStateEntry>> GetAllFactionStatesAsync()
         {
             var volNumbers = _guideManager.GetExistingVolumeNumbers(BaseFileName);
+            var guides = await Task.WhenAll(volNumbers.TakeLast(5).Select(vol =>
+                _guideManager.GetGuideAsync<FactionStateGuide>(GuideManager.GetVolumeFileName(BaseFileName, vol)))).ConfigureAwait(false);
             var merged = new Dictionary<string, FactionStateEntry>();
-            foreach (var vol in volNumbers.TakeLast(5))
-            {
-                var guide = await _guideManager.GetGuideAsync<FactionStateGuide>(
-                    GuideManager.GetVolumeFileName(BaseFileName, vol));
+            foreach (var guide in guides)
                 foreach (var (id, entry) in guide.Factions)
                     merged[id] = entry;
-            }
             return merged;
         }
     }

@@ -1,10 +1,10 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using TM.Framework.Common.Services.Factories;
 
 namespace TM.Framework.Notifications.Sound.VolumeAndDevice
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class VolumeAndDeviceSettingsData
     {
         [System.Text.Json.Serialization.JsonPropertyName("SystemVolume")] public double SystemVolume { get; set; } = 80;
@@ -22,6 +22,7 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class VolumeAndDeviceSettings : BaseSettings<VolumeAndDeviceSettings, VolumeAndDeviceSettingsData>
     {
         public VolumeAndDeviceSettings(IStoragePathHelper storagePathHelper, IObjectFactory objectFactory)
@@ -45,8 +46,11 @@ namespace TM.Framework.Notifications.Sound.VolumeAndDevice
         public string? OutputDeviceId { get => Data.OutputDeviceId; set { Data.OutputDeviceId = value; OnPropertyChanged(); } }
         public string? InputDeviceId { get => Data.InputDeviceId; set { Data.InputDeviceId = value; OnPropertyChanged(); } }
 
-        public void LoadSettings() => LoadData();
+        public async System.Threading.Tasks.Task LoadSettingsAsync()
+        {
+            await LoadDataAsync().ConfigureAwait(false);
+        }
+
         public void SaveSettings() => SaveData();
     }
 }
-

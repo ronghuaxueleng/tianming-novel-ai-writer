@@ -1,10 +1,7 @@
-using System;
+﻿using System;
 using System.IO;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using TM.Framework.User.Account.PasswordSecurity.Services;
 
 namespace TM.Framework.User.Security.PasswordProtection
@@ -15,6 +12,8 @@ namespace TM.Framework.User.Security.PasswordProtection
         private readonly string _configFile;
         private AppLockConfig? _cachedConfig;
         private bool _isCurrentlyLocked = false;
+        private System.Threading.Tasks.Task _initialLoadTask = System.Threading.Tasks.Task.CompletedTask;
+        private volatile bool _initialCacheLoaded = false;
 
         public event EventHandler<bool>? LockStateChanged;
 
@@ -23,6 +22,34 @@ namespace TM.Framework.User.Security.PasswordProtection
         public AppLockSettings()
         {
             _configFile = StoragePathHelper.GetFilePath("Framework", "User/Security/PasswordProtection", "app_lock_config.json");
+
+            _cachedConfig = new AppLockConfig();
+
+            _initialLoadTask = Task.Run(async () =>
+            {
+                try
+                {
+                    if (File.Exists(_configFile))
+                    {
+                        var json = await File.ReadAllTextAsync(_configFile).ConfigureAwait(false);
+                        var loaded = JsonSerializer.Deserialize<AppLockConfig>(json);
+                        if (loaded != null)
+                        {
+                            _cachedConfig = loaded;
+                            TM.App.Log("[AppLockSettings] 后台预热完成");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[AppLockSettings] 后台预热失败: {ex.Message}");
+                }
+                finally
+                {
+                    _initialCacheLoaded = true;
+                }
+            });
+
             TM.App.Log("[AppLockSettings] init");
         }
 
@@ -33,6 +60,30 @@ namespace TM.Framework.User.Security.PasswordProtection
             if (_cachedConfig != null)
             {
                 return _cachedConfig;
+            }
+
+            if (System.Windows.Application.Current?.Dispatcher?.CheckAccess() == true)
+            {
+                TM.App.Log("[AppLockSettings] WARNING: LoadConfig on UI thread, returning default");
+                var fallback = new AppLockConfig();
+                _cachedConfig = fallback;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        if (File.Exists(_configFile))
+                        {
+                            var json = await File.ReadAllTextAsync(_configFile).ConfigureAwait(false);
+                            var loaded = JsonSerializer.Deserialize<AppLockConfig>(json);
+                            if (loaded != null) _cachedConfig = loaded;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[AppLockSettings] 后台重载失败: {ex.Message}");
+                    }
+                });
+                return fallback;
             }
 
             try
@@ -57,6 +108,15 @@ namespace TM.Framework.User.Security.PasswordProtection
             }
 
             return _cachedConfig;
+        }
+
+        public async System.Threading.Tasks.Task<AppLockConfig> LoadConfigAsync()
+        {
+            if (!_initialCacheLoaded)
+            {
+                try { await _initialLoadTask.ConfigureAwait(false); } catch { }
+            }
+            return _cachedConfig!;
         }
 
         public bool SaveConfig(AppLockConfig config)
@@ -148,7 +208,7 @@ namespace TM.Framework.User.Security.PasswordProtection
         {
             var config = LoadConfig();
             config.LastActivityTime = DateTime.Now;
-            _ = Task.Run(() => SaveConfig(config));
+            SaveConfig(config);
             ActivityTimeUpdated?.Invoke(this, EventArgs.Empty);
         }
 
@@ -172,14 +232,10 @@ namespace TM.Framework.User.Security.PasswordProtection
             return elapsed >= threshold;
         }
 
-        public TimeSpan GetTimeUntilAutoLock()
+        public TimeSpan GetTimeUntilAutoLock(AppLockConfig config)
         {
-            var config = LoadConfig();
-
             if (config.LastActivityTime == null)
-            {
                 return TimeSpan.FromMinutes(config.AutoLockMinutes);
-            }
 
             var elapsed = DateTime.Now - config.LastActivityTime.Value;
             var threshold = TimeSpan.FromMinutes(config.AutoLockMinutes);
@@ -187,6 +243,8 @@ namespace TM.Framework.User.Security.PasswordProtection
 
             return remaining > TimeSpan.Zero ? remaining : TimeSpan.Zero;
         }
+
+        public TimeSpan GetTimeUntilAutoLock() => GetTimeUntilAutoLock(LoadConfig());
 
         #endregion
 

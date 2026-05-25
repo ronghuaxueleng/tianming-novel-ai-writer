@@ -1,5 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Helpers;
 using TM.Services.Framework.AI.SemanticKernel.Conversation.Models;
 

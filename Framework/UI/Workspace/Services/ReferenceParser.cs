@@ -2,21 +2,20 @@ using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
-using TM.Services.Framework.AI.SemanticKernel;
 using TM.Services.Modules.ProjectData.Implementations;
+using TM.Services.Modules.ProjectData.Interfaces;
 
 namespace TM.Framework.UI.Workspace.Services
 {
     public class ReferenceParser
     {
-        private readonly GuideContextService _guideContextService;
+        private readonly IGuideContextService _guideContextService;
 
         private static readonly Regex ReferencePattern = new(
             @"@(续写|continue|重写|rewrite|仿写|imitate)(?:[:uff1a]\s*)?([^\s@]+)?",
             RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
-        public ReferenceParser(GuideContextService guideContextService)
+        public ReferenceParser(IGuideContextService guideContextService)
         {
             _guideContextService = guideContextService;
         }
@@ -88,7 +87,7 @@ namespace TM.Framework.UI.Workspace.Services
             if (string.IsNullOrEmpty(chapterId))
                 return "[请指定章节ID]";
 
-            var genContext = await _guideContextService.BuildContentContextAsync(chapterId);
+            var genContext = await _guideContextService.BuildContentContextAsync(chapterId, default);
             if (genContext == null)
                 return $"[未找到章节: {chapterId}]";
 
@@ -102,8 +101,8 @@ namespace TM.Framework.UI.Workspace.Services
 
             try
             {
-                var vectorSearch = ServiceLocator.Get<VectorSearchService>();
-                var results = await vectorSearch.SearchByChapterAsync(chapterId, topK: 2);
+                var search = ServiceLocator.Get<ContentChunkSearchService>();
+                var results = await search.SearchByChapterAsync(chapterId, topK: 2);
                 if (results != null && results.Count > 0)
                 {
                     sb.AppendLine("<context_block type=\"key_excerpts\">");
@@ -138,9 +137,9 @@ namespace TM.Framework.UI.Workspace.Services
         {
             return new List<ReferenceTypeInfo>
             {
-                new() { Type = "续写", Icon = "\U0001F4D6", Description = "注入章节上下文" },
-                new() { Type = "重写", Icon = "\u267B\uFE0F", Description = "重写指定章节" },
-                new() { Type = "仿写", Icon = "\u270D\uFE0F", Description = "引用爬取内容" },
+                new() { Type = "续写", Icon = TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Document"), Description = "注入章节上下文" },
+                new() { Type = "重写", Icon = TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Refresh"), Description = "重写指定章节" },
+                new() { Type = "仿写", Icon = TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Edit"), Description = "引用短篇蓝图" },
             };
         }
     }
@@ -157,7 +156,7 @@ namespace TM.Framework.UI.Workspace.Services
     public class ReferenceTypeInfo
     {
         public string Type { get; set; } = string.Empty;
-        public string Icon { get; set; } = string.Empty;
+        public System.Windows.Media.ImageSource? Icon { get; set; }
         public string Description { get; set; } = string.Empty;
     }
 }

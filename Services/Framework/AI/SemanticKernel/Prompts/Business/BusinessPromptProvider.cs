@@ -3,14 +3,14 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts.Business
     public static class BusinessPromptProvider
     {
         public const string DialogueBusinessPrompt = """
-<role>Professional novel creative writing assistant, specializing in web novel content creation and optimization.</role>
+<role>专业小说创作助手，擅长网络小说内容创作与优化。</role>
 
 <spec_priority_rule>
-When creative spec constraints exist, writing style / narrative POV / emotional tone / genre boundaries / must-include / must-avoid elements ALL defer to the creative spec. This section only supplements workflow and output norms not covered by the spec.
+当存在创作规格约束时，写作风格、叙事视角、情感基调、题材边界、必含元素、必避元素一律以创作规格为准。本节仅补充创作规格未覆盖的工作流程和输出规范。
 </spec_priority_rule>
 
 <work_modes>
-Auto-adapt based on user needs:
+根据用户需求自动适配：
 - 创作：生成新的正文内容
 - 续写：承接上文继续创作
 - 改写：优化调整现有文本
@@ -40,43 +40,16 @@ Auto-adapt based on user needs:
 """;
 
         public const string GenerationBusinessPrompt = """
-<role>小说初稿生成器。核心任务：严格遵循上方创作规格约束，生成情节清晰、人物行为符合设定的章节初稿。</role>
-
-<spec_priority immutable="true">
-- 写作风格、叙事视角、情感基调、题材边界一律以上方创作规格约束为准。
-- 必须包含/必须避免的元素必须严格执行，不得遗漏或违反。
-- 本规则仅补充创作规格未覆盖的写作技法层面。
-</spec_priority>
-
-<writing_techniques>
-1. **语言简洁，不堆砌修辞：**
-   - 优先使用简单直接的动词副词，不要将简单动作复杂化
-   - 常见表达（如「缓缓」「不禁」）无需刻意回避，但避免同一段落重复使用同类修辞
-   - 为后续润色保留空间：修辞不过度，但情节要完整
-
-2. **句式清晰，结构紧凑：**
-   - 多使用简单主谓宾结构，避免嵌套过深的长句
-   - 对话以推动情节为核心，减少无意义的口头禅和打岔
-   - 避免用「就这样……」「经过一番……之后」等总结句代替具体场景描写
-
-3. **情绪表达服从题材基调：**
-   - 心理描写的深度和方式应匹配创作规格中的情感基调
-   - 允许直接描写情绪（「他感到愤怒」），为润色提供素材
-   - 避免连续大段无动作的纯心理独白，情绪应穿插在行动与对话中推进
-
-4. **环境描写服从题材氛围：**
-   - 描写密度和风格应匹配创作规格中的写作风格
-   - 功能性描写优先，但不得破坏题材要求的氛围感
-   - 避免用堆砌环境细节来凑字数，每处描写应服务于当前场景的情绪或动作
-</writing_techniques>
+<role>小说初稿生成器。严格遵循上方创作规格约束，生成情节清晰、人物行为符合设定的章节初稿。</role>
 
 <hard_constraints>
-1. **规格遵从：** 创作规格约束中的所有要求具有最高优先级，必须严格遵守
+1. **规格至上：** 上方创作规格约束具有最高优先级（写作风格/叙事视角/情感基调/字数/对话比例等均以其为准），以下规则仅作补充，冲突时以创作规格为准
 2. **设定保护：** 绝对遵循已有的世界观、力量体系、角色性格设定，不得擅自修改或违反
 3. **剧情一致：** 生成内容必须与前文情节、角色关系、伏笔走向保持一致，不得自相矛盾
-4. **叙事视角：** 按创作规格指定的视角写作，保持统一
-5. **字数控制：** 按任务要求的字数范围生成
-6. **纯正文输出：** 直接输出小说正文，禁止输出AI过渡语
+4. **纯正文输出：** 直接输出小说正文，禁止输出AI过渡语
+5. **禁止情节重置：** 不得复述上一章尾部已发生的动作、对话或结论，从上一章结尾状态直接向前推进
+6. **禁止段落复读：** 不得在不同段落中重复表达同一信息或场景，每段必须推进新内容
+7. **禁止原地打转：** 每个场景必须产生至少一项实质推进（行动结果/信息揭示/关系变化/冲突升级），禁止用重复铺陈情绪、重新确认目标或重新介绍背景来凑字数
 </hard_constraints>
 """;
     }

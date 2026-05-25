@@ -2,7 +2,6 @@ using System;
 using System.IO;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Profile.BasicInfo
 {
@@ -21,7 +20,7 @@ namespace TM.Framework.User.Profile.BasicInfo
             TM.App.Log($"[UserProfileService] 头像目录: {_avatarDirectory}");
         }
 
-        public string SaveAvatar(string sourceImagePath)
+        public async Task<string> SaveAvatarAsync(string sourceImagePath)
         {
             try
             {
@@ -36,7 +35,12 @@ namespace TM.Framework.User.Profile.BasicInfo
                     Directory.CreateDirectory(_avatarDirectory);
                 }
 
-                File.Copy(sourceImagePath, _avatarFilePath, true);
+                await Task.Run(async () =>
+                {
+                    await using var s = File.OpenRead(sourceImagePath);
+                    await using var d = File.Create(_avatarFilePath);
+                    await s.CopyToAsync(d).ConfigureAwait(false);
+                }).ConfigureAwait(false);
 
                 TM.App.Log($"[UserProfileService] 头像保存成功: {_avatarFilePath}");
                 return _avatarFilePath;
@@ -93,7 +97,7 @@ namespace TM.Framework.User.Profile.BasicInfo
                     Directory.CreateDirectory(directory);
                 }
 
-                await File.WriteAllTextAsync(exportPath, json);
+                await File.WriteAllTextAsync(exportPath, json).ConfigureAwait(false);
 
                 TM.App.Log($"[UserProfileService] 资料导出成功: {exportPath}");
                 return true;
@@ -115,14 +119,14 @@ namespace TM.Framework.User.Profile.BasicInfo
                     return false;
                 }
 
-                string json = await File.ReadAllTextAsync(importPath);
-                var profile = JsonSerializer.Deserialize<UserProfileData>(json);
+                await using var stream = File.OpenRead(importPath);
+                var profile = await JsonSerializer.DeserializeAsync<UserProfileData>(stream).ConfigureAwait(false);
 
                 if (profile != null)
                 {
                     var settings = _basicInfoSettings;
                     settings.SetProfileData(profile);
-                    settings.SaveSettings();
+                    await settings.SaveDataAsync().ConfigureAwait(false);
 
                     TM.App.Log($"[UserProfileService] 资料导入成功: {importPath}");
                     return true;

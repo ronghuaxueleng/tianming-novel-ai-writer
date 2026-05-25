@@ -1,24 +1,22 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
-using System.Text.Encodings.Web;
-using System.Text.Unicode;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Proxy.Services;
 
 namespace TM.Framework.SystemSettings.Proxy.ProxyChain
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public class ProxyChainViewModel : INotifyPropertyChanged
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public class ProxyChainViewModel : INotifyPropertyChanged, IDisposable
     {
         private readonly string _settingsFile;
         private ProxyChainSettings _settings = new();
@@ -28,13 +26,13 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
         private ProxyChainConfig? _selectedChainConfig;
         private CancellationTokenSource? _healthCheckCts;
 
-        public ObservableCollection<ProxyChainConfig> ChainConfigs { get; } = new();
-        public ObservableCollection<ProxyChainHistory> History { get; } = new();
-        public ObservableCollection<ProxyChainPerformance> PerformanceData { get; } = new();
-        public ObservableCollection<ProxyChainOptimization> Optimizations { get; } = new();
+        public RangeObservableCollection<ProxyChainConfig> ChainConfigs { get; } = new();
+        public RangeObservableCollection<ProxyChainHistory> History { get; } = new();
+        public RangeObservableCollection<ProxyChainPerformance> PerformanceData { get; } = new();
+        public RangeObservableCollection<ProxyChainOptimization> Optimizations { get; } = new();
         public ProxyChainComparison? CurrentComparison { get; private set; }
 
-        public ObservableCollection<ProxyChainConfig> Chains => ChainConfigs;
+        public RangeObservableCollection<ProxyChainConfig> Chains => ChainConfigs;
 
         public ProxyChainConfig? SelectedChainConfig
         {
@@ -86,27 +84,24 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             AnalyzePerformanceCommand = new RelayCommand(AnalyzePerformance);
             CompareChainsCommand = new RelayCommand(CompareChains);
             OptimizeChainCommand = new RelayCommand<ProxyChainConfig>(OptimizeChain);
-            ExportChainReportCommand = new RelayCommand(ExportChainReport);
+            ExportChainReportCommand = new RelayCommand(() => ExportChainReport().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}")));
             SetActiveChainCommand = new RelayCommand(SetActiveChain);
 
             AsyncSettingsLoader.LoadOrDefer<ProxyChainSettings>(_settingsFile, s =>
             {
                 _settings = s;
-                History.Clear();
-                foreach (var item in _settings.History.OrderByDescending(h => h.StartTime).Take(50))
-                    History.Add(item);
-                PerformanceData.Clear();
-                foreach (var perf in _settings.Performance)
-                    PerformanceData.Add(perf);
+                ReplaceCollection(History, _settings.History.OrderByDescending(h => h.StartTime).Take(50));
+                ReplaceCollection(PerformanceData, _settings.Performance);
                 LoadChains();
                 _ = StartAutoHealthCheckAsync();
             }, "ProxyChain");
             TM.App.Log("[ProxyChainViewModel] 初始化完成");
         }
 
-        ~ProxyChainViewModel()
+        public void Dispose()
         {
             StopHealthCheck();
+            GC.SuppressFinalize(this);
         }
 
         private async Task StartAutoHealthCheckAsync()
@@ -169,7 +164,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                     }
                 }
 
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
             }
             catch (Exception ex)
             {
@@ -177,7 +172,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
         }
 
-        private void SetActiveChain()
+        private async void SetActiveChain()
         {
             if (SelectedChainConfig == null)
             {
@@ -188,9 +183,9 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             try
             {
                 _settings.ActiveChainId = SelectedChainConfig.Id;
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
 
-                _proxyService.RefreshProxy();
+                await _proxyService.RefreshProxyAsync(_settings);
                 OnPropertyChanged(nameof(IsSelectedChainActive));
 
                 GlobalToast.Success("已生效", $"已设为生效代理链: {SelectedChainConfig.Name}");
@@ -198,19 +193,22 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("操作失败", $"设为生效代理链失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 设为生效代理链失败: {ex.Message}");
+                GlobalToast.Error("操作失败", $"操作失败：{ex.Message}");
             }
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
                 _settings.LastUpdated = DateTime.Now;
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.CnDefault);
-                var tmpPcv = _settingsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpPcv, json);
+                var tmpPcv = _settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpPcv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.CnDefault);
+                }
                 File.Move(tmpPcv, _settingsFile, overwrite: true);
             }
             catch (Exception ex)
@@ -221,11 +219,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
 
         private void LoadChains()
         {
-            ChainConfigs.Clear();
-            foreach (var chain in _settings.Chains)
-            {
-                ChainConfigs.Add(chain);
-            }
+            ReplaceCollection(ChainConfigs, _settings.Chains);
         }
 
         private async Task TestChainAsync(object? param)
@@ -269,7 +263,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                 History.Insert(0, history);
 
                 UpdatePerformanceData(chain.Id, history.Success);
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
 
                 if (history.Success)
                 {
@@ -282,7 +276,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("测试失败", $"测试失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 测试失败: {ex.Message}");
+                GlobalToast.Error("测试失败", $"测试失败：{ex.Message}");
             }
         }
 
@@ -300,7 +295,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
 
             _settings.Chains.Add(chain);
             ChainConfigs.Add(chain);
-            SaveSettings();
+            SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
 
             GlobalToast.Success("创建成功", $"代理链 '{name}' 已创建");
         }
@@ -324,7 +319,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             {
                 _settings.Chains.Remove(chain);
                 ChainConfigs.Remove(chain);
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
 
                 GlobalToast.Success("删除成功", "代理链已删除");
             }
@@ -332,7 +327,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
 
         private void ViewChainHistory()
         {
-            if (!History.Any())
+            if (History.Count == 0)
             {
                 GlobalToast.Info("无历史记录", "暂无代理链使用历史");
                 return;
@@ -345,12 +340,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
         {
             try
             {
-                PerformanceData.Clear();
+                var performanceItems = new List<ProxyChainPerformance>();
 
                 foreach (var chain in _settings.Chains)
                 {
                     var chainHistory = _settings.History.Where(h => h.ChainId == chain.Id).ToList();
-                    if (!chainHistory.Any()) continue;
+                    if (chainHistory.Count == 0) continue;
 
                     var perf = new ProxyChainPerformance
                     {
@@ -364,7 +359,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                         LastUsed = chainHistory.Max(h => h.StartTime)
                     };
 
-                    PerformanceData.Add(perf);
+                    performanceItems.Add(perf);
 
                     var existing = _settings.Performance.FirstOrDefault(p => p.ChainId == chain.Id);
                     if (existing != null)
@@ -374,12 +369,15 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                     _settings.Performance.Add(perf);
                 }
 
-                SaveSettings();
+                ReplaceCollection(PerformanceData, performanceItems);
+
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[ProxyChainViewModel] {ex.Message}"));
                 GlobalToast.Success("分析完成", $"已分析 {PerformanceData.Count} 个代理链");
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("分析失败", $"性能分析失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 性能分析失败: {ex.Message}");
+                GlobalToast.Error("分析失败", $"分析失败：{ex.Message}");
             }
         }
 
@@ -423,7 +421,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                     comparison.Items.Add(item);
                 }
 
-                if (comparison.Items.Any())
+                if (comparison.Items.Count > 0)
                 {
                     var best = comparison.Items.First();
                     comparison.BestChainId = best.ChainId;
@@ -438,7 +436,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("对比失败", $"代理链对比失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 代理链对比失败: {ex.Message}");
+                GlobalToast.Error("对比失败", $"对比失败：{ex.Message}");
             }
         }
 
@@ -474,7 +473,7 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                     optimization.Priority = OptimizationPriority.Medium;
                 }
 
-                if (!optimization.Suggestions.Any())
+                if (optimization.Suggestions.Count == 0)
                 {
                     optimization.Suggestions.Add("代理链运行良好，无需优化");
                     optimization.Priority = OptimizationPriority.Low;
@@ -487,11 +486,12 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("优化失败", $"生成优化建议失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 生成优化建议失败: {ex.Message}");
+                GlobalToast.Error("优化失败", $"优化失败：{ex.Message}");
             }
         }
 
-        private async void ExportChainReport()
+        private async Task ExportChainReport()
         {
             try
             {
@@ -518,10 +518,10 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
                 {
                     var json = JsonSerializer.Serialize(report, JsonHelper.CnDefault);
                     var filePath = dialog.FileName;
-                    await Task.Run(() =>
+                    await Task.Run(async () =>
                     {
                         var tmp = filePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                        File.WriteAllText(tmp, json);
+                        await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
                         File.Move(tmp, filePath, overwrite: true);
                     });
 
@@ -530,7 +530,8 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             }
             catch (Exception ex)
             {
-                GlobalToast.Error("导出失败", $"导出报告失败: {ex.Message}");
+                TM.App.Log($"[ProxyChainViewModel] 导出报告失败: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
@@ -549,9 +550,14 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyChain
             perf.LastUsed = DateTime.Now;
         }
 
+        private static void ReplaceCollection<T>(RangeObservableCollection<T> target, IEnumerable<T> items)
+        {
+            target.ReplaceAll(items is IList<T> list ? list : items.ToList());
+        }
+
         private int CalculateHealthScore()
         {
-            if (!PerformanceData.Any()) return 50;
+            if (PerformanceData.Count == 0) return 50;
 
             int score = 0;
             foreach (var perf in PerformanceData)

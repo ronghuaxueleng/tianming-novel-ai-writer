@@ -8,6 +8,13 @@ namespace TM.Framework.Common.Helpers.Validation
 {
     public static class PasswordStrengthValidator
     {
+        private static readonly Regex LowercaseRegex = new("[a-z]", RegexOptions.Compiled);
+        private static readonly Regex UppercaseRegex = new("[A-Z]", RegexOptions.Compiled);
+        private static readonly Regex DigitsRegex = new("[0-9]", RegexOptions.Compiled);
+        private static readonly Regex SpecialCharsRegex = new("[^a-zA-Z0-9]", RegexOptions.Compiled);
+        private static readonly Regex OnlyDigitsRegex = new("^[0-9]+$", RegexOptions.Compiled);
+        private static readonly Regex OnlyLettersRegex = new("^[a-zA-Z]+$", RegexOptions.Compiled);
+
         public static PasswordStrength ValidateStrength(string password)
         {
             if (string.IsNullOrEmpty(password))
@@ -96,7 +103,7 @@ namespace TM.Framework.Common.Helpers.Validation
             {
                 analysisResult.OverallStrength = PasswordStrength.Weak;
                 analysisResult.Score = 0;
-                analysisResult.Suggestions.Add("❌ 密码为空");
+                analysisResult.Suggestions.Add("✗ 密码为空");
                 return analysisResult;
             }
 
@@ -105,14 +112,14 @@ namespace TM.Framework.Common.Helpers.Validation
             analysisResult.Length = password.Length;
             analysisResult.LengthScore = Math.Min(password.Length * 2, 30);
             if (password.Length < 8)
-                analysisResult.Suggestions.Add("⚠️ 建议密码长度至少为12个字符");
+                analysisResult.Suggestions.Add("[!] 建议密码长度至少为12个字符");
             else if (password.Length >= 16)
-                analysisResult.Suggestions.Add("✅ 密码长度优秀");
+                analysisResult.Suggestions.Add("✓ 密码长度优秀");
 
-            analysisResult.HasLowercase = Regex.IsMatch(password, "[a-z]");
-            analysisResult.HasUppercase = Regex.IsMatch(password, "[A-Z]");
-            analysisResult.HasDigits = Regex.IsMatch(password, "[0-9]");
-            analysisResult.HasSpecialChars = Regex.IsMatch(password, "[^a-zA-Z0-9]");
+            analysisResult.HasLowercase = LowercaseRegex.IsMatch(password);
+            analysisResult.HasUppercase = UppercaseRegex.IsMatch(password);
+            analysisResult.HasDigits = DigitsRegex.IsMatch(password);
+            analysisResult.HasSpecialChars = SpecialCharsRegex.IsMatch(password);
 
             int typeCount = 0;
             if (analysisResult.HasLowercase) typeCount++;
@@ -126,16 +133,16 @@ namespace TM.Framework.Common.Helpers.Validation
             analysisResult.DiversityScore = analysisResult.DiversityRatio > 0.5 ? 15 : 0;
 
             analysisResult.IsCommonPassword = zxcvbnResult.Score <= 1;
-            analysisResult.IsOnlyDigits = Regex.IsMatch(password, "^[0-9]+$");
-            analysisResult.IsOnlyLetters = Regex.IsMatch(password, "^[a-zA-Z]+$");
+            analysisResult.IsOnlyDigits = OnlyDigitsRegex.IsMatch(password);
+            analysisResult.IsOnlyLetters = OnlyLettersRegex.IsMatch(password);
 
             if (zxcvbnResult.Feedback?.Warning is string warning && !string.IsNullOrEmpty(warning))
-                analysisResult.Suggestions.Add($"⚠️ {warning}");
+                analysisResult.Suggestions.Add($"[警告] {warning}");
 
             if (zxcvbnResult.Feedback?.Suggestions is { Count: > 0 } suggestions)
             {
                 foreach (var suggestion in suggestions)
-                    analysisResult.Suggestions.Add($"💡 {suggestion}");
+                    analysisResult.Suggestions.Add($"[建议] {suggestion}");
             }
 
             analysisResult.Entropy = zxcvbnResult.GuessesLog10 * 3.32;

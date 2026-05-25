@@ -1,10 +1,11 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using TM.Services.Modules.ProjectData.Models.Publishing;
 
 namespace TM.Modules.Generate.Content.Views
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class VersionDiffDialog : Window
     {
         public VersionDiffDialog(PackageVersionDiff diff)

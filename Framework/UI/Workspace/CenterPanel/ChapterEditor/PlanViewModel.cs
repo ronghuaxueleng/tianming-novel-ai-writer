@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -9,7 +9,6 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Data;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Framework.UI.Workspace.Services;
 using TM.Services.Framework.AI.SemanticKernel;
@@ -17,9 +16,14 @@ using TM.Services.Framework.AI.SemanticKernel;
 namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     [Obfuscation(Feature = "controlflow", Exclude = true, ApplyToMembers = true)]
     public class PlanViewModel : INotifyPropertyChanged, IDisposable
     {
+        private static readonly Regex StepPattern = new(
+            @"^步骤\s*(\d+)[\.、：:\s]+(.+)$",
+            RegexOptions.Compiled);
+
         private readonly SKChatService _chatService;
         private readonly PanelCommunicationService _comm;
 
@@ -47,6 +51,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             if (_disposed) return;
             _disposed = true;
             ExecutionEventHub.Published -= OnExecutionEvent;
+            GC.SuppressFinalize(this);
         }
 
         public ObservableCollection<ExecutionEvent> Events { get; } = new();
@@ -258,9 +263,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             if (string.IsNullOrWhiteSpace(content)) return result;
 
             var lines = content.Split('\n');
-            var stepPattern = new Regex(
-                @"^步骤\s*(\d+)[\.、：:\s]+(.+)$",
-                RegexOptions.Compiled);
 
             int currentIndex = 0;
             string currentTitle = "";
@@ -269,7 +271,7 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             foreach (var rawLine in lines)
             {
                 var trimmed = rawLine.TrimEnd();
-                var match = stepPattern.Match(trimmed);
+                var match = StepPattern.Match(trimmed);
 
                 if (match.Success)
                 {
@@ -344,6 +346,14 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
                     Events.Clear();
                 }
 
+                if (evt.EventType == ExecutionEventType.RunFailed && evt.IsPolishFatal)
+                {
+                    Events.Clear();
+                    RecalculateSummary();
+                    TM.App.Log("[PlanViewModel] 润色严格模式终止，已清空所有计划事件");
+                    return;
+                }
+
                 var showTypes = new[]
                 {
                     ExecutionEventType.PlanStepStarted,
@@ -416,10 +426,6 @@ namespace TM.Framework.UI.Workspace.CenterPanel.ChapterEditor
             {
                 ErrorSummaryText = string.Empty;
             }
-        }
-
-        private void UpdateFilter()
-        {
         }
 
         public event PropertyChangedEventHandler? PropertyChanged;

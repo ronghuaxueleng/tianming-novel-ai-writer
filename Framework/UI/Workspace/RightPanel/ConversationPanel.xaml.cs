@@ -1,32 +1,36 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Linq;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Controls.Primitives;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Shell;
 using System.Windows.Threading;
-using TM.Framework.Common.Controls.Dialogs;
 using TM.Framework.UI.Workspace.Common.Controls;
-using TM.Framework.UI.Workspace.RightPanel.Controls;
 using TM.Framework.UI.Workspace.RightPanel.Conversation;
 using TM.Framework.UI.Workspace.RightPanel.Modes;
 using TM.Services.Framework.AI.SemanticKernel;
-using TM.Framework.Common.Services;
 using TM.Framework.UI.Workspace.Services;
-using System.Windows.Media.Animation;
 
 namespace TM.Framework.UI.Workspace.RightPanel
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ConversationPanel : UserControl
     {
         private static readonly object _debugLogLock = new();
         private static readonly System.Collections.Generic.HashSet<string> _debugLoggedKeys = new();
         private static readonly SolidColorBrush _referenceBlueBrush;
+
+        private static readonly System.Text.RegularExpressions.Regex ChapterRefRegex = new(
+            @"@(章节|chapter):(\S+)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
+
+        private static readonly System.Text.RegularExpressions.Regex DirectiveRefRegex = new(
+            @"@(续写|continue|章节|chapter):(\S+)",
+            System.Text.RegularExpressions.RegexOptions.Compiled);
 
         static ConversationPanel()
         {
@@ -34,10 +38,17 @@ namespace TM.Framework.UI.Workspace.RightPanel
             _referenceBlueBrush.Freeze();
         }
 
+        private bool _cachedHasHistorySessions;
         private DispatcherTimer? _inputSyncTimer;
         private string _pendingInputText = string.Empty;
         private bool _isUpdatingInputBoxFromViewModel;
         private bool _containsReferenceInlines;
+        private bool _isSyncingQuickParams;
+        private UIMessageItem? _streamingScrollTarget;
+        private ScrollViewer? _messagesScrollViewer;
+        private bool _scrollToBottomPending;
+        private bool _userScrolledAway;
+        private bool _isImeComposing;
 
         private UIStateCache? _uiStateCache;
         private UIStateCache UiStateCache => _uiStateCache ??= ServiceLocator.Get<UIStateCache>();
@@ -66,12 +77,6 @@ namespace TM.Framework.UI.Workspace.RightPanel
         {
             InitializeComponent();
 
-            _inputSyncTimer = new DispatcherTimer(DispatcherPriority.Background)
-            {
-                Interval = TimeSpan.FromMilliseconds(80)
-            };
-            _inputSyncTimer.Tick += (_, _) => FlushPendingInputText();
-
             var uiCache = UiStateCache;
             if (uiCache.IsWarmedUp)
             {
@@ -89,36 +94,39 @@ namespace TM.Framework.UI.Workspace.RightPanel
                         vm.ShowTodoOverlay = false;
                     }
                 };
-
-                TodoOverlayPanel.StepRequested += (_, step) =>
-                {
-                    if (DataContext is SKConversationViewModel vm)
-                    {
-                        var text = !string.IsNullOrWhiteSpace(step.Description)
-                            ? step.Description
-                            : step.ToolName;
-
-                        if (!string.IsNullOrWhiteSpace(text))
-                        {
-                            vm.InputText = text;
-                        }
-
-                        if (step.EventId != Guid.Empty)
-                        {
-                            var evt = vm.RunEvents.FirstOrDefault(e => e.Id == step.EventId);
-                            if (evt != null)
-                            {
-                                vm.SelectedRunEvent = evt;
-                            }
-                        }
-                    }
-                };
             }
 
             InitializeReferenceDropdown();
 
+            if (InputBox != null)
+            {
+                InputBox.AddHandler(
+                    TextCompositionManager.TextInputStartEvent,
+                    new TextCompositionEventHandler(OnInputBoxTextCompositionStart),
+                    handledEventsToo: true);
+                InputBox.AddHandler(
+                    TextCompositionManager.TextInputEvent,
+                    new TextCompositionEventHandler(OnInputBoxTextCompositionCompleted),
+                    handledEventsToo: true);
+                InputBox.LostFocus += OnInputBoxLostFocus_ImeReset;
+            }
+
             PanelComm.ClearMessageSelectionRequested += OnClearMessageSelectionRequested;
             Unloaded += OnConversationPanelUnloaded;
+
+            Loaded += (_, _) =>
+            {
+                Dispatcher.BeginInvoke(DispatcherPriority.ApplicationIdle, new Action(() =>
+                {
+                    try
+                    {
+                        if (InputBox == null) return;
+                        InputBox.Focus();
+                        System.Windows.Input.Keyboard.ClearFocus();
+                    }
+                    catch { }
+                }));
+            };
 
             this.DataContextChanged += (s, e) =>
             {
@@ -146,48 +154,53 @@ namespace TM.Framework.UI.Workspace.RightPanel
 
             if (ModelComboBox != null)
             {
-                ModelComboBox.Loaded += (_, _) =>
+                ModelComboBox.DropDownOpened += async (_, _) =>
                 {
-                    ModelComboBox.ItemContainerGenerator.StatusChanged += (_, __) =>
+                    await Dispatcher.InvokeAsync(() => { }, DispatcherPriority.Loaded);
+
+                    for (int i = 0; i < ModelComboBox.Items.Count; i++)
                     {
-                        if (ModelComboBox.ItemContainerGenerator.Status != GeneratorStatus.ContainersGenerated)
+                        if (ModelComboBox.ItemContainerGenerator.ContainerFromIndex(i) is not ComboBoxItem item)
+                            continue;
+
+                        if (item.ContextMenu != null)
+                            continue;
+
+                        var menu = new ContextMenu { Padding = new Thickness(0) };
+
+                        var menuItem = new MenuItem
                         {
-                            return;
-                        }
-
-                        for (int i = 0; i < ModelComboBox.Items.Count; i++)
+                            Header = "禁用此模型",
+                            Padding = new Thickness(8, 0, 8, 0),
+                            Height = 20,
+                            FontSize = 11
+                        };
+                        menuItem.Click += (s, e) =>
                         {
-                            if (ModelComboBox.ItemContainerGenerator.ContainerFromIndex(i) is not ComboBoxItem item)
-                            {
-                                continue;
-                            }
+                            if (s is MenuItem mi &&
+                                mi.Parent is ContextMenu cm &&
+                                cm.PlacementTarget is ComboBoxItem ci)
+                                OnDeleteModelClick(new MenuItem { Tag = ci.DataContext }, e);
+                        };
+                        menu.Items.Add(menuItem);
 
-                            if (item.ContextMenu != null)
-                            {
-                                continue;
-                            }
+                        menu.Items.Add(new Separator { Margin = new Thickness(0, 2, 0, 2) });
 
-                            var menu = new ContextMenu
-                            {
-                                Padding = new Thickness(0)
-                            };
+                        var disableAllItem = new MenuItem
+                        {
+                            Header = "禁用全模型",
+                            Padding = new Thickness(8, 0, 8, 0),
+                            Height = 20,
+                            FontSize = 11
+                        };
+                        disableAllItem.Click += OnDisableAllModelsClick;
+                        menu.Items.Add(disableAllItem);
 
-                            var menuItem = new MenuItem
-                            {
-                                Header = "禁用此模型",
-                                Padding = new Thickness(8, 0, 8, 0),
-                                Height = 20,
-                                FontSize = 11,
-                                Tag = item.DataContext
-                            };
-
-                            menuItem.Click += OnDeleteModelClick;
-                            menu.Items.Add(menuItem);
-                            item.ContextMenu = menu;
-                        }
-                    };
+                        item.ContextMenu = menu;
+                    }
                 };
             }
+
         }
 
         private void OnModeCardClick(object sender, MouseButtonEventArgs e)
@@ -212,10 +225,10 @@ namespace TM.Framework.UI.Workspace.RightPanel
                 GlobalToast.Success("模式切换", $"已切换到 {mode} 模式");
                 UpdateEmptyStateVisibility();
 
-                Dispatcher.InvokeAsync(() => 
+                Dispatcher.InvokeAsync(() =>
                 {
                     InputBox?.Focus();
-                }, System.Windows.Threading.DispatcherPriority.Loaded);
+                }, System.Windows.Threading.DispatcherPriority.Input);
             }
         }
 
@@ -251,7 +264,7 @@ namespace TM.Framework.UI.Workspace.RightPanel
             {
                 var newItem = new MenuItem
                 {
-                    Header = "➕ 新建会话"
+                    Header = "新建会话"
                 };
                 newItem.Click += (_, _) =>
                 {
@@ -267,7 +280,7 @@ namespace TM.Framework.UI.Workspace.RightPanel
             {
                 var viewAllItem = new MenuItem
                 {
-                    Header = "📂 查看全部历史..."
+                    Header = "查看全部历史..."
                 };
                 viewAllItem.Click += (_, _) =>
                 {
@@ -357,8 +370,8 @@ namespace TM.Framework.UI.Workspace.RightPanel
             var dialog = new Window
             {
                 Title = "项目写作规格",
-                Width = 525,
-                Height = 630,
+                Width = 555,
+                Height = 645,
                 WindowStartupLocation = WindowStartupLocation.CenterOwner,
                 ResizeMode = ResizeMode.CanResize,
                 WindowStyle = WindowStyle.None,
@@ -403,10 +416,11 @@ namespace TM.Framework.UI.Workspace.RightPanel
                 Margin = new Thickness(16, 0, 0, 0)
             };
 
-            var icon = new Emoji.Wpf.TextBlock
+            var icon = new Image
             {
-                Text = "📝",
-                FontSize = 16,
+                Source = TM.Framework.Common.Helpers.IconHelper.Get("Icon.Note"),
+                Width = 16,
+                Height = 16,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0)
             };
@@ -436,6 +450,7 @@ namespace TM.Framework.UI.Workspace.RightPanel
             if (content.DataContext is TM.Framework.UI.Workspace.Common.Controls.ProjectSpecPanelViewModel viewModel)
             {
                 viewModel.SaveCompleted += () => dialog.Close();
+                dialog.Closed += (_, _) => viewModel.Dispose();
             }
 
             Grid.SetRow(titleBar, 0);
@@ -500,10 +515,11 @@ namespace TM.Framework.UI.Workspace.RightPanel
                 Margin = new Thickness(16, 0, 0, 0)
             };
 
-            var icon = new Emoji.Wpf.TextBlock
+            var icon = new Image
             {
-                Text = "⚙",
-                FontSize = 16,
+                Source = TM.Framework.Common.Helpers.IconHelper.Get("Icon.Settings"),
+                Width = 16,
+                Height = 16,
                 VerticalAlignment = VerticalAlignment.Center,
                 Margin = new Thickness(0, 0, 8, 0)
             };
@@ -614,399 +630,21 @@ namespace TM.Framework.UI.Workspace.RightPanel
 
             if (message.IsAssistant)
             {
-                AddMenuItem("📋 复制", vm.CopyMessageCommand);
-                AddMenuItem("🔄 重新生成", vm.RegenerateAssistantMessageCommand);
-                AddMenuItem("🗑 删除", vm.DeleteMessageCommand);
-                AddMenuItem(message.IsStarred ? "★ 取消星标" : "☆ 星标", vm.ToggleStarCommand);
+                AddMenuItem("复制", vm.CopyMessageCommand);
+                AddMenuItem("重新生成", vm.RegenerateAssistantMessageCommand);
+                AddMenuItem("删除", vm.DeleteMessageCommand);
+                AddMenuItem(message.IsStarred ? "取消星标" : "星标", vm.ToggleStarCommand);
             }
             else if (message.IsUser)
             {
-                AddMenuItem("📋 复制", vm.CopyMessageCommand);
-                AddMenuItem("🔄 重新生成", vm.RegenerateFromUserMessageCommand);
-                AddMenuItem("⟲ 撤回到输入框", vm.RecallToInputCommand);
-                AddMenuItem("🗑 删除该轮（含回答）", vm.DeleteUserWithAssistantCommand);
-                AddMenuItem(message.IsStarred ? "★ 取消星标" : "☆ 星标", vm.ToggleStarCommand);
+                AddMenuItem("复制", vm.CopyMessageCommand);
+                AddMenuItem("重新生成", vm.RegenerateFromUserMessageCommand);
+                AddMenuItem("撤回到输入框", vm.RecallToInputCommand);
+                AddMenuItem("删除该轮（含回答）", vm.DeleteUserWithAssistantCommand);
+                AddMenuItem(message.IsStarred ? "取消星标" : "星标", vm.ToggleStarCommand);
             }
         }
 
-        private void InputBox_OnPreviewKeyDown(object sender, KeyEventArgs e)
-        {
-            if (e.Key == Key.Enter && (Keyboard.Modifiers & ModifierKeys.Shift) == 0)
-            {
-                if (DataContext is SKConversationViewModel vm &&
-                    vm.SendCommand != null &&
-                    vm.SendCommand.CanExecute(null))
-                {
-                    FlushPendingInputText(force: true);
-                    vm.SendCommand.Execute(null);
-
-                    ClearInputBox();
-                    e.Handled = true;
-                }
-            }
-        }
-
-        private string GetInputBoxPlainText()
-        {
-            if (InputBox?.Document == null) return string.Empty;
-
-            if (!_containsReferenceInlines)
-            {
-                var range = new TextRange(InputBox.Document.ContentStart, InputBox.Document.ContentEnd);
-                return (range.Text ?? string.Empty).TrimEnd('\r', '\n').Trim();
-            }
-
-            var result = new System.Text.StringBuilder();
-            foreach (var block in InputBox.Document.Blocks)
-            {
-                if (block is Paragraph paragraph)
-                {
-                    foreach (var inline in paragraph.Inlines)
-                    {
-                        if (inline is InlineUIContainer container &&
-                            container.Child is System.Windows.Controls.TextBlock tb &&
-                            tb.Tag is string refText)
-                        {
-                            result.Append(refText);
-                        }
-                        else if (inline is Run run)
-                        {
-                            result.Append(run.Text);
-                        }
-                    }
-                }
-            }
-            return result.ToString().Trim();
-        }
-
-        private void ClearInputBox()
-        {
-            if (InputBox?.Document == null) return;
-            InputBox.Document.Blocks.Clear();
-            InputBox.Document.Blocks.Add(new Paragraph());
-            _containsReferenceInlines = false;
-            UpdateInputPlaceholder();
-        }
-
-        private void UpdateInputPlaceholder()
-        {
-            if (InputPlaceholder == null) return;
-            var hasContent = !string.IsNullOrWhiteSpace(_pendingInputText) || !string.IsNullOrWhiteSpace(GetInputBoxPlainText());
-            InputPlaceholder.Visibility = hasContent ? Visibility.Collapsed : Visibility.Visible;
-        }
-
-        private void OnClearMessageSelectionRequested()
-        {
-            Dispatcher.InvokeAsync(ClearMessageSelection);
-        }
-
-        private void OnConversationPanelUnloaded(object sender, RoutedEventArgs e)
-        {
-            PanelComm.ClearMessageSelectionRequested -= OnClearMessageSelectionRequested;
-            _inputSyncTimer?.Stop();
-            _inputSyncTimer = null;
-        }
-
-        private void ClearMessageSelection()
-        {
-            if (DataContext is SKConversationViewModel vm)
-            {
-                MessagesListBox.SelectedItem = null;
-                vm.SelectedMessage = null;
-                vm.SelectedMessages.Clear();
-            }
-        }
-
-        private void OnViewModelPropertyChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
-        {
-            if (e.PropertyName == "InputText" && sender is SKConversationViewModel vm)
-            {
-                Dispatcher.InvokeAsync(() =>
-                {
-                    if (_isUpdatingInputBoxFromViewModel)
-                    {
-                        return;
-                    }
-                    var currentText = GetInputBoxPlainText();
-                    if (currentText != vm.InputText)
-                    {
-                        _isUpdatingInputBoxFromViewModel = true;
-                        SetInputBoxText(vm.InputText);
-                        _isUpdatingInputBoxFromViewModel = false;
-                    }
-                });
-            }
-            else if (e.PropertyName == "Messages")
-            {
-                Dispatcher.InvokeAsync(UpdateEmptyStateVisibility);
-            }
-        }
-
-        private void SetInputBoxText(string text)
-        {
-            if (InputBox == null) return;
-
-            InputBox.Document.Blocks.Clear();
-            var paragraph = new Paragraph(new Run(text ?? string.Empty));
-            InputBox.Document.Blocks.Add(paragraph);
-            _containsReferenceInlines = false;
-
-            InputBox.CaretPosition = InputBox.Document.ContentEnd;
-
-            _pendingInputText = text ?? string.Empty;
-            UpdateInputPlaceholder();
-        }
-
-        private void OnContextUsageClick(object sender, MouseButtonEventArgs e)
-        {
-            ContextUsagePopup.IsOpen = !ContextUsagePopup.IsOpen;
-        }
-
-        private void OnContextUsageMouseEnter(object sender, MouseEventArgs e)
-        {
-            ContextUsagePopup.IsOpen = true;
-        }
-
-        private void OnContextUsageMouseLeave(object sender, MouseEventArgs e)
-        {
-        }
-
-        private void OnDeleteModelClick(object sender, RoutedEventArgs e)
-        {
-            if (sender is not MenuItem menuItem)
-            {
-                return;
-            }
-
-            if (menuItem.Tag is not TM.Services.Framework.AI.Core.UserConfiguration model)
-            {
-                return;
-            }
-
-            if (DataContext is not SKConversationViewModel vm)
-            {
-                return;
-            }
-
-            var confirm = StandardDialog.ShowConfirm($"确定要禁用模型 \"{model.Name}\" 吗？\n禁用后可在模型管理中重新启用。", "禁用模型");
-            if (confirm)
-            {
-                vm.DeleteModel(model);
-            }
-        }
-
-        private void OnMessageBubbleRightClick(object sender, MouseButtonEventArgs e)
-        {
-            if (sender is not ListBoxItem item)
-            {
-                return;
-            }
-
-            if (MessagesListBox.SelectedItem != item.DataContext)
-            {
-                MessagesListBox.SelectedItem = item.DataContext;
-            }
-        }
-        private void TypingIndicator_MouseLeftButtonDown(object sender, MouseButtonEventArgs e) { }
-
-        private void OnSessionMenuItemClick(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is not SKConversationViewModel vm)
-            {
-                return;
-            }
-
-            if (sender is MenuItem item && item.Tag is string sessionId)
-            {
-                _ = vm.SwitchSessionAsync(sessionId);
-            }
-        }
-
-        private void MonitorButton_OnClick(object sender, RoutedEventArgs e)
-        {
-            if (DataContext is not SKConversationViewModel vm)
-            {
-                return;
-            }
-
-            vm.ShowTodoOverlay = !vm.ShowTodoOverlay;
-        }
-
-        #region @引用下拉选择器
-
-        private ReferenceDropdownViewModel? _referenceDropdownViewModel;
-
-        private void InitializeReferenceDropdown()
-        {
-            if (ReferenceDropdownControl == null) return;
-
-            _referenceDropdownViewModel = ServiceLocator.Get<ReferenceDropdownViewModel>();
-            ReferenceDropdownControl.DataContext = _referenceDropdownViewModel;
-
-            _referenceDropdownViewModel.ReferenceSelected += OnReferenceSelected;
-        }
-
-        private void InputBox_OnTextChanged(object sender, TextChangedEventArgs e)
-        {
-            if (sender is not RichTextBox richTextBox) return;
-            if (_referenceDropdownViewModel == null) return;
-
-            if (_isUpdatingInputBoxFromViewModel)
-            {
-                return;
-            }
-
-            if (DataContext is SKConversationViewModel vm)
-            {
-                _pendingInputText = GetInputBoxPlainText();
-                _inputSyncTimer?.Stop();
-                _inputSyncTimer?.Start();
-            }
-
-            UpdateInputPlaceholder();
-
-            var caretPosition = richTextBox.CaretPosition;
-            var textBefore = caretPosition.GetTextInRun(LogicalDirection.Backward);
-
-            if (!string.IsNullOrEmpty(textBefore) && textBefore.EndsWith("@"))
-            {
-                _referenceDropdownViewModel.Show(InputBox);
-            }
-        }
-
-        private void OnReferenceSelected(string reference)
-        {
-            if (InputBox?.Document == null) return;
-
-            _containsReferenceInlines = true;
-
-            var caretPosition = InputBox.CaretPosition;
-
-            var textBefore = caretPosition.GetTextInRun(LogicalDirection.Backward);
-            if (!string.IsNullOrEmpty(textBefore) && textBefore.EndsWith("@"))
-            {
-                var start = caretPosition.GetPositionAtOffset(-1);
-                if (start != null)
-                {
-                    var range = new TextRange(start, caretPosition);
-                    range.Text = string.Empty;
-                    caretPosition = start;
-                }
-            }
-
-            var hyperlink = new Hyperlink(new Run(reference))
-            {
-                TextDecorations = null,
-                Foreground = Brushes.White,
-                Tag = reference
-            };
-            hyperlink.Background = _referenceBlueBrush;
-
-            hyperlink.Click += (s, args) =>
-            {
-                if (s is Hyperlink hl && hl.Tag is string refText)
-                {
-                    var match = System.Text.RegularExpressions.Regex.Match(refText, @"@(章节|chapter):(\S+)");
-                    if (match.Success)
-                    {
-                        var chapterId = match.Groups[2].Value;
-                        PanelComm
-                            .RequestChapterNavigation(chapterId);
-                    }
-                }
-            };
-
-            var container = new InlineUIContainer(new System.Windows.Controls.TextBlock
-            {
-                Text = reference,
-                Background = _referenceBlueBrush,
-                Foreground = Brushes.White,
-                FontSize = 13,
-                Padding = new Thickness(0),
-                Margin = new Thickness(0),
-                Cursor = Cursors.Hand,
-                Tag = reference,
-                VerticalAlignment = VerticalAlignment.Center
-            }, caretPosition);
-
-            if (container.Child is System.Windows.Controls.TextBlock tb)
-            {
-                tb.MouseLeftButtonDown += (s, args) =>
-                {
-                    if (s is System.Windows.Controls.TextBlock block && block.Tag is string refText)
-                    {
-                        var match = System.Text.RegularExpressions.Regex.Match(refText, @"@(续写|continue|章节|chapter):(\S+)");
-                        if (match.Success)
-                        {
-                            var chapterId = match.Groups[2].Value;
-                            ServiceLocator.Get<PanelCommunicationService>()
-                                .RequestChapterNavigation(chapterId);
-                        }
-                    }
-                };
-            }
-
-            InputBox.CaretPosition = container.ElementEnd;
-
-            var spaceRun = new Run(" ", InputBox.CaretPosition);
-            InputBox.CaretPosition = spaceRun.ContentEnd;
-
-            InputBox.Focus();
-        }
-
-        private void FlushPendingInputText(bool force = false)
-        {
-            if (!force)
-            {
-                _inputSyncTimer?.Stop();
-            }
-
-            if (DataContext is not SKConversationViewModel vm)
-            {
-                return;
-            }
-
-            var text = _pendingInputText;
-            if (vm.InputText != text)
-            {
-                vm.InputText = text;
-            }
-        }
-
-        #endregion
-
-        #region 空状态引导
-
-        private void OnMessagesCollectionChanged(object? sender, System.Collections.Specialized.NotifyCollectionChangedEventArgs e)
-        {
-            UpdateEmptyStateVisibility();
-        }
-
-        private void UpdateEmptyStateVisibility()
-        {
-            if (DataContext is not SKConversationViewModel vm)
-            {
-                return;
-            }
-
-            var hasMessages = vm.Messages.Count > 0;
-
-            var hasHistorySessions = false;
-            try
-            {
-                var sessions = vm.GetRecentSessions();
-                hasHistorySessions = sessions.Count > 0;
-            }
-            catch (Exception ex)
-            {
-                DebugLogOnce(nameof(UpdateEmptyStateVisibility), ex);
-            }
-
-            var shouldHideGuide = hasMessages || hasHistorySessions || vm.HasDraftConversation;
-            EmptyStateGuide.Visibility = shouldHideGuide ? Visibility.Collapsed : Visibility.Visible;
-            MessagesListBox.Visibility = shouldHideGuide ? Visibility.Visible : Visibility.Collapsed;
-        }
-
-        #endregion
     }
 }
+

@@ -2,7 +2,7 @@ using System.Collections.Generic;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
-    internal static class PackagingAllowlist
+    public static class PackagingAllowlist
     {
         public static readonly Dictionary<string, HashSet<string>> SubModules = new()
         {

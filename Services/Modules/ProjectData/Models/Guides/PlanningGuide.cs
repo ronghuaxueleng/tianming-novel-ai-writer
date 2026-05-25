@@ -1,11 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace TM.Services.Modules.ProjectData.Models.Guides
 {
     public class PlanningGuide
     {
         [System.Text.Json.Serialization.JsonPropertyName("Module")] public string Module { get; set; } = "PlanningGuide";
-        [System.Text.Json.Serialization.JsonPropertyName("SourceBookId")] public string SourceBookId { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Volumes")] public Dictionary<string, PlanningVolumeEntry> Volumes { get; set; } = new();
     }
 
@@ -22,7 +21,6 @@ namespace TM.Services.Modules.ProjectData.Models.Guides
         [System.Text.Json.Serialization.JsonPropertyName("ChapterNumber")] public int ChapterNumber { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("Title")] public string Title { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Synopsis")] public string Synopsis { get; set; } = string.Empty;
-        [System.Text.Json.Serialization.JsonPropertyName("PlannedWordCount")] public int PlannedWordCount { get; set; }
         [System.Text.Json.Serialization.JsonPropertyName("Rhythm")] public RhythmInfo Rhythm { get; set; } = new();
         [System.Text.Json.Serialization.JsonPropertyName("PlotAllocations")] public List<PlotAllocationEntry> PlotAllocations { get; set; } = new();
     }

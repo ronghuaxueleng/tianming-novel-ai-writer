@@ -1,14 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.ChapterBlueprint;
-using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
 
 namespace TM.Modules.Generate.Elements.Blueprint.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class BlueprintService : ModuleServiceBase<BlueprintCategory, BlueprintData>
     {
         private readonly VolumeDesignService _volumeDesignService;
@@ -24,12 +24,17 @@ namespace TM.Modules.Generate.Elements.Blueprint.Services
             _volumeDesignService.CategoryDeleted += OnVolumeCategoryDeleted;
         }
 
+        protected override string? GetEntityTypeKeyForPropagation() => "blueprint";
+
         private void OnVolumeCategoryDeleted(object? sender, CategoryDeletedEventArgs e)
         {
             try
             {
                 var categoryName = e.CategoryName;
-                var dataToDelete = DataItems.Where(d => d.Category == categoryName).ToList();
+                var categoryId = e.CategoryId;
+                var dataToDelete = DataItems.Where(d =>
+                    (!string.IsNullOrWhiteSpace(categoryId) && d.CategoryId == categoryId) ||
+                    (string.IsNullOrWhiteSpace(d.CategoryId) && d.Category == categoryName)).ToList();
 
                 if (dataToDelete.Count > 0)
                 {
@@ -56,7 +61,7 @@ namespace TM.Modules.Generate.Elements.Blueprint.Services
                 {
                     Id = v.Id,
                     Name = v.VolumeNumber > 0 ? $"第{v.VolumeNumber}卷 {v.VolumeTitle}".Trim() : v.Name,
-                    Icon = "📚",
+                    Icon = "Icon.Books",
                     Order = v.VolumeNumber,
                     IsBuiltIn = false,
                     IsEnabled = v.IsEnabled
@@ -176,7 +181,8 @@ namespace TM.Modules.Generate.Elements.Blueprint.Services
             try
             {
                 _volumeDesignService.EnsureInitialized();
-                var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns();
+                var volumeDesigns = _volumeDesignService.GetAllVolumeDesigns()
+                    .ToList();
 
                 var matchedVolume = volumeDesigns.FirstOrDefault(v =>
                 {
@@ -188,7 +194,8 @@ namespace TM.Modules.Generate.Elements.Blueprint.Services
                 if (matchedVolume != null && !string.IsNullOrWhiteSpace(matchedVolume.Id))
                 {
                     data.CategoryId = matchedVolume.Id;
-                    TM.App.Log($"[BlueprintService] 主动补全CategoryId: {data.Name} -> {matchedVolume.Id}");
+                    if (TM.App.IsDebugMode)
+                        TM.App.Log($"[BlueprintService] 主动补全CategoryId: {data.Name} -> {matchedVolume.Id}");
                 }
             }
             catch (Exception ex)

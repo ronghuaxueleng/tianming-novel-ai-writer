@@ -2,13 +2,22 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using TM.Framework.Common.Helpers.Storage;
 
 namespace TM.Framework.Common.Helpers
 {
     public static class EntityNameResolver
     {
+        static EntityNameResolver()
+        {
+            StoragePathHelper.CurrentProjectChanged += (_, _) =>
+            {
+                Invalidate();
+                PreloadInBackground();
+            };
+        }
+
         private static readonly object _lock = new();
+        private static readonly System.Threading.SemaphoreSlim _coldLoadSemaphore = new(1, 1);
         private static Dictionary<string, string>? _characterMap;
         private static Dictionary<string, string>? _locationMap;
         private static Dictionary<string, string>? _factionMap;
@@ -20,6 +29,10 @@ namespace TM.Framework.Common.Helpers
         private static Dictionary<string, string>? _chapterPlanMap;
         private static Dictionary<string, string>? _blueprintMap;
         private static Dictionary<string, string>? _outlineMap;
+        private static Dictionary<string, string>? _itemMap;
+        private static Dictionary<string, string>? _secretMap;
+        private static Dictionary<string, string>? _pledgeMap;
+        private static Dictionary<string, string>? _deadlineMap;
         private static DateTime _lastLoadTime = DateTime.MinValue;
         private static readonly TimeSpan CacheExpiry = TimeSpan.FromMinutes(5);
 
@@ -54,9 +67,17 @@ namespace TM.Framework.Common.Helpers
                     return bpName;
                 if (_outlineMap?.TryGetValue(entityId, out var outlineName) == true && !string.IsNullOrEmpty(outlineName))
                     return outlineName;
+                if (_itemMap?.TryGetValue(entityId, out var itemName) == true && !string.IsNullOrEmpty(itemName))
+                    return itemName;
+                if (_secretMap?.TryGetValue(entityId, out var secretName) == true && !string.IsNullOrEmpty(secretName))
+                    return secretName;
+                if (_pledgeMap?.TryGetValue(entityId, out var pledgeName) == true && !string.IsNullOrEmpty(pledgeName))
+                    return pledgeName;
+                if (_deadlineMap?.TryGetValue(entityId, out var deadlineName) == true && !string.IsNullOrEmpty(deadlineName))
+                    return deadlineName;
             }
 
-            return entityId;
+            return "未知实体";
         }
 
         public static string ResolveCharacter(string entityId)
@@ -65,8 +86,10 @@ namespace TM.Framework.Common.Helpers
             EnsureLoaded();
             lock (_lock)
             {
-                return _characterMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name) ? name : entityId;
+                if (_characterMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name))
+                    return name;
             }
+            return "未知角色";
         }
 
         public static string ResolveForeshadowing(string entityId)
@@ -75,8 +98,10 @@ namespace TM.Framework.Common.Helpers
             EnsureLoaded();
             lock (_lock)
             {
-                return _foreshadowingMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name) ? name : entityId;
+                if (_foreshadowingMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name))
+                    return name;
             }
+            return "未知伏笔";
         }
 
         public static string ResolveConflict(string entityId)
@@ -85,8 +110,10 @@ namespace TM.Framework.Common.Helpers
             EnsureLoaded();
             lock (_lock)
             {
-                return _conflictMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name) ? name : entityId;
+                if (_conflictMap?.TryGetValue(entityId, out var name) == true && !string.IsNullOrEmpty(name))
+                    return name;
             }
+            return "未知冲突";
         }
 
         public static void Invalidate()
@@ -97,49 +124,118 @@ namespace TM.Framework.Common.Helpers
             }
         }
 
+        public static void PreloadInBackground()
+        {
+            _ = System.Threading.Tasks.Task.Run(async () => await EnsureLoadedAsync().ConfigureAwait(false));
+        }
+
         private static void EnsureLoaded()
         {
-            lock (_lock)
+            if (DateTime.Now - _lastLoadTime < CacheExpiry &&
+                _characterMap != null && _foreshadowingMap != null && _conflictMap != null)
+                return;
+
+            if (_characterMap != null && _foreshadowingMap != null && _conflictMap != null)
             {
-                if (DateTime.Now - _lastLoadTime < CacheExpiry &&
-                    _characterMap != null && _foreshadowingMap != null && _conflictMap != null)
-                {
-                    return;
-                }
+                PreloadInBackground();
+                return;
+            }
 
-                _characterMap = new Dictionary<string, string>();
-                _locationMap = new Dictionary<string, string>();
-                _factionMap = new Dictionary<string, string>();
-                _plotRuleMap = new Dictionary<string, string>();
-                _foreshadowingMap = new Dictionary<string, string>();
-                _conflictMap = new Dictionary<string, string>();
-                _worldRuleMap = new Dictionary<string, string>();
-                _volumeDesignMap = new Dictionary<string, string>();
-                _chapterPlanMap = new Dictionary<string, string>();
-                _blueprintMap = new Dictionary<string, string>();
-                _outlineMap = new Dictionary<string, string>();
-
-                try
-                {
-                    LoadFromElements();
-                    LoadFromGlobalSettings();
-                    LoadFromGenerateElements();
-                    LoadFromGuides();
-                    _lastLoadTime = DateTime.Now;
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[EntityNameResolver] 加载映射失败: {ex.Message}");
-                }
+            try
+            {
+                System.Threading.Tasks.Task.Run(async () => await EnsureLoadedAsync().ConfigureAwait(false))
+                    .GetAwaiter().GetResult();
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[EntityNameResolver] EnsureLoaded 同步等待失败，回退异步预加载: {ex.Message}");
+                PreloadInBackground();
             }
         }
 
-        private static void LoadFromElements()
+        #region 异步方法（后台预加载使用，不阻塞线程池线程）
+
+        private static async System.Threading.Tasks.Task EnsureLoadedAsync()
+        {
+            if (DateTime.Now - _lastLoadTime < CacheExpiry &&
+                _characterMap != null && _foreshadowingMap != null && _conflictMap != null)
+                return;
+
+            await _coldLoadSemaphore.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (DateTime.Now - _lastLoadTime < CacheExpiry &&
+                    _characterMap != null && _foreshadowingMap != null && _conflictMap != null)
+                { _coldLoadSemaphore.Release(); return; }
+            }
+            catch { _coldLoadSemaphore.Release(); return; }
+
+            var charMap = new Dictionary<string, string>();
+            var locationMap = new Dictionary<string, string>();
+            var factionMap = new Dictionary<string, string>();
+            var plotRuleMap = new Dictionary<string, string>();
+            var foreshadowingMap = new Dictionary<string, string>();
+            var conflictMap = new Dictionary<string, string>();
+            var worldRuleMap = new Dictionary<string, string>();
+            var volumeDesignMap = new Dictionary<string, string>();
+            var chapterPlanMap = new Dictionary<string, string>();
+            var blueprintMap = new Dictionary<string, string>();
+            var outlineMap = new Dictionary<string, string>();
+            var itemMap = new Dictionary<string, string>();
+            var secretMap = new Dictionary<string, string>();
+            var pledgeMap = new Dictionary<string, string>();
+            var deadlineMap = new Dictionary<string, string>();
+
+            var loadedAt = DateTime.MinValue;
+            try
+            {
+                await LoadFromElementsAsync(charMap, locationMap, factionMap, plotRuleMap).ConfigureAwait(false);
+                await LoadFromGlobalSettingsAsync(worldRuleMap).ConfigureAwait(false);
+                await LoadFromGenerateElementsAsync(volumeDesignMap, chapterPlanMap, blueprintMap).ConfigureAwait(false);
+                await LoadFromGuidesAsync(foreshadowingMap, conflictMap, outlineMap).ConfigureAwait(false);
+                await LoadVolumeScopedGuideMapAsync(itemMap, "item_state_guide", "Items").ConfigureAwait(false);
+                await LoadVolumeScopedGuideMapAsync(secretMap, "secret_reveal_guide", "Secrets").ConfigureAwait(false);
+                await LoadVolumeScopedGuideMapAsync(pledgeMap, "pledge_constraint_guide", "Pledges").ConfigureAwait(false);
+                await LoadVolumeScopedGuideMapAsync(deadlineMap, "deadline_constraint_guide", "Deadlines").ConfigureAwait(false);
+                loadedAt = DateTime.Now;
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[EntityNameResolver] 加载映射失败: {ex.Message}");
+            }
+
+            lock (_lock)
+            {
+                _characterMap = charMap;
+                _locationMap = locationMap;
+                _factionMap = factionMap;
+                _plotRuleMap = plotRuleMap;
+                _foreshadowingMap = foreshadowingMap;
+                _conflictMap = conflictMap;
+                _worldRuleMap = worldRuleMap;
+                _volumeDesignMap = volumeDesignMap;
+                _chapterPlanMap = chapterPlanMap;
+                _blueprintMap = blueprintMap;
+                _outlineMap = outlineMap;
+                _itemMap = itemMap;
+                _secretMap = secretMap;
+                _pledgeMap = pledgeMap;
+                _deadlineMap = deadlineMap;
+                if (loadedAt != DateTime.MinValue) _lastLoadTime = loadedAt;
+            }
+            _coldLoadSemaphore.Release();
+        }
+
+        private static async System.Threading.Tasks.Task LoadFromElementsAsync(
+            Dictionary<string, string> charMap,
+            Dictionary<string, string> locationMap,
+            Dictionary<string, string> factionMap,
+            Dictionary<string, string> plotRuleMap)
         {
             var elementsPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "Design", "elements.json");
             if (!File.Exists(elementsPath)) return;
 
-            var json = File.ReadAllText(elementsPath);
+            var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
             using var doc = JsonDocument.Parse(json);
             var root = doc.RootElement;
             if (!root.TryGetProperty("data", out var data)) return;
@@ -152,7 +248,7 @@ namespace TM.Framework.Common.Helpers
                     var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                     var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                     if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        _characterMap![id] = name;
+                        charMap[id] = name;
                 }
             }
 
@@ -164,7 +260,7 @@ namespace TM.Framework.Common.Helpers
                     var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                     var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                     if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        _locationMap![id] = name;
+                        locationMap[id] = name;
                 }
             }
 
@@ -176,7 +272,7 @@ namespace TM.Framework.Common.Helpers
                     var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                     var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                     if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        _factionMap![id] = name;
+                        factionMap[id] = name;
                 }
             }
 
@@ -188,12 +284,15 @@ namespace TM.Framework.Common.Helpers
                     var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                     var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                     if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                        _plotRuleMap![id] = name;
+                        plotRuleMap[id] = name;
                 }
             }
         }
 
-        private static void LoadFromGuides()
+        private static async System.Threading.Tasks.Task LoadFromGuidesAsync(
+            Dictionary<string, string> foreshadowingMap,
+            Dictionary<string, string> conflictMap,
+            Dictionary<string, string> outlineMap)
         {
             var guidesPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
             if (!Directory.Exists(guidesPath)) return;
@@ -203,7 +302,7 @@ namespace TM.Framework.Common.Helpers
             {
                 try
                 {
-                    var json = File.ReadAllText(foreshadowingPath);
+                    var json = await File.ReadAllTextAsync(foreshadowingPath).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
 
@@ -214,11 +313,11 @@ namespace TM.Framework.Common.Helpers
                             var id = prop.Name;
                             var name = prop.Value.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                             if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                                _foreshadowingMap![id] = name;
+                                foreshadowingMap[id] = name;
                         }
                     }
                 }
-                catch {}
+                catch { }
             }
 
             var conflictFiles = Directory.Exists(guidesPath)
@@ -228,7 +327,7 @@ namespace TM.Framework.Common.Helpers
             {
                 try
                 {
-                    var json = File.ReadAllText(conflictPath);
+                    var json = await File.ReadAllTextAsync(conflictPath).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
 
@@ -239,11 +338,11 @@ namespace TM.Framework.Common.Helpers
                             var id = prop.Name;
                             var name = prop.Value.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                             if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                                _conflictMap![id] = name;
+                                conflictMap[id] = name;
                         }
                     }
                 }
-                catch {}
+                catch { }
             }
 
             var outlinePath = Path.Combine(guidesPath, "outline_guide.json");
@@ -251,7 +350,7 @@ namespace TM.Framework.Common.Helpers
             {
                 try
                 {
-                    var json = File.ReadAllText(outlinePath);
+                    var json = await File.ReadAllTextAsync(outlinePath).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                     var root = doc.RootElement;
 
@@ -262,22 +361,55 @@ namespace TM.Framework.Common.Helpers
                             var id = prop.Name;
                             var name = prop.Value.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                             if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                                _outlineMap![id] = name;
+                                outlineMap[id] = name;
                         }
                     }
                 }
-                catch {}
+                catch { }
             }
         }
 
-        private static void LoadFromGlobalSettings()
+        private static async System.Threading.Tasks.Task LoadVolumeScopedGuideMapAsync(
+            Dictionary<string, string> targetMap,
+            string baseName,
+            string entitiesPropertyName)
+        {
+            var guidesPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
+            if (!Directory.Exists(guidesPath)) return;
+
+            var files = Directory.GetFiles(guidesPath, $"{baseName}_vol*.json");
+            foreach (var file in files)
+            {
+                try
+                {
+                    var json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
+                    using var doc = JsonDocument.Parse(json);
+                    var root = doc.RootElement;
+
+                    if (root.TryGetProperty(entitiesPropertyName, out var entities)
+                        && entities.ValueKind == JsonValueKind.Object)
+                    {
+                        foreach (var prop in entities.EnumerateObject())
+                        {
+                            var id = prop.Name;
+                            var name = prop.Value.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
+                            if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
+                                targetMap[id] = name;
+                        }
+                    }
+                }
+                catch { }
+            }
+        }
+
+        private static async System.Threading.Tasks.Task LoadFromGlobalSettingsAsync(Dictionary<string, string> worldRuleMap)
         {
             var settingsPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "Design", "globalsettings.json");
             if (!File.Exists(settingsPath)) return;
 
             try
             {
-                var json = File.ReadAllText(settingsPath);
+                var json = await File.ReadAllTextAsync(settingsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return;
@@ -290,21 +422,24 @@ namespace TM.Framework.Common.Helpers
                         var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                         var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                            _worldRuleMap![id] = name;
+                            worldRuleMap[id] = name;
                     }
                 }
             }
-            catch {}
+            catch { }
         }
 
-        private static void LoadFromGenerateElements()
+        private static async System.Threading.Tasks.Task LoadFromGenerateElementsAsync(
+            Dictionary<string, string> volumeDesignMap,
+            Dictionary<string, string> chapterPlanMap,
+            Dictionary<string, string> blueprintMap)
         {
             var elementsPath = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "Generate", "elements.json");
             if (!File.Exists(elementsPath)) return;
 
             try
             {
-                var json = File.ReadAllText(elementsPath);
+                var json = await File.ReadAllTextAsync(elementsPath).ConfigureAwait(false);
                 using var doc = JsonDocument.Parse(json);
                 var root = doc.RootElement;
                 if (!root.TryGetProperty("data", out var data)) return;
@@ -317,7 +452,7 @@ namespace TM.Framework.Common.Helpers
                         var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                         var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                            _volumeDesignMap![id] = name;
+                            volumeDesignMap[id] = name;
                     }
                 }
 
@@ -329,7 +464,7 @@ namespace TM.Framework.Common.Helpers
                         var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                         var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                            _chapterPlanMap![id] = name;
+                            chapterPlanMap[id] = name;
                     }
                 }
 
@@ -341,11 +476,13 @@ namespace TM.Framework.Common.Helpers
                         var id = item.TryGetProperty("Id", out var idProp) ? idProp.GetString() : null;
                         var name = item.TryGetProperty("Name", out var nameProp) ? nameProp.GetString() : null;
                         if (!string.IsNullOrEmpty(id) && !string.IsNullOrEmpty(name))
-                            _blueprintMap![id] = name;
+                            blueprintMap[id] = name;
                     }
                 }
             }
-            catch {}
+            catch { }
         }
+
+        #endregion
     }
 }

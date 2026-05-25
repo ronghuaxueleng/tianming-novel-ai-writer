@@ -3,12 +3,11 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
-    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-    xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout">
 <dm:TwoColumnEditorLayout
-    LeftIcon="🌍"
+    LeftIcon="{DynamicResource Icon.Globe}"
     LeftTitle="世界观规则"
-    RightIcon="🌍"
+    RightIcon="{DynamicResource Icon.Globe}"
     RightTitle="规则编辑"
     ItemsSource="{Binding TreeData}"
     ShowSearch="True"
@@ -33,28 +32,28 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="📝" Title="一句话简介" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Edit}" Title="一句话简介" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormOneLineSummary, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="⚡" Title="力量体系" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Lightning}" Title="力量体系" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormPowerSystem, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="🌌" Title="宇宙观" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Galaxy}" Title="宇宙观" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormCosmology, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="3" Icon="✨" Title="特殊法则/现象" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Sparkle}" Title="特殊法则/现象" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormSpecialLaws, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -70,14 +69,14 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="🚫" Title="硬规则（不可违反）" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Forbidden}" Title="硬规则（不可违反）" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormHardRules, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="⚠️" Title="软规则（可打破但需解释）" Margin="0">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Warning}" Title="软规则（可打破但需解释）" Margin="0">
                 <TextBox Text="{Binding FormSoftRules, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -95,28 +94,28 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="🌅" Title="创世/古代纪元" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Sunrise}" Title="创世/古代纪元" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormAncientEra, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="📜" Title="关键历史事件" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Scroll}" Title="关键历史事件" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormKeyEvents, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="🎬" Title="近代史" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Clapper}" Title="近代史" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormModernHistory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="3" Icon="📍" Title="故事开始前的现状" Margin="0">
+            <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.MapPin}" Title="故事开始前的现状" Margin="0">
                 <TextBox Text="{Binding FormStatusQuo, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"

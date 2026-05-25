@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Design.Plot;
 
 namespace TM.Modules.Design.Elements.PlotRules.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class PlotRulesService : ModuleServiceBase<PlotRulesCategory, PlotRulesData>
     {
         public PlotRulesService()
@@ -15,6 +16,8 @@ namespace TM.Modules.Design.Elements.PlotRules.Services
                 dataFileName: "plot_rules.json")
         {
         }
+
+        protected override string? GetEntityTypeKeyForPropagation() => "plotrules";
 
         public List<PlotRulesData> GetAllPlotRules() => GetAllData();
 
@@ -39,7 +42,7 @@ namespace TM.Modules.Design.Elements.PlotRules.Services
             }
             data.CreatedAt = DateTime.Now;
             data.UpdatedAt = DateTime.Now;
-            await AddDataAsync(data);
+            await AddDataAsync(data).ConfigureAwait(false);
         }
 
         public void UpdatePlotRule(PlotRulesData data)
@@ -53,7 +56,7 @@ namespace TM.Modules.Design.Elements.PlotRules.Services
         {
             if (data == null) return;
             data.UpdatedAt = DateTime.Now;
-            await UpdateDataAsync(data);
+            await UpdateDataAsync(data).ConfigureAwait(false);
         }
 
         public void DeletePlotRule(string id)

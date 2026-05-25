@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
-using System.Text.RegularExpressions;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -13,13 +12,26 @@ namespace TM.Services.Modules.ProjectData.Implementations
             ["沉默寡言"] = new() { "滔滔不绝", "话多", "健谈", "喋喋不休" },
             ["内向"] = new() { "外向", "开朗", "活泼" },
             ["冷漠"] = new() { "热情", "温暖", "友善" },
+            ["温柔"] = new() { "冷酷", "暴躁", "粗暴", "残忍" },
+            ["沉稳"] = new() { "冲动", "莽撞", "浮躁", "急躁" },
+            ["冷静"] = new() { "冲动", "慌乱", "失控", "暴躁" },
+            ["谨慎"] = new() { "鲁莽", "冒进", "大意", "草率" },
             ["勇敢"] = new() { "胆小", "懦弱", "怯懦" },
+            ["坚强"] = new() { "软弱", "脆弱", "怯弱" },
+            ["正直"] = new() { "狡诈", "阴险", "卑鄙", "虚伪" },
             ["善良"] = new() { "邪恶", "残忍", "冷酷" },
+            ["忠诚"] = new() { "背叛", "叛变", "反叛" },
             ["聪明"] = new() { "愚蠢", "笨拙", "迟钝" },
-            ["黑发"] = new() { "金发", "白发", "红发", "银发", "棕发" },
-            ["金发"] = new() { "黑发", "白发", "红发", "银发", "棕发" },
-            ["蓝眼"] = new() { "黑眼", "红眼", "金眼", "绿眼" },
-            ["黑眼"] = new() { "蓝眼", "红眼", "金眼", "绿眼" }
+            ["黑发"] = new() { "金发", "白发", "红发", "银发", "棕发", "蓝发", "紫发", "绿发", "灰发" },
+            ["金发"] = new() { "黑发", "白发", "红发", "银发", "棕发", "蓝发", "紫发", "绿发", "灰发" },
+            ["白发"] = new() { "黑发", "金发", "红发", "棕发", "蓝发", "紫发", "绿发", "灰发" },
+            ["银发"] = new() { "黑发", "金发", "红发", "棕发", "蓝发", "紫发", "绿发", "灰发" },
+            ["红发"] = new() { "黑发", "金发", "白发", "银发", "棕发", "蓝发", "紫发", "绿发", "灰发" },
+            ["蓝眼"] = new() { "黑眼", "红眼", "金眼", "绿眼", "紫眼", "灰眼" },
+            ["黑眼"] = new() { "蓝眼", "红眼", "金眼", "绿眼", "紫眼", "灰眼" },
+            ["红眼"] = new() { "黑眼", "蓝眼", "金眼", "绿眼", "紫眼", "灰眼" },
+            ["金眼"] = new() { "黑眼", "蓝眼", "红眼", "绿眼", "紫眼", "灰眼" },
+            ["绿眼"] = new() { "黑眼", "蓝眼", "红眼", "金眼", "紫眼", "灰眼" }
         };
 
         public List<string> ValidateCharacterDescriptions(
@@ -96,7 +108,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private static string? FindHairColorContradiction(string content, string characterName, string expectedColor)
         {
-            var hairColors = new[] { "黑发", "金发", "白发", "红发", "银发", "棕发", "蓝发", "紫发", "绿发" };
+            var hairColors = HairColorConstants.HairColorKeywords;
             var otherColors = hairColors.Where(c => !c.Contains(expectedColor) && !expectedColor.Contains(c)).ToList();
 
             foreach (var color in otherColors)

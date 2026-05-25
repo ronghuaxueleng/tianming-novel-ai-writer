@@ -1,4 +1,4 @@
-using System.ComponentModel;
+﻿using System.ComponentModel;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Text.Json.Serialization;
@@ -25,7 +25,7 @@ namespace TM.Services.Modules.ProjectData.Models.Generate.Content
         public string DisplayName { get; set; } = string.Empty;
 
         [JsonPropertyName("Icon")]
-        public string Icon { get; set; } = "📁";
+        public string Icon { get; set; } = "Icon.Folder";
 
         [JsonPropertyName("ItemCountText")]
         public string ItemCountText { get; set; } = "0项";

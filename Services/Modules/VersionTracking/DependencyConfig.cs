@@ -16,15 +16,15 @@ namespace TM.Services.Modules.VersionTracking
             ["LocationRules"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules" },
             ["PlotRules"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules", "LocationRules" },
 
-            ["Outline"] = new[] { "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules" },
-            ["VolumeDesign"] = new[] { "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline" },
-            ["Chapter"] = new[] { "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline" },
-            ["Blueprint"] = new[] { "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline", "Chapter" },
+            ["Outline"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules" },
+            ["VolumeDesign"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline" },
+            ["Chapter"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline", "VolumeDesign" },
+            ["Blueprint"] = new[] { "CreativeMaterials", "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules", "Outline", "VolumeDesign", "Chapter" },
 
-            ["ValidationSummary"] = new[] { 
+            ["ValidationSummary"] = new[] {
                 "CreativeMaterials", "BookAnalysis",
                 "WorldRules", "CharacterRules", "FactionRules", "LocationRules", "PlotRules",
-                "Outline", "Chapter", "Blueprint"
+                "Outline", "VolumeDesign", "Chapter", "Blueprint"
             },
         };
 
@@ -44,7 +44,7 @@ namespace TM.Services.Modules.VersionTracking
             ["ValidationSummary"] = "验证结果",
         };
 
-        public static string GetDisplayName(string moduleName) 
+        public static string GetDisplayName(string moduleName)
             => ModuleDisplayNames.TryGetValue(moduleName, out var name) ? name : moduleName;
 
         public static string GetDisplayNames(IEnumerable<string> moduleNames)

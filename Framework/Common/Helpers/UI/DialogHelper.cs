@@ -1,34 +1,11 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Windows;
-using TM.Framework.Common.Controls.Dialogs;
 
 namespace TM.Framework.Common.Helpers.UI
 {
     public static class DialogHelper
     {
-        private static readonly object _debugLogLock = new();
-        private static readonly HashSet<string> _debugLoggedKeys = new();
-
-        private static void DebugLogOnce(string key, Exception ex)
-        {
-            if (!TM.App.IsDebugMode)
-            {
-                return;
-            }
-
-            lock (_debugLogLock)
-            {
-                if (!_debugLoggedKeys.Add(key))
-                {
-                    return;
-                }
-            }
-
-            System.Diagnostics.Debug.WriteLine($"[DialogHelper] {key}: {ex.Message}");
-        }
-
         private static void AttachFollowOwnerCenter(StandardDialog dialog)
         {
             var owner = dialog.Owner;

@@ -3,12 +3,11 @@
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:dm="clr-namespace:TM.Framework.Common.Controls.DataManagement"
-    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout"
-    xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf">
+    xmlns:layout="clr-namespace:TM.Framework.Common.Controls.Layout">
 <dm:TwoColumnEditorLayout
-    LeftIcon="🏛️"
+    LeftIcon="{DynamicResource Icon.Institution}"
     LeftTitle="势力规则"
-    RightIcon="🏛️"
+    RightIcon="{DynamicResource Icon.Institution}"
     RightTitle="规则编辑"
     ItemsSource="{Binding TreeData}"
     ShowSearch="True"
@@ -32,23 +31,26 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="🏛️" Title="基础信息" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Institution}" Title="基础信息" Margin="0,0,0,10">
                 <StackPanel>
                     <TextBlock Text="势力类型" Margin="0,0,0,5" Foreground="{DynamicResource TextPrimary}"/>
-                    <TextBox Text="{Binding FormFactionType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                             Style="{DynamicResource StandardTextBoxStyle}" Height="36"
-                             ToolTip="门派、帝国、商会、家族、军队、宗教等"/>
+                    <ComboBox ItemsSource="{Binding FactionTypeOptions}"
+                              SelectedItem="{Binding FormFactionType, Mode=OneWay}"
+                              Style="{DynamicResource StandardComboBoxStyle}" Height="36"
+                              IsEditable="True"
+                              Text="{Binding FormFactionType, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                              ToolTip="宗门/教派、王国/帝国、家族/世家、商盟/行会、军事组织、秘密组织、部落/氏族"/>
                 </StackPanel>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🎯" Title="理念/目标" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Target}" Title="理念/目标" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormGoal, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="🗺️" Title="实力/地盘" Margin="0">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Map}" Title="实力/地盘" Margin="0">
                 <TextBox Text="{Binding FormStrengthTerritory, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -65,19 +67,19 @@
                 <RowDefinition Height="*"/>
             </Grid.RowDefinitions>
 
-            <layout:IconHeaderGroupBox Grid.Row="0" Icon="👑" Title="领袖" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="0" Icon="{DynamicResource Icon.Crown}" Title="领袖" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormLeader, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          Style="{DynamicResource StandardTextBoxStyle}" Height="36"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="👥" Title="核心成员" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Users}" Title="核心成员" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormCoreMembers, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
                          BorderThickness="0" Background="Transparent"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="✨" Title="成员特征（共同特点、行事风格）" Margin="0">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Sparkle}" Title="成员特征（共同特点、行事风格）" Margin="0">
                 <TextBox Text="{Binding FormMemberTraits, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -97,7 +99,7 @@
 
             <Grid Grid.Row="0"/>
 
-            <layout:IconHeaderGroupBox Grid.Row="1" Icon="🤝" Title="盟友势力" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="1" Icon="{DynamicResource Icon.Handshake}" Title="盟友势力" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormAllies, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -105,7 +107,7 @@
                          ToolTip="输入势力名称，每行一个"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="2" Icon="⚔️" Title="敌对势力" Margin="0,0,0,10">
+            <layout:IconHeaderGroupBox Grid.Row="2" Icon="{DynamicResource Icon.Swords}" Title="敌对势力" Margin="0,0,0,10">
                 <TextBox Text="{Binding FormEnemies, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"
@@ -113,7 +115,7 @@
                          ToolTip="输入势力名称，每行一个"/>
             </layout:IconHeaderGroupBox>
 
-            <layout:IconHeaderGroupBox Grid.Row="3" Icon="🔄" Title="中立/竞争关系" Margin="0">
+            <layout:IconHeaderGroupBox Grid.Row="3" Icon="{DynamicResource Icon.Refresh}" Title="中立/竞争关系" Margin="0">
                 <TextBox Text="{Binding FormNeutralCompetitors, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
                          AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto"
                          Height="Auto" VerticalAlignment="Stretch"

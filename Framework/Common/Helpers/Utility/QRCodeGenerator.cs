@@ -75,14 +75,14 @@ namespace TM.Framework.Common.Helpers.Utility
             if (string.IsNullOrEmpty(secret))
                 return string.Empty;
 
-            var result = string.Empty;
+            var sb = new System.Text.StringBuilder(secret.Length + secret.Length / 4);
             for (int i = 0; i < secret.Length; i++)
             {
                 if (i > 0 && i % 4 == 0)
-                    result += " ";
-                result += secret[i];
+                    sb.Append(' ');
+                sb.Append(secret[i]);
             }
-            return result;
+            return sb.ToString();
         }
     }
 }

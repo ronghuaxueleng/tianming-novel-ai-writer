@@ -1,11 +1,12 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Design.SmartParsing;
 
 namespace TM.Modules.Design.SmartParsing.BookAnalysis.Services
 {
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class BookAnalysisService : ModuleServiceBase<BookAnalysisCategory, BookAnalysisData>
     {
         public BookAnalysisService()

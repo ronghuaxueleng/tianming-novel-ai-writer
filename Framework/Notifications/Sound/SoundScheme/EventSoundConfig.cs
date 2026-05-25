@@ -1,10 +1,10 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.ComponentModel;
 
 namespace TM.Framework.Notifications.Sound.SoundScheme
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class EventSoundConfig : INotifyPropertyChanged
     {
         private string _selectedSound = "默认提示音";

@@ -1,6 +1,6 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Windows.Media;
@@ -10,11 +10,15 @@ namespace TM.Framework.Common.Helpers.AI
 {
     public static class ProviderLogoHelper
     {
-        private static readonly Dictionary<string, ImageSource?> _logoCache = new();
-        private static readonly string _logoBasePath = "Framework/UI/Icons/Providers/";
+        private static readonly ConcurrentDictionary<string, ImageSource?> _logoCache = new();
         private static readonly string _fallbackLogo = "doudi.png";
         private static Dictionary<string, string>? _nameMapping;
+        private static Dictionary<string, string>? _lowerMapping;
         private static bool _mappingLoaded;
+        private static volatile bool _mappingLoadingTriggered;
+        private static readonly object _mappingLock = new();
+
+        public static event Action? LogoCacheUpdated;
 
         public static ImageSource? GetLogo(string? logoPath, string fallbackEmoji)
         {
@@ -30,43 +34,34 @@ namespace TM.Framework.Common.Helpers.AI
 
             try
             {
-                var projectRoot = StoragePathHelper.GetProjectRoot();
-                var fullPath = Path.Combine(projectRoot, _logoBasePath, logoPath);
+                var escaped = Uri.EscapeDataString(logoPath);
+                var uri = new Uri(
+                    $"pack://application:,,,/Framework/UI/Icons/Providers/{escaped}",
+                    UriKind.Absolute);
 
-                if (File.Exists(fullPath))
-                {
-                    var bitmap = new BitmapImage();
-                    bitmap.BeginInit();
-                    bitmap.UriSource = new Uri(fullPath, UriKind.Absolute);
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.DecodePixelWidth = 32;
-                    bitmap.EndInit();
-                    bitmap.Freeze();
+                var bitmap = new BitmapImage();
+                bitmap.BeginInit();
+                bitmap.UriSource = uri;
+                bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                bitmap.DecodePixelWidth = 32;
+                bitmap.EndInit();
+                bitmap.Freeze();
 
-                    _logoCache[logoPath] = bitmap;
-                    return bitmap;
-                }
-                else
-                {
-                    _logoCache[logoPath] = null;
-                    TM.App.Log($"[ProviderLogoHelper] ⚠️ Logo文件不存在，使用emoji: {logoPath}");
-                    return null;
-                }
+                _logoCache[logoPath] = bitmap;
+                return bitmap;
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProviderLogoHelper] ❌ 加载Logo失败: {logoPath}, 错误: {ex.Message}");
-
-                _logoCache[logoPath] = null;
+                TM.App.Log($"[ProviderLogoHelper] pack URI 加载失败: {logoPath}, 错误: {ex.Message}");
+                _logoCache.TryAdd(logoPath, null);
                 return null;
             }
         }
 
         public static void PreloadInBackground(IEnumerable<string?> logoPaths)
         {
-            var projectRoot = StoragePathHelper.GetProjectRoot();
-            var dispatcher  = System.Windows.Application.Current?.Dispatcher;
-            if (dispatcher == null) return;
+            if (!_mappingLoaded)
+                _ = System.Threading.Tasks.Task.Run(EnsureMappingLoadedAsync);
 
             var paths = logoPaths
                 .Where(p => !string.IsNullOrEmpty(p) && !_logoCache.ContainsKey(p!))
@@ -77,41 +72,11 @@ namespace TM.Framework.Common.Helpers.AI
 
             _ = System.Threading.Tasks.Task.Run(() =>
             {
-                var results = new Dictionary<string, byte[]?>();
                 foreach (var logoPath in paths)
                 {
-                    var fullPath = Path.Combine(projectRoot, _logoBasePath, logoPath);
-                    results[logoPath] = File.Exists(fullPath) ? File.ReadAllBytes(fullPath) : null;
+                    _ = GetLogo(logoPath, string.Empty);
                 }
-                return results;
-            }).ContinueWith(task =>
-            {
-                if (task.IsFaulted || task.Result == null) return;
-                dispatcher.BeginInvoke(new Action(() =>
-                {
-                    foreach (var (logoPath, bytes) in task.Result)
-                    {
-                        if (_logoCache.ContainsKey(logoPath)) continue;
-                        if (bytes == null) { _logoCache[logoPath] = null; continue; }
-                        try
-                        {
-                            var bitmap = new BitmapImage();
-                            bitmap.BeginInit();
-                            bitmap.StreamSource = new System.IO.MemoryStream(bytes);
-                            bitmap.CacheOption  = BitmapCacheOption.OnLoad;
-                            bitmap.DecodePixelWidth = 32;
-                            bitmap.EndInit();
-                            bitmap.Freeze();
-                            _logoCache[logoPath] = bitmap;
-                        }
-                        catch (Exception ex)
-                        {
-                            TM.App.Log($"[ProviderLogoHelper] 预加载Logo失败: {logoPath}, 错误: {ex.Message}");
-                            _logoCache[logoPath] = null;
-                        }
-                    }
-                }));
-            }, System.Threading.Tasks.TaskScheduler.Default);
+            });
         }
 
         public static void ClearCache()
@@ -125,85 +90,125 @@ namespace TM.Framework.Common.Helpers.AI
             if (string.IsNullOrWhiteSpace(providerName))
                 return null;
 
-            EnsureMappingLoaded();
+            if (!_mappingLoaded)
+            {
+                if (!_mappingLoadingTriggered)
+                {
+                    _mappingLoadingTriggered = true;
+                    _ = System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        await EnsureMappingLoadedAsync().ConfigureAwait(false);
+                        System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+                            new Action(() => LogoCacheUpdated?.Invoke()));
+                    });
+                }
+                return _fallbackLogo;
+            }
 
             if (_nameMapping == null || _nameMapping.Count == 0)
                 return null;
 
             var name = providerName.Trim();
 
-            foreach (var kvp in _nameMapping)
+            if (_nameMapping.TryGetValue(name, out var exactMatch))
+                return exactMatch;
+
+            if (_lowerMapping != null)
             {
-                if (string.Equals(kvp.Key, name, StringComparison.OrdinalIgnoreCase))
-                    return kvp.Value;
+                var nameLower = name.ToLowerInvariant();
+                foreach (var kvp in _lowerMapping)
+                {
+                    if (nameLower.Contains(kvp.Key) || kvp.Key.Contains(nameLower))
+                    {
+                        lock (_mappingLock) { _nameMapping![name] = kvp.Value; }
+                        return kvp.Value;
+                    }
+                }
             }
 
-            var nameLower = name.ToLowerInvariant();
-            foreach (var kvp in _nameMapping)
-            {
-                var keyLower = kvp.Key.ToLowerInvariant();
-                if (nameLower.Contains(keyLower) || keyLower.Contains(nameLower))
-                    return kvp.Value;
-            }
-
+            lock (_mappingLock) { _nameMapping![name] = _fallbackLogo; }
             return _fallbackLogo;
         }
 
-        private static void EnsureMappingLoaded()
+        private static async System.Threading.Tasks.Task EnsureMappingLoadedAsync()
         {
-            if (_mappingLoaded)
-                return;
+            if (_mappingLoaded) return;
 
-            _mappingLoaded = true;
-            _nameMapping = LoadMappingFromDisk();
+            var mapping = await LoadMappingFromDiskAsync().ConfigureAwait(false);
+
+            lock (_mappingLock)
+            {
+                if (_mappingLoaded) return;
+                _nameMapping = mapping;
+                var lower = new Dictionary<string, string>(mapping.Count);
+                foreach (var kvp in mapping)
+                    lower[kvp.Key.ToLowerInvariant()] = kvp.Value;
+                _lowerMapping = lower;
+                _mappingLoaded = true;
+            }
         }
 
-        private static Dictionary<string, string> LoadMappingFromDisk()
+        private static async System.Threading.Tasks.Task<Dictionary<string, string>> LoadMappingFromDiskAsync()
         {
             var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
             try
             {
-                var configPath = StoragePathHelper.GetFilePath("Services", "AI/Library", "provider-logos.json");
+                var asm = typeof(ProviderLogoHelper).Assembly;
+                string? resourceName = asm.GetManifestResourceNames()
+                    .FirstOrDefault(n => n.EndsWith("provider-logos.json", StringComparison.Ordinal));
 
-                if (File.Exists(configPath))
+                if (resourceName == null)
                 {
-                    var json = File.ReadAllText(configPath);
-                    var doc = JsonDocument.Parse(json);
+                    TM.App.Log("[ProviderLogoHelper] 嵌入资源 provider-logos.json 未找到");
+                    return result;
+                }
 
-                    if (doc.RootElement.TryGetProperty("mappings", out var mappings))
+                await using var stream = asm.GetManifestResourceStream(resourceName)!;
+                using var doc = await JsonDocument.ParseAsync(stream).ConfigureAwait(false);
+
+                if (doc.RootElement.TryGetProperty("mappings", out var mappings))
+                {
+                    foreach (var prop in mappings.EnumerateObject())
                     {
-                        foreach (var prop in mappings.EnumerateObject())
+                        var logoFile = prop.Value.GetString();
+                        if (!string.IsNullOrEmpty(logoFile))
                         {
-                            var logoFile = prop.Value.GetString();
-                            if (!string.IsNullOrEmpty(logoFile))
-                            {
-                                result[prop.Name] = logoFile;
-                            }
+                            result[prop.Name] = logoFile;
                         }
                     }
+                }
 
-                    TM.App.Log($"[ProviderLogoHelper] 加载Logo映射配置: {result.Count}条");
-                }
-                else
-                {
-                    TM.App.Log($"[ProviderLogoHelper] Logo映射配置文件不存在: {configPath}");
-                }
+                TM.App.Log($"[ProviderLogoHelper] 嵌入加载 Logo 映射: {result.Count} 条");
             }
             catch (Exception ex)
             {
-                TM.App.Log($"[ProviderLogoHelper] 加载Logo映射配置失败: {ex.Message}");
+                TM.App.Log($"[ProviderLogoHelper] 加载嵌入 Logo 映射失败: {ex.Message}");
             }
             return result;
         }
 
-        public static void ReloadMapping()
+        public static async System.Threading.Tasks.Task ReloadMappingAsync()
         {
             _mappingLoaded = false;
+            _mappingLoadingTriggered = false;
             _nameMapping = null;
-            EnsureMappingLoaded();
+
+            if (System.Windows.Application.Current?.Dispatcher?.CheckAccess() == true)
+            {
+                await System.Threading.Tasks.Task.Run(async () =>
+                {
+                    await EnsureMappingLoadedAsync().ConfigureAwait(false);
+                }).ConfigureAwait(false);
+                System.Windows.Application.Current?.Dispatcher.BeginInvoke(
+                    new Action(() => LogoCacheUpdated?.Invoke()));
+            }
+            else
+            {
+                await EnsureMappingLoadedAsync().ConfigureAwait(false);
+            }
         }
 
-        public static ImageSource? GetLogoByName(string? providerName, string fallbackEmoji = "🤖")
+        public static ImageSource? GetLogoByName(string? providerName, string fallbackEmoji = "Icon.Robot")
         {
             var logoFileName = GetLogoFileName(providerName);
             return GetLogo(logoFileName, fallbackEmoji);

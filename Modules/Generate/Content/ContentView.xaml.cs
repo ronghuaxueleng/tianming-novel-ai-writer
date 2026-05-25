@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -7,6 +7,7 @@ using TM.Services.Modules.ProjectData.Models.Generate.Content;
 namespace TM.Modules.Generate.Content
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ContentView : UserControl
     {
         public ContentView(ContentViewModel viewModel)

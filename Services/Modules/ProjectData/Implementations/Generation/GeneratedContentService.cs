@@ -3,11 +3,9 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
+using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers.Storage;
-using TM.Services.Framework.AI.SemanticKernel.Conversation.Parsing;
 using TM.Modules.Generate.Elements.VolumeDesign.Services;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Generated;
@@ -24,6 +22,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static string[] _cachedFiles = Array.Empty<string>();
         private static DateTime _cachedFilesAt = DateTime.MinValue;
         private static string _cachedFilesDir = string.Empty;
+        private static readonly SemaphoreSlim _metaIndexSaveLock = new(1, 1);
+        private static int _metaIndexSaveVersion;
+
+        private const string MetaIndexFileName = "_meta_index_v2.json";
+        private const string LegacyMetaIndexFileNameV1 = "_meta_index.json";
 
         public GeneratedContentService()
         {
@@ -69,7 +72,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             if (!File.Exists(filePath))
                 return null;
 
-            return await File.ReadAllTextAsync(filePath);
+            return await File.ReadAllTextAsync(filePath).ConfigureAwait(false);
         }
 
         public async Task<List<ChapterInfo>> GetGeneratedChaptersAsync()
@@ -102,6 +105,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 }
             }
 
+            var needsResolve = new List<(string file, FileInfo info, string id, DateTime modified)>();
+
             foreach (var file in files)
             {
                 var fileInfo = new FileInfo(file);
@@ -114,30 +119,95 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     if (_metaCache.TryGetValue(file, out var entry) && entry.Modified == modified)
                         cached = entry.Info;
                 }
+                if (cached != null) { chapters.Add(cached); continue; }
 
-                if (cached != null)
+                needsResolve.Add((file, fileInfo, chapterId, modified));
+            }
+
+            if (needsResolve.Count > 0)
+            {
+                var index = await LoadMetaIndexFromDiskAsync().ConfigureAwait(false);
+                var needsRead = new List<(string file, FileInfo info, string id, DateTime modified)>();
+
+                foreach (var item in needsResolve)
                 {
-                    chapters.Add(cached);
-                    continue;
+                    if (index.TryGetValue(item.id, out var ie) && ie.ModifiedTicks == item.modified.Ticks)
+                    {
+                        var (vn, cn) = ParseChapterId(item.id);
+                        var info = new ChapterInfo
+                        {
+                            Id = item.id,
+                            Title = ie.Title,
+                            VolumeNumber = vn,
+                            ChapterNumber = cn,
+                            WordCount = ie.WordCount,
+                            CreatedTime = item.info.CreationTime,
+                            ModifiedTime = item.modified,
+                            FilePath = item.file
+                        };
+                        lock (_metaCacheLock) { _metaCache[item.file] = (info, item.modified); }
+                        chapters.Add(info);
+                    }
+                    else
+                    {
+                        needsRead.Add(item);
+                    }
                 }
 
-                var (volumeNumber, chapterNumber) = ParseChapterId(chapterId);
-                var (title, wordCount) = await ReadChapterMetaAsync(file).ConfigureAwait(false);
-
-                var info = new ChapterInfo
+                var indexDirty = needsRead.Count > 0;
+                if (needsRead.Count > 0)
                 {
-                    Id = chapterId,
-                    Title = title,
-                    VolumeNumber = volumeNumber,
-                    ChapterNumber = chapterNumber,
-                    WordCount = wordCount,
-                    CreatedTime = fileInfo.CreationTime,
-                    ModifiedTime = modified,
-                    FilePath = file
-                };
+                    var parallelism = Math.Clamp(Environment.ProcessorCount * 2, 4, 32);
+                    using var semaphore = new SemaphoreSlim(parallelism, parallelism);
 
-                lock (_metaCacheLock) { _metaCache[file] = (info, modified); }
-                chapters.Add(info);
+                    var readTasks = needsRead.Select(async rd =>
+                    {
+                        await semaphore.WaitAsync().ConfigureAwait(false);
+                        try
+                        {
+                            var (title, wordCount) = await ReadChapterMetaAsync(rd.file).ConfigureAwait(false);
+                            var (vn, cn) = ParseChapterId(rd.id);
+                            return (rd.id, rd.file, rd.modified,
+                                Info: new ChapterInfo
+                                {
+                                    Id = rd.id,
+                                    Title = title,
+                                    VolumeNumber = vn,
+                                    ChapterNumber = cn,
+                                    WordCount = wordCount,
+                                    CreatedTime = rd.info.CreationTime,
+                                    ModifiedTime = rd.modified,
+                                    FilePath = rd.file
+                                },
+                                Meta: new ChapterMetaEntry { Title = title, WordCount = wordCount, ModifiedTicks = rd.modified.Ticks });
+                        }
+                        finally
+                        {
+                            semaphore.Release();
+                        }
+                    });
+
+                    foreach (var r in await Task.WhenAll(readTasks).ConfigureAwait(false))
+                    {
+                        chapters.Add(r.Info);
+                        lock (_metaCacheLock) { _metaCache[r.file] = (r.Info, r.modified); }
+                        index[r.id] = r.Meta;
+                    }
+                }
+
+                var existingIds = new HashSet<string>(files.Select(f => Path.GetFileNameWithoutExtension(f)));
+                var staleKeys = index.Keys.Where(k => !existingIds.Contains(k)).ToList();
+                if (staleKeys.Count > 0)
+                {
+                    foreach (var key in staleKeys) index.Remove(key);
+                    indexDirty = true;
+                }
+
+                if (indexDirty)
+                {
+                    var saveVersion = Interlocked.Increment(ref _metaIndexSaveVersion);
+                    _ = SaveMetaIndexAsync(new Dictionary<string, ChapterMetaEntry>(index), saveVersion);
+                }
             }
 
             return chapters
@@ -158,16 +228,42 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             try
             {
+                string? tempPath = null;
+
                 try
                 {
-                    await ServiceLocator.Get<ContentGenerationCallback>().OnChapterDeletedAsync(chapterId);
+                    tempPath = filePath + $".deleting_{Guid.NewGuid():N}.tmp";
+                    File.Move(filePath, tempPath);
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[GeneratedContentService] 章节文件无法移动（可能被占用），已中止级联清理: {chapterId}, {ex.Message}");
+                    return false;
+                }
+
+                try
+                {
+                    await ServiceLocator.Get<ContentGenerationCallback>().OnChapterDeletedAsync(chapterId).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
                     TM.App.Log($"[GeneratedContentService] 章节清理失败（非致命，继续删除MD）: {chapterId}, {ex.Message}");
                 }
 
-                File.Delete(filePath);
+                try
+                {
+                    if (!string.IsNullOrWhiteSpace(tempPath) && File.Exists(tempPath))
+                    {
+                        File.Delete(tempPath);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[GeneratedContentService] 删除章节失败: {chapterId}, {ex.Message}");
+                    return false;
+                }
+
+                InvalidateStaticCaches();
                 TM.App.Log($"[GeneratedContentService] 删除章节: {chapterId}");
 
                 return true;
@@ -210,8 +306,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 string? firstNonEmptyLine = null;
                 string? title = null;
 
-                var chineseCount = 0;
-                var englishWords = 0;
+                var totalCount = 0;
                 var lineIndex = 0;
 
                 while (true)
@@ -226,13 +321,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                     if (title == null && lineIndex < 10)
                     {
-                        if (trimmed.StartsWith("# "))
+                        if (trimmed.StartsWith("# ", StringComparison.Ordinal))
                             title = NormalizeChapterTitle(trimmed.Substring(2).Trim());
-                        else if (trimmed.StartsWith("## "))
+                        else if (trimmed.StartsWith("## ", StringComparison.Ordinal))
                             title = NormalizeChapterTitle(trimmed.Substring(3).Trim());
                     }
 
-                    AccumulateWordCounts(line, ref chineseCount, ref englishWords);
+                    totalCount += WordCountHelper.CountRaw(line);
                     lineIndex++;
                 }
 
@@ -250,7 +345,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     }
                 }
 
-                return (title, chineseCount + englishWords);
+                return (title, totalCount);
             }
             catch (Exception ex)
             {
@@ -259,43 +354,84 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private static void AccumulateWordCounts(string line, ref int chineseCount, ref int englishWords)
+        #region 持久化元数据索引
+
+        private string MetaIndexPath => Path.Combine(ChaptersDirectory, MetaIndexFileName);
+
+        private async Task<Dictionary<string, ChapterMetaEntry>> LoadMetaIndexFromDiskAsync()
         {
-            var inWord = false;
-
-            foreach (var c in line)
+            try
             {
-                if (c >= 0x4E00 && c <= 0x9FFF)
+                var legacyV1 = Path.Combine(ChaptersDirectory, LegacyMetaIndexFileNameV1);
+                if (File.Exists(legacyV1))
                 {
-                    chineseCount++;
-                }
-
-                var isLetter = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
-                if (isLetter)
-                {
-                    if (!inWord)
-                    {
-                        englishWords++;
-                        inWord = true;
-                    }
-                }
-                else
-                {
-                    inWord = false;
+                    File.Delete(legacyV1);
+                    TM.App.Log("[GeneratedContentService] 已删除 v1 旧口径字数索引，首次加载将按统一口径重算。");
                 }
             }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[GeneratedContentService] 清理 v1 索引失败（忽略）: {ex.Message}");
+            }
+
+            try
+            {
+                var path = MetaIndexPath;
+                if (!File.Exists(path)) return new();
+
+                await using var stream = File.OpenRead(path);
+                return await JsonSerializer.DeserializeAsync<Dictionary<string, ChapterMetaEntry>>(stream).ConfigureAwait(false) ?? new();
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[GeneratedContentService] 加载元数据索引失败（将重建）: {ex.Message}");
+                return new();
+            }
         }
+
+        private async Task SaveMetaIndexAsync(Dictionary<string, ChapterMetaEntry> snapshot, int saveVersion)
+        {
+            await _metaIndexSaveLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                if (saveVersion != Volatile.Read(ref _metaIndexSaveVersion))
+                    return;
+                var path = MetaIndexPath;
+                var dir = Path.GetDirectoryName(path);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                var json = JsonSerializer.Serialize(snapshot);
+                var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
+                File.Move(tmp, path, overwrite: true);
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[GeneratedContentService] 保存元数据索引失败: {ex.Message}");
+            }
+            finally
+            {
+                _metaIndexSaveLock.Release();
+            }
+        }
+
+        private class ChapterMetaEntry
+        {
+            public string Title { get; set; } = "";
+            public int WordCount { get; set; }
+            public long ModifiedTicks { get; set; }
+        }
+
+        #endregion
 
         #region 分类（卷）管理
 
         public async Task<bool> VolumeExistsAsync(int volumeNumber)
         {
             var volumeService = ServiceLocator.Get<VolumeDesignService>();
-            await volumeService.InitializeAsync();
-            var scopeId = ServiceLocator.Get<IWorkScopeService>().CurrentSourceBookId;
-            return volumeService.GetAllVolumeDesigns().Any(v =>
-                v.VolumeNumber == volumeNumber
-                && (string.IsNullOrEmpty(scopeId) || string.Equals(v.SourceBookId, scopeId, StringComparison.Ordinal)));
+            await volumeService.InitializeAsync().ConfigureAwait(false);
+            return volumeService.GetAllVolumeDesigns().Any(v => v.VolumeNumber == volumeNumber);
         }
 
         public async Task<string> GenerateNextChapterIdFromSourceAsync(string sourceChapterId)
@@ -309,7 +445,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             var (volumeNumber, chapterNumber) = parsed.Value;
 
-            if (!await VolumeExistsAsync(volumeNumber))
+            if (!await VolumeExistsAsync(volumeNumber).ConfigureAwait(false))
                 throw new InvalidOperationException($"卷 {volumeNumber} 不存在");
 
             if (!ChapterExists(sourceChapterId))
@@ -319,12 +455,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var targetChapterId = sameVolumeNextId;
 
             var volumeService = ServiceLocator.Get<VolumeDesignService>();
-            await volumeService.InitializeAsync();
+            await volumeService.InitializeAsync().ConfigureAwait(false);
             var designs = volumeService.GetAllVolumeDesigns();
-
-            var scopeId = ServiceLocator.Get<IWorkScopeService>().CurrentSourceBookId;
-            if (!string.IsNullOrEmpty(scopeId))
-                designs = designs.Where(v => string.Equals(v.SourceBookId, scopeId, StringComparison.Ordinal)).ToList();
 
             var currentDesign = designs.FirstOrDefault(v => v.VolumeNumber == volumeNumber);
             if (currentDesign != null)
@@ -332,7 +464,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 var effectiveEndChapter = currentDesign.EndChapter;
 
                 if (effectiveEndChapter <= 0)
-                    effectiveEndChapter = await ServiceLocator.Get<GuideContextService>().GetVolumeMaxChapterAsync(volumeNumber);
+                    effectiveEndChapter = await ServiceLocator.Get<GuideContextService>().GetVolumeMaxChapterAsync(volumeNumber).ConfigureAwait(false);
 
                 if (effectiveEndChapter > 0 && chapterNumber >= effectiveEndChapter)
                 {

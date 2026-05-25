@@ -17,15 +17,15 @@ namespace TM.Framework.Common.Controls.Layout
 
         #region Icon 依赖属性
 
-        public string Icon
+        public ImageSource? Icon
         {
-            get { return (string)GetValue(IconProperty); }
+            get { return (ImageSource?)GetValue(IconProperty); }
             set { SetValue(IconProperty, value); }
         }
 
         public static readonly DependencyProperty IconProperty =
-            DependencyProperty.Register("Icon", typeof(string), typeof(IconHeaderGroupBox),
-                new PropertyMetadata(string.Empty, OnHeaderPropertyChanged));
+            DependencyProperty.Register("Icon", typeof(ImageSource), typeof(IconHeaderGroupBox),
+                new PropertyMetadata(null, OnHeaderPropertyChanged));
 
         #endregion
 
@@ -142,15 +142,17 @@ namespace TM.Framework.Common.Controls.Layout
                 Orientation = Orientation.Horizontal
             };
 
-            if (!string.IsNullOrEmpty(Icon))
+            if (Icon != null)
             {
-                var iconBlock = new Emoji.Wpf.TextBlock
+                var iconImage = new System.Windows.Controls.Image
                 {
-                    Text = Icon,
-                    FontSize = IconSize,
-                    Margin = new Thickness(0, 0, 5, 0)
+                    Source = Icon,
+                    Width = IconSize,
+                    Height = IconSize,
+                    Margin = new Thickness(0, 0, 5, 0),
+                    VerticalAlignment = VerticalAlignment.Center
                 };
-                stackPanel.Children.Add(iconBlock);
+                stackPanel.Children.Add(iconImage);
             }
 
             if (!string.IsNullOrEmpty(Title))

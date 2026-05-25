@@ -2,20 +2,18 @@ using System;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Implementations;
 using TM.Services.Modules.ProjectData.Interfaces;
-using TM.Services.Modules.ProjectData.Models.Contexts;
 using TM.Services.Modules.ProjectData.Models.TaskContexts;
 
 namespace TM.Framework.UI.Workspace.Services
 {
     public class ChapterGenerationBridge
     {
-        private readonly GuideContextService _guideContextService;
+        private readonly IGuideContextService _guideContextService;
         private readonly IGeneratedContentService _contentService;
 
-        public ChapterGenerationBridge(GuideContextService guideContextService, GeneratedContentService contentService)
+        public ChapterGenerationBridge(IGuideContextService guideContextService, GeneratedContentService contentService)
         {
             _guideContextService = guideContextService;
             _contentService = contentService;
@@ -25,7 +23,7 @@ namespace TM.Framework.UI.Workspace.Services
         {
             try
             {
-                var context = await _guideContextService.BuildContentContextAsync(chapterId);
+                var context = await _guideContextService.BuildContentContextAsync(chapterId, default);
                 if (context == null)
                 {
                     TM.App.Log($"[ChapterGenerationBridge] 获取上下文失败: {chapterId}，请确认已执行打包");
@@ -45,7 +43,7 @@ namespace TM.Framework.UI.Workspace.Services
         {
             try
             {
-                return await _guideContextService.BuildContentContextAsync(chapterId);
+                return await _guideContextService.BuildContentContextAsync(chapterId, default);
             }
             catch (Exception ex)
             {
@@ -176,7 +174,7 @@ namespace TM.Framework.UI.Workspace.Services
                 {
                     sb.AppendLine("**悬而未决的伏笔**");
                     foreach (var f in pendingFow)
-                        sb.AppendLine($"- {f.Name}（{(f.IsOverdue ? "⚠️逾期！" : "待回收")}，埋设于 {f.SetupChapterId}）");
+                        sb.AppendLine($"- {f.Name}（{(f.IsOverdue ? "[!]逾期！" : "待回收")}，埋设于 {f.SetupChapterId}）");
                 }
                 if (fs.CharacterLocations?.Count > 0)
                 {
@@ -194,10 +192,10 @@ namespace TM.Framework.UI.Workspace.Services
                 sb.AppendLine();
             }
 
-            if (ctx.VectorRecallFragments?.Count > 0)
+            if (ctx.LongDistanceRecallFragments?.Count > 0)
             {
-                sb.AppendLine("<section name=\"vector_recall\">");
-                foreach (var frag in ctx.VectorRecallFragments)
+                sb.AppendLine("<section name=\"long_distance_recall\">");
+                foreach (var frag in ctx.LongDistanceRecallFragments)
                 {
                     if (string.IsNullOrWhiteSpace(frag.Content)) continue;
                     sb.AppendLine($"[来自 {frag.ChapterId}]");
@@ -219,13 +217,11 @@ namespace TM.Framework.UI.Workspace.Services
                 sb.AppendLine();
             }
 
-            if (ctx.StateDivergenceWarnings?.Count > 0 || ctx.VectorRecallDegraded)
+            if (ctx.StateDivergenceWarnings?.Count > 0)
             {
                 sb.AppendLine("<section name=\"generation_warnings\">");
-                if (ctx.VectorRecallDegraded)
-                    sb.AppendLine("> 🔴 向量召回不可用，远距离一致性精度下降，请特别注意跨章细节的自洽");
                 foreach (var w in ctx.StateDivergenceWarnings!)
-                    sb.AppendLine($"> ⚠️ {w}");
+                    sb.AppendLine($"> [注意] {w}");
                 sb.AppendLine("</section>");
                 sb.AppendLine();
             }

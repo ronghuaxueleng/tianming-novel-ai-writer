@@ -99,7 +99,7 @@ namespace TM.Framework.Common.Helpers.UI
             }
 
             var descriptor = System.ComponentModel.DependencyPropertyDescriptor.FromProperty(
-                Button.CommandProperty, 
+                Button.CommandProperty,
                 typeof(Button));
 
             descriptor?.AddValueChanged(button, (s, args) =>

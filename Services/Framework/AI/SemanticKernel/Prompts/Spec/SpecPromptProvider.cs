@@ -1,4 +1,5 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Linq;
 using TM.Framework.UI.Workspace.Services.Spec;
 
 namespace TM.Services.Framework.AI.SemanticKernel.Prompts.Spec
@@ -21,19 +22,22 @@ namespace TM.Services.Framework.AI.SemanticKernel.Prompts.Spec
                 parts.Add($"语气基调：{spec.Tone}");
 
             if (spec.TargetWordCount.HasValue)
-                parts.Add($"目标字数：约{spec.TargetWordCount}字");
+                parts.Add($"目标字数：{spec.TargetWordCount.Value} 字（仅统计正文，不含标题与 <chapter_changes> 标签内的内容）");
 
             if (spec.DialogueRatio.HasValue)
                 parts.Add($"对话比例：约{spec.DialogueRatio * 100:F0}%");
 
-            if (spec.MustInclude?.Length > 0)
-                parts.Add($"必须包含：{string.Join("、", spec.MustInclude)}");
+            var mustInclude = spec.MustInclude?.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
+            if (mustInclude?.Length > 0)
+                parts.Add($"必须包含：{string.Join("、", mustInclude)}");
 
-            if (spec.MustAvoid?.Length > 0)
-                parts.Add($"避免内容：{string.Join("、", spec.MustAvoid)}");
+            var mustAvoid = spec.MustAvoid?.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
+            if (mustAvoid?.Length > 0)
+                parts.Add($"避免内容：{string.Join("、", mustAvoid)}");
 
-            if (spec.CharacterFocus?.Length > 0)
-                parts.Add($"聚焦角色：{string.Join("、", spec.CharacterFocus)}");
+            var characterFocus = spec.CharacterFocus?.Where(s => !string.IsNullOrWhiteSpace(s)).ToArray();
+            if (characterFocus?.Length > 0)
+                parts.Add($"聚焦角色：{string.Join("、", characterFocus)}");
 
             if (!string.IsNullOrEmpty(spec.EmotionalArc))
                 parts.Add($"情感曲线：{spec.EmotionalArc}");

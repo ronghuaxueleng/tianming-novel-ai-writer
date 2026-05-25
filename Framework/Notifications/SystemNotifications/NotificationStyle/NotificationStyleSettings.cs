@@ -1,8 +1,4 @@
-using System;
-using System.Reflection;
-using System.ComponentModel;
-using System.IO;
-using System.Text.Json;
+﻿using System.Reflection;
 
 namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
 {
@@ -42,6 +38,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationStyleData
     {
         [System.Text.Json.Serialization.JsonPropertyName("CornerRadius")] public double CornerRadius { get; set; } = 8;
@@ -59,9 +56,10 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationStyleSettings : BaseSettings<NotificationStyleSettings, NotificationStyleData>
     {
-        public NotificationStyleSettings(Common.Services.Factories.IStoragePathHelper storagePathHelper, 
+        public NotificationStyleSettings(Common.Services.Factories.IStoragePathHelper storagePathHelper,
             Common.Services.Factories.IObjectFactory objectFactory)
             : base(storagePathHelper, objectFactory) { }
 
@@ -113,8 +111,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationStyle
             TM.App.Log($"[NotificationStyleSettings] 应用预设: {presetName}");
         }
 
-        public void LoadSettings() => LoadData();
         public void SaveSettings() => SaveData();
+        public System.Threading.Tasks.Task SaveSettingsAsync() => SaveDataAsync();
     }
 }
-

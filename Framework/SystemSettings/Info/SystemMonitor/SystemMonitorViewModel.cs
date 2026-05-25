@@ -1,7 +1,6 @@
 using System;
 using System.Reflection;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -9,13 +8,14 @@ using System.Linq;
 using System.Management;
 using System.Net.NetworkInformation;
 using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.SystemSettings.Info.SystemMonitor
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SystemMonitorViewModel : INotifyPropertyChanged
     {
         private SystemMonitorSettings _settings = null!;
@@ -36,9 +36,9 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
 
             AsyncSettingsLoader.LoadOrDefer<SystemMonitorSettings>(_settingsFilePath, s => { _settings = s; }, "SystemMonitor");
 
-            DiskUsages = new ObservableCollection<DiskUsageItem>();
-            NetworkTraffics = new ObservableCollection<NetworkTrafficItem>();
-            Sensors = new ObservableCollection<SensorItem>();
+            DiskUsages = new RangeObservableCollection<DiskUsageItem>();
+            NetworkTraffics = new RangeObservableCollection<NetworkTrafficItem>();
+            Sensors = new RangeObservableCollection<SensorItem>();
 
             RefreshCommand = new RelayCommand(RefreshAllData);
 
@@ -55,10 +55,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
 
                 TM.App.Log($"[SystemMonitor] 延迟完成，开始数据采集");
 
-                await System.Windows.Application.Current.Dispatcher.InvokeAsync(() =>
-                {
-                    RefreshAllData();
-                }, System.Windows.Threading.DispatcherPriority.ApplicationIdle);
+                await RefreshAllDataAsync().ConfigureAwait(false);
 
                 TM.App.Log($"[SystemMonitor] 数据加载任务已完成");
             }
@@ -103,9 +100,9 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             set { _memoryUsagePercent = value; OnPropertyChanged(nameof(MemoryUsagePercent)); }
         }
 
-        public ObservableCollection<DiskUsageItem> DiskUsages { get; } = null!;
-        public ObservableCollection<NetworkTrafficItem> NetworkTraffics { get; } = null!;
-        public ObservableCollection<SensorItem> Sensors { get; } = null!;
+        public RangeObservableCollection<DiskUsageItem> DiskUsages { get; } = null!;
+        public RangeObservableCollection<NetworkTrafficItem> NetworkTraffics { get; } = null!;
+        public RangeObservableCollection<SensorItem> Sensors { get; } = null!;
 
         public ICommand RefreshCommand { get; } = null!;
 
@@ -114,13 +111,15 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpSmv = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpSmv, json);
+                var tmpSmv = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpSmv))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default);
+                }
                 File.Move(tmpSmv, _settingsFilePath, overwrite: true);
                 TM.App.Log($"[SystemMonitor] 保存设置成功");
             }
@@ -141,22 +140,22 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             {
                 TM.App.Log($"[SystemMonitor] 开始刷新监控数据");
 
-                await CollectCPUDynamicInfoAsync();
-                await CollectMemoryDynamicInfoAsync();
-                await CollectDiskUsageInfoAsync();
-                await CollectNetworkTrafficInfoAsync();
-                await CollectSensorInfoAsync();
+                await Task.WhenAll(
+                    CollectCPUDynamicInfoAsync(),
+                    CollectMemoryDynamicInfoAsync(),
+                    CollectDiskUsageInfoAsync(),
+                    CollectNetworkTrafficInfoAsync(),
+                    CollectSensorInfoAsync());
 
                 _settings.LastRefreshTime = DateTime.Now;
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[SystemMonitorViewModel] {ex.Message}"));
 
                 TM.App.Log($"[SystemMonitor] 监控数据刷新完成");
-                GlobalToast.Success("刷新成功", "系统监控数据已更新");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemMonitor] 刷新数据失败: {ex.Message}");
-                GlobalToast.Error("刷新失败", $"刷新监控数据时出错: {ex.Message}");
+                GlobalToast.Error("刷新失败", $"刷新失败：{ex.Message}");
             }
         }
 
@@ -167,7 +166,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             string temp = "不可用";
             try
             {
-                (freq, usage, temp) = await System.Threading.Tasks.Task.Run(async () =>
+                var cpuWmiTask = System.Threading.Tasks.Task.Run(async () =>
                 {
                     string f = "无法获取";
                     double u = 0;
@@ -198,6 +197,10 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                     t = GetCPUTemperatureOnBackground();
                     return (f, u, t);
                 });
+                if (await System.Threading.Tasks.Task.WhenAny(cpuWmiTask, System.Threading.Tasks.Task.Delay(2000)) == cpuWmiTask)
+                    (freq, usage, temp) = await cpuWmiTask;
+                else
+                    TM.App.Log("[SystemMonitor] CPU数据采集超时(2s)");
                 TM.App.Log($"[SystemMonitor] CPU动态信息采集完成");
             }
             catch (Exception ex)
@@ -213,7 +216,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
         {
             try
             {
-                var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM MSAcpi_ThermalZoneTemperature");
+                using var searcher = new ManagementObjectSearcher(@"root\WMI", "SELECT * FROM MSAcpi_ThermalZoneTemperature");
                 foreach (ManagementObject obj in searcher.Get())
                 {
                     if (obj["CurrentTemperature"] != null &&
@@ -247,8 +250,8 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                     foreach (ManagementObject os in searcher.Get())
                     {
                         var totalKB = Convert.ToInt64(os["TotalVisibleMemorySize"]);
-                        var freeKB  = Convert.ToInt64(os["FreePhysicalMemory"]);
-                        var usedKB  = totalKB - freeKB;
+                        var freeKB = Convert.ToInt64(os["FreePhysicalMemory"]);
+                        var usedKB = totalKB - freeKB;
                         return (FormatBytesStatic(freeKB * 1024), Math.Round((double)usedKB / totalKB * 100, 2));
                     }
                     return ("未知", 0.0);
@@ -259,7 +262,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             {
                 TM.App.Log($"[SystemMonitor] 采集内存动态信息失败: {ex.Message}");
             }
-            AvailableMemory    = avail;
+            AvailableMemory = avail;
             MemoryUsagePercent = usagePct;
         }
 
@@ -273,15 +276,15 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                     var list = new List<DiskUsageItem>();
                     foreach (var drive in DriveInfo.GetDrives().Where(d => d.IsReady))
                     {
-                        var usedBytes    = drive.TotalSize - drive.AvailableFreeSpace;
+                        var usedBytes = drive.TotalSize - drive.AvailableFreeSpace;
                         var usagePercent = Math.Round((double)usedBytes / drive.TotalSize * 100, 2);
                         list.Add(new DiskUsageItem
                         {
-                            DriveName    = drive.Name,
-                            DriveType    = drive.DriveType.ToString(),
-                            TotalSize    = FormatBytesStatic(drive.TotalSize),
-                            UsedSize     = FormatBytesStatic(usedBytes),
-                            FreeSize     = FormatBytesStatic(drive.AvailableFreeSpace),
+                            DriveName = drive.Name,
+                            DriveType = drive.DriveType.ToString(),
+                            TotalSize = FormatBytesStatic(drive.TotalSize),
+                            UsedSize = FormatBytesStatic(usedBytes),
+                            FreeSize = FormatBytesStatic(drive.AvailableFreeSpace),
                             UsagePercent = usagePercent
                         });
                     }
@@ -293,8 +296,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             {
                 TM.App.Log($"[SystemMonitor] 采集磁盘使用率失败: {ex.Message}");
             }
-            DiskUsages.Clear();
-            foreach (var item in items) DiskUsages.Add(item);
+            DiskUsages.ReplaceAll(items);
         }
 
         private async System.Threading.Tasks.Task CollectNetworkTrafficInfoAsync()
@@ -311,12 +313,12 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                         var stats = adapter.GetIPStatistics();
                         list.Add(new NetworkTrafficItem
                         {
-                            Name          = adapter.Name,
-                            Description   = adapter.Description,
-                            BytesSent     = FormatBytesStatic(stats.BytesSent),
+                            Name = adapter.Name,
+                            Description = adapter.Description,
+                            BytesSent = FormatBytesStatic(stats.BytesSent),
                             BytesReceived = FormatBytesStatic(stats.BytesReceived),
-                            CurrentSpeed  = adapter.Speed > 0 ? FormatBitrateStatic(adapter.Speed) : "未知",
-                            Type          = adapter.NetworkInterfaceType.ToString()
+                            CurrentSpeed = adapter.Speed > 0 ? FormatBitrateStatic(adapter.Speed) : "未知",
+                            Type = adapter.NetworkInterfaceType.ToString()
                         });
                     }
                     return list;
@@ -327,8 +329,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             {
                 TM.App.Log($"[SystemMonitor] 采集网络流量失败: {ex.Message}");
             }
-            NetworkTraffics.Clear();
-            foreach (var item in items) NetworkTraffics.Add(item);
+            NetworkTraffics.ReplaceAll(items);
         }
 
         private async System.Threading.Tasks.Task CollectSensorInfoAsync()
@@ -336,7 +337,7 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             List<SensorItem> items = new();
             try
             {
-                items = await System.Threading.Tasks.Task.Run(() =>
+                var sensorWmiTask = System.Threading.Tasks.Task.Run(() =>
                 {
                     var list = new List<SensorItem>();
 
@@ -354,11 +355,11 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                                 {
                                     list.Add(new SensorItem
                                     {
-                                        Name   = $"温度区域 {zoneIndex}",
-                                        Type   = "温度",
-                                        Value  = $"{celsius:F1} °C",
-                                        Status = celsius > 80 ? "⚠️ 偏高" : (celsius > 60 ? "🟡 正常" : "✅ 良好"),
-                                        Icon   = "🌡️"
+                                        Name = $"温度区域 {zoneIndex}",
+                                        Type = "温度",
+                                        Value = $"{celsius:F1} °C",
+                                        Status = celsius > 80 ? "偏高" : (celsius > 60 ? "正常" : "良好"),
+                                        Icon = "Icon.Chart"
                                     });
                                     zoneIndex++;
                                 }
@@ -378,11 +379,11 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                                 var charge = Convert.ToInt32(estimatedChargeRemaining);
                                 list.Add(new SensorItem
                                 {
-                                    Name   = "电池电量",
-                                    Type   = "电源",
-                                    Value  = $"{charge}%",
-                                    Status = charge > 20 ? "✅ 正常" : "⚠️ 低电量",
-                                    Icon   = charge > 80 ? "🔋" : (charge > 20 ? "🔋" : "🪫")
+                                    Name = "电池电量",
+                                    Type = "电源",
+                                    Value = $"{charge}%",
+                                    Status = charge > 20 ? "正常" : "低电量",
+                                    Icon = charge > 80 ? "Icon.Gauge" : (charge > 20 ? "Icon.Gauge" : "Icon.Gauge")
                                 });
                             }
                             break;
@@ -399,11 +400,11 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                             var status = fan["Status"]?.ToString() ?? "未知";
                             list.Add(new SensorItem
                             {
-                                Name   = $"系统风扇 {fanIndex}",
-                                Type   = "风扇",
-                                Value  = status == "OK" ? "运转正常" : status,
-                                Status = status == "OK" ? "✅ 正常" : "⚠️ 异常",
-                                Icon   = "🌀"
+                                Name = $"系统风扇 {fanIndex}",
+                                Type = "风扇",
+                                Value = status == "OK" ? "运转正常" : status,
+                                Status = status == "OK" ? "正常" : "[!] 异常",
+                                Icon = "Icon.Refresh"
                             });
                             fanIndex++;
                         }
@@ -411,18 +412,21 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
                     catch (Exception ex) { TM.App.Log($"[SystemMonitor] 获取风扇信息失败: {ex.Message}"); }
 
                     if (list.Count == 0)
-                        list.Add(new SensorItem { Name = "传感器监控", Type = "系统", Value = "不可用", Status = "ℹ️ 需要管理员权限或硬件不支持", Icon = "📊" });
+                        list.Add(new SensorItem { Name = "传感器监控", Type = "系统", Value = "不可用", Status = "需要管理员权限或硬件不支持", Icon = "Icon.Chart" });
 
                     return list;
                 });
+                if (await System.Threading.Tasks.Task.WhenAny(sensorWmiTask, System.Threading.Tasks.Task.Delay(2000)) == sensorWmiTask)
+                    items = await sensorWmiTask;
+                else
+                    TM.App.Log("[SystemMonitor] 传感器数据采集超时(2s)");
                 TM.App.Log($"[SystemMonitor] 传感器信息采集完成，检测到 {items.Count} 个传感器");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[SystemMonitor] 采集传感器信息失败: {ex.Message}");
             }
-            Sensors.Clear();
-            foreach (var item in items) Sensors.Add(item);
+            Sensors.ReplaceAll(items);
         }
 
         private static string FormatBytesStatic(long bytes)
@@ -438,8 +442,6 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             return $"{len:0.##} {sizes[order]}";
         }
 
-        private string FormatBytes(long bytes) => FormatBytesStatic(bytes);
-
         private static string FormatBitrateStatic(long bitsPerSecond)
         {
             if (bitsPerSecond >= 1_000_000_000)
@@ -451,7 +453,6 @@ namespace TM.Framework.SystemSettings.Info.SystemMonitor
             return $"{bitsPerSecond} bps";
         }
 
-        private string FormatBitrate(long bitsPerSecond) => FormatBitrateStatic(bitsPerSecond);
     }
 
     public class DiskUsageItem

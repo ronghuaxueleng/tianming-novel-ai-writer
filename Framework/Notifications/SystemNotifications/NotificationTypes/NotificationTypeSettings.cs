@@ -1,10 +1,10 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.IO;
-using System.Linq;
 using System.Text.Json;
+using System.Threading;
 
 namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
 {
@@ -17,6 +17,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationTypeData : INotifyPropertyChanged
     {
         private string _id = string.Empty;
@@ -109,10 +110,38 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
     public class NotificationTypeSettings : BaseSettings<NotificationTypeSettings, NotificationTypeSettingsData>
     {
         private List<NotificationTypeData>? _cachedTypes;
+        private int _cacheVersion;
 
-        public NotificationTypeSettings(Common.Services.Factories.IStoragePathHelper storagePathHelper, 
+        public NotificationTypeSettings(Common.Services.Factories.IStoragePathHelper storagePathHelper,
             Common.Services.Factories.IObjectFactory objectFactory)
-            : base(storagePathHelper, objectFactory) { }
+            : base(storagePathHelper, objectFactory)
+        {
+            _cachedTypes = GetDefaultTypes();
+
+            _ = System.Threading.Tasks.Task.Run(async () =>
+            {
+                var loadVersion = Volatile.Read(ref _cacheVersion);
+                try
+                {
+                    if (File.Exists(FilePath))
+                    {
+                        var json = await File.ReadAllTextAsync(FilePath).ConfigureAwait(false);
+                        var data = JsonSerializer.Deserialize<NotificationTypeSettingsData>(json);
+                        if (data?.Types?.Count > 0)
+                        {
+                            if (loadVersion != Volatile.Read(ref _cacheVersion))
+                                return;
+                            _cachedTypes = data.Types;
+                            App.Log($"[NotificationTypeSettings] 后台预热完成，已加载 {data.Types.Count} 个通知类型");
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    App.Log($"[NotificationTypeSettings] 后台预热失败: {ex.Message}");
+                }
+            });
+        }
 
         protected override string GetFilePath() =>
             _storagePathHelper.GetFilePath("Framework", "Notifications/SystemNotifications/NotificationTypes", "notification_types.json");
@@ -124,18 +153,38 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
             if (_cachedTypes != null)
                 return _cachedTypes;
 
+            if (System.Windows.Application.Current?.Dispatcher?.CheckAccess() == true)
+            {
+                App.Log("[NotificationTypeSettings] WARNING: UI线程冷路径, 触发后台加载并返回默认值");
+                _ = System.Threading.Tasks.Task.Run(async () => await LoadSettingsAsync().ConfigureAwait(false));
+                return GetDefaultTypes();
+            }
+
+            App.Log("[NotificationTypeSettings] WARNING: 非UI线程冷路径, 触发后台加载并返回默认值");
+            _ = System.Threading.Tasks.Task.Run(async () => await LoadSettingsAsync().ConfigureAwait(false));
+            return GetDefaultTypes();
+        }
+
+        public async System.Threading.Tasks.Task<List<NotificationTypeData>> LoadSettingsAsync()
+        {
+            if (_cachedTypes != null)
+                return _cachedTypes;
+
+            var loadVersion = Volatile.Read(ref _cacheVersion);
+
             try
             {
                 if (File.Exists(FilePath))
                 {
-                    var json = File.ReadAllText(FilePath);
-                    var data = JsonSerializer.Deserialize<NotificationTypeSettingsData>(json);
+                    var json = await File.ReadAllTextAsync(FilePath).ConfigureAwait(false);
+                    var data = System.Text.Json.JsonSerializer.Deserialize<NotificationTypeSettingsData>(json);
 
                     if (data?.Types != null && data.Types.Count > 0)
                     {
-                        App.Log($"[NotificationTypeSettings] 已加载 {data.Types.Count} 个通知类型");
-                        _cachedTypes = data.Types;
-                        return _cachedTypes;
+                        App.Log($"[NotificationTypeSettings] 已异步加载 {data.Types.Count} 个通知类型");
+                        if (loadVersion == Volatile.Read(ref _cacheVersion))
+                            _cachedTypes = data.Types;
+                        return _cachedTypes ?? data.Types;
                     }
                 }
 
@@ -145,39 +194,8 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
             }
             catch (Exception ex)
             {
-                App.Log($"[NotificationTypeSettings] 加载设置失败: {ex.Message}");
+                App.Log($"[NotificationTypeSettings] 异步加载设置失败: {ex.Message}");
                 return GetDefaultTypes();
-            }
-        }
-
-        public void SaveSettings(List<NotificationTypeData> types)
-        {
-            try
-            {
-                var data = new NotificationTypeSettingsData
-                {
-                    Types = types,
-                    LastModified = DateTime.Now
-                };
-
-                var options = JsonHelper.CnDefault;
-
-                var json = JsonSerializer.Serialize(data, options);
-
-                var directory = Path.GetDirectoryName(FilePath);
-                if (!string.IsNullOrEmpty(directory))
-                    _storagePathHelper.EnsureDirectoryExists(directory);
-
-                var tmpNts = FilePath + ".tmp";
-                File.WriteAllText(tmpNts, json);
-                File.Move(tmpNts, FilePath, overwrite: true);
-                _cachedTypes = types;
-                App.Log($"[NotificationTypeSettings] 已保存 {types.Count} 个通知类型");
-            }
-            catch (Exception ex)
-            {
-                App.Log($"[NotificationTypeSettings] 保存设置失败: {ex.Message}");
-                throw;
             }
         }
 
@@ -185,6 +203,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
         {
             try
             {
+                Interlocked.Increment(ref _cacheVersion);
                 var data = new NotificationTypeSettingsData
                 {
                     Types = types,
@@ -193,14 +212,15 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
 
                 var options = JsonHelper.CnDefault;
 
-                var json = JsonSerializer.Serialize(data, options);
-
                 var directory = Path.GetDirectoryName(FilePath);
                 if (!string.IsNullOrEmpty(directory))
                     _storagePathHelper.EnsureDirectoryExists(directory);
 
-                var tmpNtsA = FilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpNtsA, json);
+                var tmpNtsA = FilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpNtsA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, data, options);
+                }
                 File.Move(tmpNtsA, FilePath, overwrite: true);
                 _cachedTypes = types;
                 App.Log($"[NotificationTypeSettings] 已异步保存 {types.Count} 个通知类型");
@@ -220,7 +240,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "system",
                     Name = "系统通知",
-                    Icon = "⚙️",
+                    Icon = "Icon.Settings",
                     Color = "#2196F3",
                     Priority = NotificationPriority.Medium,
                     IsEnabled = true,
@@ -231,7 +251,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "application",
                     Name = "应用通知",
-                    Icon = "📱",
+                    Icon = "Icon.Monitor",
                     Color = "#16A34A",
                     Priority = NotificationPriority.Medium,
                     IsEnabled = true,
@@ -242,7 +262,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "warning",
                     Name = "警告",
-                    Icon = "⚠️",
+                    Icon = "Icon.Warning",
                     Color = "#FF9800",
                     Priority = NotificationPriority.High,
                     IsEnabled = true,
@@ -253,7 +273,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "error",
                     Name = "错误",
-                    Icon = "❌",
+                    Icon = "Icon.Forbidden",
                     Color = "#F44336",
                     Priority = NotificationPriority.High,
                     IsEnabled = true,
@@ -264,7 +284,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "success",
                     Name = "成功",
-                    Icon = "✅",
+                    Icon = "Icon.CheckCircle",
                     Color = "#16A34A",
                     Priority = NotificationPriority.Medium,
                     IsEnabled = true,
@@ -275,7 +295,7 @@ namespace TM.Framework.Notifications.SystemNotifications.NotificationTypes
                 {
                     Id = "info",
                     Name = "信息",
-                    Icon = "ℹ️",
+                    Icon = "Icon.Info",
                     Color = "#9C27B0",
                     Priority = NotificationPriority.Low,
                     IsEnabled = true,

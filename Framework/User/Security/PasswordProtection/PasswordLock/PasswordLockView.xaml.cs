@@ -1,11 +1,11 @@
 ﻿using System;
 using System.Reflection;
 using System.Windows.Controls;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Security.PasswordProtection.PasswordLock
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class PasswordLockView : UserControl
     {
         public PasswordLockView()

@@ -1,4 +1,4 @@
-using TM.Services.Modules.ProjectData.Models.Contexts.Design;
+﻿using TM.Services.Modules.ProjectData.Models.Contexts.Design;
 using System.Text.Json.Serialization;
 
 namespace TM.Services.Modules.ProjectData.Models.Contexts.Aggregates

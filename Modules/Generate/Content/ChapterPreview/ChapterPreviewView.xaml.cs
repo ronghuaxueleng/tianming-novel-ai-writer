@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Windows;
 using System.Windows.Controls;
@@ -7,6 +7,7 @@ using TM.Services.Modules.ProjectData.Models.Generate.Content;
 namespace TM.Modules.Generate.Content.ChapterPreview
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class ChapterPreviewView : UserControl
     {
         public ChapterPreviewView(ChapterPreviewViewModel viewModel)
@@ -22,6 +23,12 @@ namespace TM.Modules.Generate.Content.ChapterPreview
                     {
                         vm.RefreshCommand.Execute(null);
                     }
+                };
+
+                Unloaded += (_, _) =>
+                {
+                    if (DataContext is System.IDisposable disposable)
+                        disposable.Dispose();
                 };
             }
             catch (Exception ex)

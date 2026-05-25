@@ -17,12 +17,13 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
         private readonly object _lock = new object();
 
         public AIColorSchemeData GetData() { lock (_lock) { return Data; } }
-        public new AIColorSchemeData LoadData() { lock (_lock) { base.LoadData(); return Data; } }
-        public void SaveData(AIColorSchemeData data) { lock (_lock) { Data = data; base.SaveData(); } }
+        public AIColorSchemeData LoadData() { lock (_lock) { return Data; } }
+        public void SaveData(AIColorSchemeData data) { lock (_lock) { Data = data; } _ = SaveDataAsync(); }
 
         public void UpdateUserConfig(AIColorSchemeUserConfig config)
         {
-            lock (_lock) { Data.UserConfig = config; SaveData(); }
+            lock (_lock) { Data.UserConfig = config; }
+            _ = SaveDataAsync();
         }
 
         public void AddGenerationHistory(AIColorSchemeHistoryRecord record)
@@ -36,8 +37,8 @@ namespace TM.Framework.Appearance.IntelligentGeneration.AIColorScheme
                     var removeCount = Data.GenerationHistory.Count - 100;
                     Data.GenerationHistory.RemoveRange(0, removeCount);
                 }
-                SaveData();
             }
+            _ = SaveDataAsync();
         }
     }
 

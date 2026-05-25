@@ -1,16 +1,17 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.IO;
 using System.Linq;
+using System.Threading.Tasks;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Notifications.Sound.SoundScheme
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundSchemeViewModel : INotifyPropertyChanged
     {
         private SoundSchemeInfo? _selectedScheme;
@@ -34,7 +35,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
 
             SelectSchemeCommand = new RelayCommand<SoundSchemeInfo>(SelectScheme);
             PlaySoundCommand = new RelayCommand<string>(PlaySound);
-            UploadSoundCommand = new RelayCommand(UploadSound);
+            UploadSoundCommand = new AsyncRelayCommand(UploadSound);
             DeleteCustomSoundCommand = new RelayCommand<SoundEffectInfo>(DeleteCustomSound);
             SaveSettingsCommand = new RelayCommand(SaveSettings);
             ResetToDefaultCommand = new RelayCommand(ResetToDefault);
@@ -43,7 +44,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
             InitializeBuiltInSounds();
             InitializeEventConfigs();
 
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
                 var customSounds = new System.Collections.Generic.List<SoundEffectInfo>();
                 try
@@ -70,7 +71,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
                     TM.App.Log($"[声音方案] 加载自定义音效失败: {ex.Message}");
                 }
 
-                _settings.LoadSettings();
+                await _settings.LoadDataAsync().ConfigureAwait(false);
 
                 return () =>
                 {
@@ -350,11 +351,11 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
             catch (Exception ex)
             {
                 TM.App.Log($"[声音方案] 播放音效失败: {ex.Message}");
-                StandardDialog.ShowError($"播放音效失败: {ex.Message}", "播放失败");
+                StandardDialog.ShowError($"播放音效失败：{ex.Message}", "播放失败");
             }
         }
 
-        private void UploadSound()
+        private async Task UploadSound()
         {
             try
             {
@@ -381,15 +382,20 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
                         if (!overwrite) return;
                     }
 
-                    File.Copy(sourceFile, targetFile, true);
+                    long fileSize = await Task.Run(async () =>
+                    {
+                        await using var src = File.OpenRead(sourceFile);
+                        await using var dst = File.Create(targetFile);
+                        await src.CopyToAsync(dst).ConfigureAwait(false);
+                        return new FileInfo(targetFile).Length;
+                    });
 
-                    var fileInfo = new FileInfo(targetFile);
                     var soundInfo = new SoundEffectInfo
                     {
                         FileName = fileName,
                         DisplayName = Path.GetFileNameWithoutExtension(fileName),
                         FilePath = targetFile,
-                        FileSize = fileInfo.Length,
+                        FileSize = fileSize,
                         IsBuiltIn = false
                     };
 
@@ -403,7 +409,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
             catch (Exception ex)
             {
                 TM.App.Log($"[声音方案] 上传音效失败: {ex.Message}");
-                StandardDialog.ShowError($"上传失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"上传失败：{ex.Message}", "上传失败");
             }
         }
 
@@ -431,7 +437,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
             catch (Exception ex)
             {
                 TM.App.Log($"[声音方案] 删除音效失败: {ex.Message}");
-                StandardDialog.ShowError($"删除失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"删除失败：{ex.Message}", "删除失败");
             }
         }
 
@@ -454,7 +460,7 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
             catch (Exception ex)
             {
                 TM.App.Log($"[声音方案] 保存设置失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败");
             }
         }
 
@@ -491,7 +497,15 @@ namespace TM.Framework.Notifications.Sound.SoundScheme
         {
             _settings.ResetToDefaults();
 
-            LoadSettings();
+            var scheme = Schemes.FirstOrDefault(s => s.SchemeId == _settings.ActiveSchemeId);
+            if (scheme != null)
+                SelectScheme(scheme, showToast: false);
+            foreach (var mapping in _settings.EventSoundMappings)
+            {
+                var config = EventConfigs.FirstOrDefault(c => c.EventName == mapping.Key);
+                if (config != null)
+                    config.SelectedSound = mapping.Value;
+            }
 
             TM.App.Log("[声音方案] 设置已重置");
             GlobalToast.Success("重置成功", "已恢复默认声音方案");

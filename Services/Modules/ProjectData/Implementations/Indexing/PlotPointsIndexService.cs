@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -6,10 +6,7 @@ using System.Linq;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.Storage;
-using TM.Services.Modules.ProjectData.Models.Guides;
 using TM.Services.Modules.ProjectData.Models.Tracking;
 
 namespace TM.Services.Modules.ProjectData.Implementations
@@ -18,6 +15,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
     {
         private readonly ConcurrentDictionary<int, List<PlotPointEntry>> _volumeCache = new();
         private readonly SemaphoreSlim _writeLock = new(1, 1);
+        private int _cacheEpoch;
 
         public PlotPointsIndexService()
         {
@@ -49,16 +47,18 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 Context = change.Context,
                 InvolvedCharacters = change.InvolvedCharacters,
                 Importance = change.Importance,
-                Storyline = change.Storyline
+                Storyline = change.Storyline,
+                CausedBy = change.CausedBy ?? string.Empty
             };
 
             var vol = GetVolumeNumber(chapterId);
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var entries = await LoadVolumeAsync(vol);
+                Interlocked.Increment(ref _cacheEpoch);
+                var entries = await LoadVolumeAsync(vol).ConfigureAwait(false);
                 var updated = new List<PlotPointEntry>(entries) { entry };
-                await SaveVolumeAsync(vol, updated);
+                await SaveVolumeAsync(vol, updated).ConfigureAwait(false);
             }
             finally
             {
@@ -71,17 +71,18 @@ namespace TM.Services.Modules.ProjectData.Implementations
         public async Task RemoveChapterDataAsync(string chapterId)
         {
             var vol = GetVolumeNumber(chapterId);
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                var entries = await LoadVolumeAsync(vol);
+                Interlocked.Increment(ref _cacheEpoch);
+                var entries = await LoadVolumeAsync(vol).ConfigureAwait(false);
                 var removed = entries.Count(p => string.Equals(p.Chapter, chapterId, StringComparison.Ordinal));
                 if (removed > 0)
                 {
                     var updated = entries
                         .Where(p => !string.Equals(p.Chapter, chapterId, StringComparison.Ordinal))
                         .ToList();
-                    await SaveVolumeAsync(vol, updated);
+                    await SaveVolumeAsync(vol, updated).ConfigureAwait(false);
                     TM.App.Log($"[PlotPoints] 已移除章节 {chapterId} 的情节记录: {removed}条");
                 }
             }
@@ -95,45 +96,25 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         #region 公开方法 - 查询
 
-        public async Task<List<PlotPointEntry>> SearchByKeywordAsync(string keyword, int lookbackVolumes = 10)
-        {
-            var result = new List<PlotPointEntry>();
-            foreach (var vol in GetRecentVolumeNumbers(lookbackVolumes))
-            {
-                var entries = await LoadVolumeAsync(vol);
-                result.AddRange(entries.Where(p =>
-                    p.Keywords != null &&
-                    p.Keywords.Any(k => k.Contains(keyword, StringComparison.OrdinalIgnoreCase))));
-            }
-            return result.OrderBy(p => p.Chapter).ToList();
-        }
-
-        public async Task<List<PlotPointEntry>> GetCharacterPlotPointsAsync(string characterId, int lookbackVolumes = 10)
-        {
-            var result = new List<PlotPointEntry>();
-            foreach (var vol in GetRecentVolumeNumbers(lookbackVolumes))
-            {
-                var entries = await LoadVolumeAsync(vol);
-                result.AddRange(entries.Where(p =>
-                    p.InvolvedCharacters != null && p.InvolvedCharacters.Contains(characterId)));
-            }
-            return result.OrderBy(p => p.Chapter).ToList();
-        }
-
         public async Task<List<PlotPointEntry>> SearchRecentAsync(
             string currentChapterId,
             HashSet<string>? characterIds,
             HashSet<string>? otherEntityIds,
-            int lookbackVolumes = 5)
+            int lookbackVolumes = 0)
         {
             var parsed = ChapterParserHelper.ParseChapterId(currentChapterId);
             var currentVol = parsed?.volumeNumber ?? 1;
-            var minVol = Math.Max(1, currentVol - lookbackVolumes);
-            var result = new List<PlotPointEntry>();
+            var minVol = lookbackVolumes <= 0 ? 1 : Math.Max(1, currentVol - lookbackVolumes);
+            var volCount = currentVol - minVol + 1;
+            if (volCount <= 0)
+                return new List<PlotPointEntry>();
 
-            for (var v = currentVol; v >= minVol; v--)
+            var volumes = Enumerable.Range(minVol, volCount).ToList();
+            var allEntries = await Task.WhenAll(volumes.Select(v => LoadVolumeAsync(v))).ConfigureAwait(false);
+
+            var result = new List<PlotPointEntry>();
+            foreach (var entries in allEntries)
             {
-                var entries = await LoadVolumeAsync(v);
                 foreach (var e in entries)
                 {
                     if (string.IsNullOrWhiteSpace(e.Context)) continue;
@@ -158,7 +139,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 .Select(f =>
                 {
                     var name = Path.GetFileNameWithoutExtension(f);
-                    return name.StartsWith("vol") && int.TryParse(name.Substring(3), out var n) ? n : -1;
+                    return name.StartsWith("vol", StringComparison.Ordinal) && int.TryParse(name.Substring(3), out var n) ? n : -1;
                 })
                 .Where(n => n > 0)
                 .OrderBy(n => n)
@@ -166,14 +147,15 @@ namespace TM.Services.Modules.ProjectData.Implementations
         }
 
         public async Task<List<PlotPointEntry>> GetVolumeEntriesAsync(int volumeNumber)
-            => new List<PlotPointEntry>(await LoadVolumeAsync(volumeNumber));
+            => new List<PlotPointEntry>(await LoadVolumeAsync(volumeNumber).ConfigureAwait(false));
 
         public async Task SetVolumeEntriesAsync(int volumeNumber, List<PlotPointEntry> entries)
         {
-            await _writeLock.WaitAsync();
+            await _writeLock.WaitAsync().ConfigureAwait(false);
             try
             {
-                await SaveVolumeAsync(volumeNumber, entries);
+                Interlocked.Increment(ref _cacheEpoch);
+                await SaveVolumeAsync(volumeNumber, entries).ConfigureAwait(false);
             }
             finally
             {
@@ -181,7 +163,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        public void InvalidateCache() => _volumeCache.Clear();
+        public void InvalidateCache()
+        {
+            Interlocked.Increment(ref _cacheEpoch);
+            _volumeCache.Clear();
+        }
 
         #endregion
 
@@ -196,39 +182,24 @@ namespace TM.Services.Modules.ProjectData.Implementations
         private static int GetVolumeNumber(string chapterId)
             => ChapterParserHelper.ParseChapterId(chapterId)?.volumeNumber ?? 1;
 
-        private List<int> GetRecentVolumeNumbers(int maxVolumes)
-        {
-            var dir = GetPlotPointsDir();
-            if (!Directory.Exists(dir)) return new List<int>();
-            return Directory.GetFiles(dir, "vol*.json")
-                .Select(f =>
-                {
-                    var name = Path.GetFileNameWithoutExtension(f);
-                    return name.StartsWith("vol") && int.TryParse(name.Substring(3), out var n) ? n : -1;
-                })
-                .Where(n => n > 0)
-                .OrderByDescending(n => n)
-                .Take(maxVolumes)
-                .ToList();
-        }
-
         private async Task<List<PlotPointEntry>> LoadVolumeAsync(int volumeNumber)
         {
             if (_volumeCache.TryGetValue(volumeNumber, out var cached))
                 return cached;
-            return await LoadVolumeInternalAsync(volumeNumber);
+            return await LoadVolumeInternalAsync(volumeNumber).ConfigureAwait(false);
         }
 
         private async Task<List<PlotPointEntry>> LoadVolumeInternalAsync(int volumeNumber)
         {
             var path = GetVolumeFilePath(volumeNumber);
+            var epoch = Volatile.Read(ref _cacheEpoch);
             List<PlotPointEntry> entries;
             if (File.Exists(path))
             {
                 try
                 {
-                    var json = await File.ReadAllTextAsync(path);
-                    entries = JsonSerializer.Deserialize<List<PlotPointEntry>>(json, JsonOptions)
+                    await using var stream = File.OpenRead(path);
+                    entries = await JsonSerializer.DeserializeAsync<List<PlotPointEntry>>(stream, JsonOptions).ConfigureAwait(false)
                               ?? new List<PlotPointEntry>();
                 }
                 catch (Exception ex)
@@ -241,7 +212,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 entries = new List<PlotPointEntry>();
             }
-            _volumeCache[volumeNumber] = entries;
+            if (epoch == Volatile.Read(ref _cacheEpoch))
+                _volumeCache[volumeNumber] = entries;
             return entries;
         }
 
@@ -250,11 +222,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var dir = GetPlotPointsDir();
             Directory.CreateDirectory(dir);
             var path = GetVolumeFilePath(volumeNumber);
-            var tmpPath = path + ".tmp";
+            var tmpPath = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
             try
             {
-                var json = JsonSerializer.Serialize(entries, JsonOptions);
-                await File.WriteAllTextAsync(tmpPath, json);
+                await using (var stream = File.Create(tmpPath))
+                {
+                    await JsonSerializer.SerializeAsync(stream, entries, JsonOptions).ConfigureAwait(false);
+                }
                 File.Move(tmpPath, path, overwrite: true);
                 _volumeCache[volumeNumber] = entries;
             }

@@ -1,8 +1,7 @@
-using System;
-using System.Reflection;
+﻿using System.Reflection;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text.Json.Serialization;
+using System.Windows.Media;
 
 namespace TM.Framework.Appearance.Animation.ThemeTransition
 {
@@ -46,7 +45,20 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
         Custom
     }
 
+    [System.Reflection.Obfuscation(Exclude = true)]
+    public enum ViewSwitchEffect
+    {
+        None,
+        Fade,
+        FadeScale,
+        SlideUp,
+        SlideDown,
+        SlideLeft,
+        SlideRight,
+    }
+
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ThemeTransitionSettings
     {
         [JsonPropertyName("Effect")] public TransitionEffect Effect { get; set; } = TransitionEffect.Rotate;
@@ -56,6 +68,11 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
         [JsonPropertyName("TargetFPS")] public int TargetFPS { get; set; } = 60;
         [JsonPropertyName("IntensityMultiplier")] public double IntensityMultiplier { get; set; } = 1.0;
         [JsonPropertyName("Preset")] public TransitionPreset Preset { get; set; } = TransitionPreset.Fast;
+
+        [JsonPropertyName("ViewSwitchEnabled")] public bool ViewSwitchEnabled { get; set; } = true;
+        [JsonPropertyName("ViewSwitchOutMs")] public int ViewSwitchOutMs { get; set; } = 60;
+        [JsonPropertyName("ViewSwitchInMs")] public int ViewSwitchInMs { get; set; } = 120;
+        [JsonPropertyName("ViewSwitchEffect")] public ViewSwitchEffect ViewSwitchEffect { get; set; } = ViewSwitchEffect.Fade;
 
         public static ThemeTransitionSettings CreateDefault()
         {
@@ -67,7 +84,11 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 Duration = 2000,
                 TargetFPS = 60,
                 IntensityMultiplier = 1.0,
-                Preset = TransitionPreset.Fast
+                Preset = TransitionPreset.Fast,
+                ViewSwitchEnabled = true,
+                ViewSwitchOutMs = 60,
+                ViewSwitchInMs = 120,
+                ViewSwitchEffect = ViewSwitchEffect.Fade
             };
         }
 
@@ -81,9 +102,29 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
                 Duration = this.Duration,
                 TargetFPS = this.TargetFPS,
                 IntensityMultiplier = this.IntensityMultiplier,
-                Preset = this.Preset
+                Preset = this.Preset,
+                ViewSwitchEnabled = this.ViewSwitchEnabled,
+                ViewSwitchOutMs = this.ViewSwitchOutMs,
+                ViewSwitchInMs = this.ViewSwitchInMs,
+                ViewSwitchEffect = this.ViewSwitchEffect
             };
         }
+    }
+
+    [System.Reflection.Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public class ViewSwitchEffectItem
+    {
+        public ViewSwitchEffectItem(ViewSwitchEffect effect, ImageSource? icon, string displayName, string description)
+        {
+            Effect = effect;
+            Icon = icon;
+            DisplayName = displayName;
+            Description = description;
+        }
+        public ViewSwitchEffect Effect { get; }
+        public ImageSource? Icon { get; }
+        public string DisplayName { get; }
+        public string Description { get; }
     }
 
     [System.Reflection.Obfuscation(Exclude = true, ApplyToMembers = true)]
@@ -95,7 +136,7 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
 
         public string DisplayName { get; set; } = string.Empty;
 
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
 
         public bool IsSelected
         {
@@ -110,7 +151,7 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
             }
         }
 
-        public string FullDisplay => $"{Icon} {DisplayName}";
+        public string FullDisplay => DisplayName;
 
         public event System.ComponentModel.PropertyChangedEventHandler? PropertyChanged;
 

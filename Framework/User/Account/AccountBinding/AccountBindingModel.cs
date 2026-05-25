@@ -1,14 +1,14 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
 using System.Windows.Media;
-using TM.Framework.User.Account.AccountBinding;
 
 namespace TM.Framework.User.Account.AccountBinding
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class AccountBindingModel : INotifyPropertyChanged
     {
         private bool _isBound;
@@ -24,8 +24,13 @@ namespace TM.Framework.User.Account.AccountBinding
 
         public PlatformType Platform { get; set; }
         public string PlatformName { get; set; } = string.Empty;
-        public string PlatformIcon { get; set; } = string.Empty;
-        public ImageSource? LogoImage { get; set; }
+        public ImageSource? PlatformIcon { get; set; }
+        private ImageSource? _logoImage;
+        public ImageSource? LogoImage
+        {
+            get => _logoImage;
+            set { _logoImage = value; OnPropertyChanged(); }
+        }
 
         public bool IsBound
         {

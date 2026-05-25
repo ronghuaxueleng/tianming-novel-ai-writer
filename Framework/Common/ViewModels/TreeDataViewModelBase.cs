@@ -1,24 +1,21 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Reflection;
 using System.Linq;
-using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
 using System.Windows.Threading;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.Common.Models;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Common.ViewModels
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
-    public abstract class TreeDataViewModelBase<TData, TCategory> : INotifyPropertyChanged, ITreeActionHost
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
+    public abstract partial class TreeDataViewModelBase<TData, TCategory> : INotifyPropertyChanged, ITreeActionHost
         where TCategory : ICategory
     {
         private string _searchKeyword = string.Empty;
@@ -38,7 +35,9 @@ namespace TM.Framework.Common.ViewModels
         private bool _isSearching;
 
         private bool _refreshScheduled;
+        private bool _immediateRefreshScheduled;
         private bool _bulkUpdating;
+        private CancellationTokenSource? _refreshCts;
 
         private static void DebugLogOnce(string key, Exception ex)
         {
@@ -114,16 +113,17 @@ namespace TM.Framework.Common.ViewModels
 
         private async Task ExecuteSearchAsync()
         {
-            _searchCts?.Cancel();
+            var oldSearchCts = _searchCts;
+            oldSearchCts?.Cancel();
+            oldSearchCts?.Dispose();
             var cts = new CancellationTokenSource();
             _searchCts = cts;
 
             try
             {
                 IsSearching = true;
-                await Task.Yield();
 
-                var result = BuildTreeDataAsync(cts.Token);
+                var plans = await Task.Run(() => CollectSearchTreeData(cts.Token), cts.Token);
 
                 if (cts.Token.IsCancellationRequested)
                     return;
@@ -136,6 +136,7 @@ namespace TM.Framework.Common.ViewModels
                         if (cts.Token.IsCancellationRequested)
                             return;
 
+                        var result = BuildTreeNodesFromPlan(plans, cts.Token);
                         TreeData.ReplaceAll(result);
                         OnTreeDataRefreshed();
                     });
@@ -158,13 +159,18 @@ namespace TM.Framework.Common.ViewModels
             }
         }
 
-        private List<TreeNodeItem> BuildTreeDataAsync(CancellationToken ct)
+        private sealed class TreeBuildPlan
         {
-            var result = new List<TreeNodeItem>();
+            public TCategory Category { get; set; } = default!;
+            public List<TreeBuildPlan> ChildPlans { get; } = new();
+            public List<TData> ChildrenData { get; } = new();
+        }
 
+        private List<TreeBuildPlan>? CollectSearchTreeData(CancellationToken ct)
+        {
             var allCategories = GetAllCategories();
             if (allCategories == null || allCategories.Count == 0)
-                return result;
+                return null;
 
             ct.ThrowIfCancellationRequested();
 
@@ -175,21 +181,19 @@ namespace TM.Framework.Common.ViewModels
                 .OrderBy(c => c.Order)
                 .ToList();
 
-            bool hasSearchKeyword = !string.IsNullOrWhiteSpace(SearchKeyword);
             int totalCount = 0;
+            var result = new List<TreeBuildPlan>();
 
             foreach (var category in topLevelCategories)
             {
                 ct.ThrowIfCancellationRequested();
 
-                var categoryNode = BuildCategoryTreeWithChildrenLimited(
-                    category, validCategories, hasSearchKeyword, MaxLevel, 
+                var plan = CollectCategoryPlanLimited(
+                    category, validCategories, MaxLevel,
                     ref totalCount, MaxDisplayCount, ct);
 
-                if (categoryNode != null)
-                {
-                    result.Add(categoryNode);
-                }
+                if (plan != null)
+                    result.Add(plan);
 
                 if (totalCount >= MaxDisplayCount)
                     break;
@@ -205,7 +209,7 @@ namespace TM.Framework.Common.ViewModels
 
             _aiGenerateCommand = new AsyncRelayCommand(
                 ExecuteAIGenerateAsyncInternal,
-                () => IsAIGenerateEnabled && !IsAIGenerating && CanExecuteAIGenerate());
+                () => IsAIGenerateEnabled && !IsAIGenerating && !_isAIGenerateInProgress && CanExecuteAIGenerate());
             _treeAfterActionCommand = new RelayCommand(OnTreeAfterActionInternal);
 
             DataSource.CollectionChanged += (s, e) =>
@@ -213,6 +217,15 @@ namespace TM.Framework.Common.ViewModels
                 if (_bulkUpdating) return;
                 TM.App.Log($"[{GetType().Name}] 检测到DataSource集合变化，自动刷新TreeData");
                 RefreshTreeData();
+            };
+
+            var weakSelf = new WeakReference<TreeDataViewModelBase<TData, TCategory>>(this);
+            TM.Framework.Common.Helpers.AI.ProviderLogoHelper.LogoCacheUpdated += () =>
+            {
+                if (!weakSelf.TryGetTarget(out var self)) return;
+                var dispatcher = System.Windows.Application.Current?.Dispatcher;
+                if (dispatcher != null)
+                    dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(self.RefreshTreeData));
             };
         }
 
@@ -235,34 +248,34 @@ namespace TM.Framework.Common.ViewModels
             RefreshTreeData();
         }
 
+        private bool _isAIGenerateInProgress;
+
         private async Task ExecuteAIGenerateAsyncInternal()
         {
-            if (IsAIGenerating)
+            if (_isAIGenerateInProgress || IsAIGenerating)
             {
                 TM.App.Log($"[{GetType().Name}] 忽略重复的AI智能生成请求（上一任务尚未完成）");
                 return;
             }
 
-            if (!await ProtectionService.CheckFeatureAuthorizationAsync(AIFeatureId))
-            {
-                GlobalToast.Warning("功能受限", "您的订阅计划不支持此功能，请升级订阅");
-                return;
-            }
-
+            _isAIGenerateInProgress = true;
+            IsAIGenerating = true;
+            _aiGenerateCommand.RaiseCanExecuteChanged();
             try
             {
-                IsAIGenerating = true;
                 TM.App.Log($"[{GetType().Name}] 开始执行AI智能生成功能");
                 await ExecuteAIGenerateAsync();
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[{GetType().Name}] AI智能生成失败: {ex}");
-                GlobalToast.Error("生成失败", $"AI智能生成失败：{ex.Message}");
+                GlobalToast.Error("生成失败", $"AI生成失败：{ex.Message}");
             }
             finally
             {
                 IsAIGenerating = false;
+                _isAIGenerateInProgress = false;
+                _aiGenerateCommand.RaiseCanExecuteChanged();
             }
         }
 
@@ -307,7 +320,7 @@ namespace TM.Framework.Common.ViewModels
         public bool IsAIGenerating
         {
             get => _isAIGenerating;
-            private set
+            protected set
             {
                 if (_isAIGenerating == value)
                 {
@@ -332,6 +345,47 @@ namespace TM.Framework.Common.ViewModels
             RefreshTreeData();
         }
 
+        protected virtual DispatcherPriority RefreshDispatcherPriority => DispatcherPriority.Background;
+
+        public void ForceRefreshTreeData()
+        {
+            ResetRefreshDebounce();
+
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null && !dispatcher.CheckAccess())
+            {
+                _ = dispatcher.InvokeAsync(() =>
+                {
+                    _refreshScheduled = false;
+                    ExecuteRefreshTreeDataSync();
+                });
+                return;
+            }
+
+            _refreshScheduled = false;
+            ExecuteRefreshTreeDataSync();
+        }
+
+        public void ScheduleImmediateRefreshTreeData()
+        {
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher == null)
+            {
+                ForceRefreshTreeData();
+                return;
+            }
+
+            if (_immediateRefreshScheduled) return;
+            _immediateRefreshScheduled = true;
+
+            dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(() =>
+            {
+                _immediateRefreshScheduled = false;
+                _refreshScheduled = false;
+                ExecuteRefreshTreeDataAsync();
+            }));
+        }
+
         protected virtual void RefreshTreeData()
         {
             if (_refreshScheduled) return;
@@ -339,16 +393,25 @@ namespace TM.Framework.Common.ViewModels
             var dispatcher = System.Windows.Application.Current?.Dispatcher;
             if (dispatcher != null && dispatcher.CheckAccess())
             {
-                dispatcher.BeginInvoke(DispatcherPriority.Background, new Action(ExecuteRefreshTreeData));
+                dispatcher.BeginInvoke(RefreshDispatcherPriority, new Action(ExecuteRefreshTreeDataAsync));
             }
             else
             {
-                ExecuteRefreshTreeData();
+                ExecuteRefreshTreeDataSync();
             }
         }
 
-        private void ExecuteRefreshTreeData()
+        protected void ResetRefreshDebounce()
         {
+            _refreshScheduled = false;
+        }
+
+        private void ExecuteRefreshTreeDataSync()
+        {
+            _refreshCts?.Cancel();
+            _refreshCts?.Dispose();
+            _refreshCts = null;
+
             _refreshScheduled = false;
 
             if (!string.IsNullOrWhiteSpace(SearchKeyword))
@@ -404,6 +467,109 @@ namespace TM.Framework.Common.ViewModels
             }
         }
 
+        private async void ExecuteRefreshTreeDataAsync()
+        {
+            _refreshScheduled = false;
+
+            if (!string.IsNullOrWhiteSpace(SearchKeyword))
+            {
+                ScheduleSearch();
+                return;
+            }
+
+            var oldCts = _refreshCts;
+            oldCts?.Cancel();
+            oldCts?.Dispose();
+            var cts = new CancellationTokenSource();
+            _refreshCts = cts;
+
+            var token = cts.Token;
+
+            try
+            {
+                var expandedState = SaveExpandedState(TreeData);
+
+                var plans = await Task.Run(() => CollectRefreshTreeData(token), token);
+
+                if (token.IsCancellationRequested)
+                    return;
+
+                if (plans == null || plans.Count == 0)
+                {
+                    TreeData.Clear();
+                    return;
+                }
+
+                var newNodes = BuildTreeNodesFromPlan(plans, token, autoExpand: false);
+                TreeData.ReplaceAll(newNodes);
+                RestoreExpandedState(TreeData, expandedState);
+                OnTreeDataRefreshed();
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (ObjectDisposedException)
+            {
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[{GetType().Name}] 异步刷新树形数据失败: {ex.Message}");
+            }
+        }
+
+        private List<TreeBuildPlan>? CollectRefreshTreeData(CancellationToken ct)
+        {
+            var allCategories = GetAllCategories();
+            if (allCategories == null || allCategories.Count == 0)
+                return null;
+
+            ct.ThrowIfCancellationRequested();
+
+            var validCategories = FilterOrphanCategories(allCategories);
+            var topLevel = validCategories
+                .Where(c => string.IsNullOrEmpty(c.ParentCategory))
+                .OrderBy(c => c.Order)
+                .ToList();
+
+            var result = new List<TreeBuildPlan>();
+            foreach (var category in topLevel)
+            {
+                ct.ThrowIfCancellationRequested();
+                var plan = CollectCategoryPlanForRefresh(category, validCategories, MaxLevel, ct);
+                if (plan != null)
+                    result.Add(plan);
+            }
+            return result;
+        }
+
+        private TreeBuildPlan? CollectCategoryPlanForRefresh(
+            TCategory category, List<TCategory> allCategories, int maxLevel,
+            CancellationToken ct, int currentLevel = 1)
+        {
+            ct.ThrowIfCancellationRequested();
+
+            var plan = new TreeBuildPlan { Category = category };
+
+            plan.ChildrenData.AddRange(GetChildrenDataForCategory(category.Name));
+
+            if (currentLevel < maxLevel)
+            {
+                var children = allCategories
+                    .Where(c => c.ParentCategory == category.Name)
+                    .OrderBy(c => c.Order);
+
+                foreach (var child in children)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    var childPlan = CollectCategoryPlanForRefresh(child, allCategories, maxLevel, ct, currentLevel + 1);
+                    if (childPlan != null)
+                        plan.ChildPlans.Add(childPlan);
+                }
+            }
+
+            return plan;
+        }
+
         private HashSet<string> SaveExpandedState(ObservableCollection<TreeNodeItem> nodes)
         {
             var expandedNodes = new HashSet<string>();
@@ -420,7 +586,7 @@ namespace TM.Framework.Common.ViewModels
                     expandedNodes.Add(node.Name);
                 }
 
-                if (node.Children.Any())
+                if (node.Children.Count > 0)
                 {
                     SaveExpandedStateRecursive(node.Children, expandedNodes);
                 }
@@ -441,366 +607,20 @@ namespace TM.Framework.Common.ViewModels
                     node.IsExpanded = true;
                 }
 
-                if (node.Children.Any())
+                if (node.Children.Count > 0)
                 {
                     RestoreExpandedStateRecursive(node.Children, expandedNodes);
                 }
             }
         }
 
-        private List<TCategory> FilterOrphanCategories(List<TCategory> allCategories)
-        {
-            var categoryNames = new HashSet<string>(allCategories.Select(c => c.Name));
-            return allCategories
-                .Where(c => string.IsNullOrEmpty(c.ParentCategory) || categoryNames.Contains(c.ParentCategory))
-                .ToList();
-        }
-
-        private TreeNodeItem? BuildCategoryTreeWithChildren(
-            TCategory category,
-            List<TCategory> allCategories,
-            bool hasSearchKeyword,
-            int maxLevel)
-        {
-            var childrenData = GetChildrenDataForCategory(category.Name);
-
-            var childCategories = allCategories
-                .Where(c => c.ParentCategory == category.Name)
-                .OrderBy(c => c.Order)
-                .ToList();
-
-            var childCategoryNodes = new List<TreeNodeItem>();
-            if (category.Level < maxLevel)
-            {
-                foreach (var child in childCategories)
-                {
-                    var childNode = BuildCategoryTreeWithChildren(child, allCategories, hasSearchKeyword, maxLevel);
-                    if (childNode != null)
-                    {
-                        childCategoryNodes.Add(childNode);
-                    }
-                }
-            }
-
-            if (hasSearchKeyword)
-            {
-                bool hasMatchedContent = childrenData.Any() || childCategoryNodes.Any();
-                if (!hasMatchedContent)
-                {
-                    return null;
-                }
-            }
-
-            var categoryNode = new TreeNodeItem
-            {
-                Name = category.Name,
-                Icon = category.Icon,
-                LogoImage = GetCategoryLogoImage(category),
-                Level = category.Level,
-                Tag = category,
-                IsExpanded = hasSearchKeyword && (childrenData.Any() || childCategoryNodes.Any()),
-                ShowChildCount = true
-            };
-
-            foreach (var childNode in childCategoryNodes)
-            {
-                categoryNode.Children.Add(childNode);
-            }
-
-            foreach (var childData in childrenData)
-            {
-                var childNode = ConvertDataToTreeNode(childData);
-                childNode.Level = category.Level + 1;
-                categoryNode.Children.Add(childNode);
-            }
-
-            return categoryNode;
-        }
-
-        private TreeNodeItem? BuildCategoryTreeWithChildrenLimited(
-            TCategory category,
-            List<TCategory> allCategories,
-            bool hasSearchKeyword,
-            int maxLevel,
-            ref int totalCount,
-            int maxCount,
-            CancellationToken ct)
-        {
-            ct.ThrowIfCancellationRequested();
-
-            if (totalCount >= maxCount)
-                return null;
-
-            var childrenData = GetChildrenDataForCategory(category.Name);
-
-            var childCategories = allCategories
-                .Where(c => c.ParentCategory == category.Name)
-                .OrderBy(c => c.Order)
-                .ToList();
-
-            var childCategoryNodes = new List<TreeNodeItem>();
-            if (category.Level < maxLevel)
-            {
-                foreach (var child in childCategories)
-                {
-                    if (totalCount >= maxCount) break;
-                    ct.ThrowIfCancellationRequested();
-
-                    var childNode = BuildCategoryTreeWithChildrenLimited(
-                        child, allCategories, hasSearchKeyword, maxLevel, 
-                        ref totalCount, maxCount, ct);
-                    if (childNode != null)
-                    {
-                        childCategoryNodes.Add(childNode);
-                    }
-                }
-            }
-
-            if (hasSearchKeyword)
-            {
-                bool hasMatchedContent = childrenData.Any() || childCategoryNodes.Any();
-                if (!hasMatchedContent)
-                {
-                    return null;
-                }
-            }
-
-            var categoryNode = new TreeNodeItem
-            {
-                Name = category.Name,
-                Icon = category.Icon,
-                LogoImage = GetCategoryLogoImage(category),
-                Level = category.Level,
-                Tag = category,
-                IsExpanded = hasSearchKeyword && (childrenData.Any() || childCategoryNodes.Any()),
-                ShowChildCount = true
-            };
-
-            foreach (var childNode in childCategoryNodes)
-            {
-                categoryNode.Children.Add(childNode);
-            }
-
-            foreach (var childData in childrenData)
-            {
-                if (totalCount >= maxCount) break;
-
-                var childNode = ConvertDataToTreeNode(childData);
-                childNode.Level = category.Level + 1;
-                categoryNode.Children.Add(childNode);
-                totalCount++;
-            }
-
-            return categoryNode;
-        }
-
-        protected abstract List<TCategory> GetAllCategories();
-
-        protected abstract List<TData> GetChildrenDataForCategory(string categoryName);
-
-        protected abstract TreeNodeItem ConvertDataToTreeNode(TData data);
-
-        protected virtual bool IsNodeCategory(TreeNodeItem node)
-        {
-            return node?.Tag is TCategory;
-        }
-
-        protected virtual TCategory? GetCategoryFromNode(TreeNodeItem node)
-        {
-            return node?.Tag is TCategory category ? category : default;
-        }
-
-        protected virtual TData? GetDataFromNode(TreeNodeItem node)
-        {
-            return node?.Tag is TData data ? data : default;
-        }
-
-        protected virtual bool TryAddCategory(string categoryName, string? parentCategoryName = null)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] TryAddCategory未实现，子类需要重写此方法以支持分类管理");
-            return false;
-        }
-
-        protected virtual bool TryDeleteCategory(TCategory category)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] TryDeleteCategory未实现，子类需要重写此方法以支持分类管理");
-            return false;
-        }
-
-        protected virtual bool TryUpdateCategory(TCategory category)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] TryUpdateCategory未实现，子类需要重写此方法以支持分类管理");
-            return false;
-        }
-
-        protected virtual string GetCategoryIcon(string categoryName)
-        {
-            return "📁";
-        }
-
-        protected virtual System.Windows.Media.ImageSource? GetCategoryLogoImage(TCategory category)
-        {
-            try
-            {
-                var logoPath = (category as ILogoPathHost)?.LogoPath;
-                var icon = category.Icon ?? "";
-
-                if (category is ILogoPathHost)
-                {
-                    if (string.IsNullOrEmpty(logoPath) && category.Level == 1)
-                    {
-                        logoPath = "app.png";
-                    }
-                    else if (string.IsNullOrEmpty(logoPath) && category.Level >= 2)
-                    {
-                        logoPath = TM.Framework.Common.Helpers.AI.ProviderLogoHelper.GetLogoFileName(category.Name);
-                    }
-
-                    return TM.Framework.Common.Helpers.AI.ProviderLogoHelper.GetLogo(logoPath, icon);
-                }
-            }
-            catch (Exception ex)
-            {
-                DebugLogOnce(nameof(GetCategoryLogoImage), ex);
-            }
-
-            return null;
-        }
-
-        protected virtual void OnNodeDoubleClick(TreeNodeItem node)
-        {
-            var data = GetDataFromNode(node);
-            if (data != null)
-            {
-                OnDataSelected(data);
-            }
-        }
-
-        protected virtual void OnDataSelected(TData data)
-        {
-        }
-
-        protected virtual bool TrySaveData(TData data)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] TrySaveData未实现，子类需要重写此方法以支持数据保存");
-            return false;
-        }
-
-        protected virtual bool TryDeleteData(TData data)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] TryDeleteData未实现，子类需要重写此方法以支持数据删除");
-            return false;
-        }
-
-        protected virtual TData? CreateNewData(string? categoryName = null)
-        {
-            TM.App.Log($"[TreeDataViewModelBase] CreateNewData未实现，子类需要重写此方法以支持新建数据");
-            return default;
-        }
-
-        protected virtual void OnDataChanged()
-        {
-            RefreshTreeData();
-        }
-
-        protected virtual void OnTreeDataRefreshed()
-        {
-        }
-
-        protected void FocusTreeNode(Func<TreeNodeItem, bool> predicate)
-        {
-            if (predicate == null)
-            {
-                return;
-            }
-
-            var path = FindNodePath(TreeData, predicate);
-            if (path == null || path.Count == 0)
-            {
-                return;
-            }
-
-            ClearSelection(TreeData);
-
-            for (var i = 0; i < path.Count; i++)
-            {
-                var node = path[i];
-
-                if (i < path.Count - 1 && !node.IsExpanded)
-                {
-                    node.IsExpanded = true;
-                }
-
-                node.IsSelected = true;
-                node.IsSelectionFocus = i == path.Count - 1;
-            }
-        }
-
-        private static List<TreeNodeItem>? FindNodePath(IEnumerable<TreeNodeItem> nodes, Func<TreeNodeItem, bool> predicate)
-        {
-            foreach (var node in nodes)
-            {
-                var path = FindNodePathRecursive(node, predicate);
-                if (path != null)
-                {
-                    return path;
-                }
-            }
-
-            return null;
-        }
-
-        private static List<TreeNodeItem>? FindNodePathRecursive(TreeNodeItem current, Func<TreeNodeItem, bool> predicate)
-        {
-            if (predicate(current))
-            {
-                return new List<TreeNodeItem> { current };
-            }
-
-            foreach (var child in current.Children)
-            {
-                var childPath = FindNodePathRecursive(child, predicate);
-                if (childPath != null)
-                {
-                    childPath.Insert(0, current);
-                    return childPath;
-                }
-            }
-
-            return null;
-        }
-
-        private static void ClearSelection(IEnumerable<TreeNodeItem> nodes)
-        {
-            foreach (var node in nodes)
-            {
-                if (node.IsSelected)
-                {
-                    node.IsSelected = false;
-                }
-
-                if (node.IsSelectionFocus)
-                {
-                    node.IsSelectionFocus = false;
-                }
-
-                if (node.Children.Count > 0)
-                {
-                    ClearSelection(node.Children);
-                }
-            }
-        }
-
-        public event PropertyChangedEventHandler? PropertyChanged;
-
-        protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
-        {
-            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
-        }
     }
 
     public sealed class RangeObservableCollection<T> : ObservableCollection<T>
     {
+        public RangeObservableCollection() : base() { }
+        public RangeObservableCollection(IEnumerable<T> collection) : base(collection) { }
+
         public void ReplaceAll(IList<T> newItems)
         {
             Items.Clear();
@@ -808,6 +628,55 @@ namespace TM.Framework.Common.ViewModels
                 Items.Add(item);
             OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
                 System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            OnPropertyChanged(new PropertyChangedEventArgs("Count"));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        }
+
+        public void InsertRange(int index, IList<T> items)
+        {
+            if (items == null || items.Count == 0) return;
+            foreach (var item in items)
+                Items.Insert(index++, item);
+            OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            OnPropertyChanged(new PropertyChangedEventArgs("Count"));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        }
+
+        public void RemoveRange(int index, int count)
+        {
+            if (count <= 0) return;
+            for (int i = 0; i < count; i++)
+                Items.RemoveAt(index);
+            OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                System.Collections.Specialized.NotifyCollectionChangedAction.Reset));
+            OnPropertyChanged(new PropertyChangedEventArgs("Count"));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        }
+
+        public void BatchInsert(int index, IList<T> items)
+        {
+            if (items == null || items.Count == 0) return;
+            for (int i = 0; i < items.Count; i++)
+            {
+                Items.Insert(index + i, items[i]);
+                OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                    System.Collections.Specialized.NotifyCollectionChangedAction.Add, items[i], index + i));
+            }
+            OnPropertyChanged(new PropertyChangedEventArgs("Count"));
+            OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
+        }
+
+        public void BatchRemove(int index, int count)
+        {
+            if (count <= 0) return;
+            for (int i = 0; i < count; i++)
+            {
+                var item = Items[index];
+                Items.RemoveAt(index);
+                OnCollectionChanged(new System.Collections.Specialized.NotifyCollectionChangedEventArgs(
+                    System.Collections.Specialized.NotifyCollectionChangedAction.Remove, item, index));
+            }
             OnPropertyChanged(new PropertyChangedEventArgs("Count"));
             OnPropertyChanged(new PropertyChangedEventArgs("Item[]"));
         }

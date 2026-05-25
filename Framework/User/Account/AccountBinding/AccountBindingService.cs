@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
-using System.Text.Json;
 using System.Threading.Tasks;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.AccountBinding
@@ -172,7 +169,7 @@ namespace TM.Framework.User.Account.AccountBinding
                     });
                 }
 
-                AddHistoryRecord(data, platform, isUpdate ? BindingAction.Update : BindingAction.Bind, accountId, nickname, 
+                AddHistoryRecord(data, platform, isUpdate ? BindingAction.Update : BindingAction.Bind, accountId, nickname,
                     isUpdate ? "更新账号信息" : "首次绑定账号");
 
                 SaveBindingsData(data);
@@ -260,7 +257,7 @@ namespace TM.Framework.User.Account.AccountBinding
                 if (binding != null)
                 {
                     binding.Permissions = permissions;
-                    AddHistoryRecord(data, platform, BindingAction.PermissionChange, binding.AccountId, binding.Nickname, 
+                    AddHistoryRecord(data, platform, BindingAction.PermissionChange, binding.AccountId, binding.Nickname,
                         $"权限更新: {string.Join(", ", permissions)}");
                     SaveBindingsData(data);
                     return true;
@@ -352,6 +349,15 @@ namespace TM.Framework.User.Account.AccountBinding
         [System.Text.Json.Serialization.JsonPropertyName("AccountId")] public string AccountId { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Nickname")] public string Nickname { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Details")] public string Details { get; set; } = string.Empty;
+
+        [System.Text.Json.Serialization.JsonIgnore]
+        public System.Windows.Media.ImageSource? ActionIcon => Action switch
+        {
+            BindingAction.Unbind => TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Unlock"),
+            BindingAction.Update => TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Refresh"),
+            BindingAction.PermissionChange => TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Lock"),
+            _ => TM.Framework.Common.Helpers.IconHelper.TryGet("Icon.Link")
+        };
     }
 
     [System.Reflection.Obfuscation(Exclude = true)]

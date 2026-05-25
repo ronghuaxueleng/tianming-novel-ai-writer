@@ -1,19 +1,16 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
-using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
-using TM.Framework.Common.Controls;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Publishing;
 
 namespace TM.Modules.Generate.Content.Views
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class PackageHistoryDialog : Window
     {
         private readonly IPackageHistoryService _historyService;
@@ -26,18 +23,23 @@ namespace TM.Modules.Generate.Content.Views
 
             RetainCountComboBox.SelectedIndex = _historyService.RetainCount - 1;
 
-            LoadHistory();
+            Loaded += OnLoaded;
         }
 
-        private void LoadHistory()
+        private async void OnLoaded(object sender, RoutedEventArgs e)
         {
-            _historyEntries = _historyService.GetAllHistory();
-            HistoryListBox.ItemsSource = _historyEntries;
-
-            if (_historyEntries.Count == 0)
+            try
             {
-                GlobalToast.Info("暂无历史", "还没有打包历史记录");
+                Loaded -= OnLoaded;
+                await LoadHistoryAsync();
             }
+            catch (Exception ex) { TM.App.Log($"[PackageHistory] 加载历史失败: {ex.Message}"); }
+        }
+
+        private async Task LoadHistoryAsync()
+        {
+            _historyEntries = await _historyService.GetAllHistoryAsync().ConfigureAwait(true);
+            HistoryListBox.ItemsSource = _historyEntries;
         }
 
         private void RetainCountComboBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -52,22 +54,26 @@ namespace TM.Modules.Generate.Content.Views
         {
         }
 
-        private void ViewDiff_Click(object sender, RoutedEventArgs e)
+        private async void ViewDiff_Click(object sender, RoutedEventArgs e)
         {
-            if (sender is Button btn && btn.Tag is int version)
+            try
             {
-                var diff = _historyService.GetVersionDiff(version);
-
-                if (diff.DiffItems.Count == 0)
+                if (sender is Button btn && btn.Tag is int version)
                 {
-                    GlobalToast.Info("无差异", "当前版本与历史版本没有差异");
-                    return;
-                }
+                    var diff = await _historyService.GetVersionDiffAsync(version);
 
-                var diffDialog = new VersionDiffDialog(diff);
-                diffDialog.Owner = this;
-                diffDialog.ShowDialog();
+                    if (diff.DiffItems.Count == 0)
+                    {
+                        GlobalToast.Info("无差异", "当前版本与历史版本没有差异");
+                        return;
+                    }
+
+                    var diffDialog = new VersionDiffDialog(diff);
+                    diffDialog.Owner = this;
+                    diffDialog.ShowDialog();
+                }
             }
+            catch (Exception ex) { TM.App.Log($"[PackageHistory] 查看差异失败: {ex.Message}"); }
         }
 
         private void Restore_Click(object sender, RoutedEventArgs e)
@@ -89,7 +95,7 @@ namespace TM.Modules.Generate.Content.Views
                     if (success)
                     {
                         GlobalToast.Success("恢复成功", $"已恢复到版本 {version}");
-                        LoadHistory();
+                        await LoadHistoryAsync();
                     }
                     else
                     {
@@ -100,7 +106,7 @@ namespace TM.Modules.Generate.Content.Views
             catch (Exception ex)
             {
                 TM.App.Log($"[PackageHistoryDialog] 恢复版本失败: {ex.Message}");
-                GlobalToast.Error("恢复失败", ex.Message);
+                GlobalToast.Error("恢复失败", $"恢复失败：{ex.Message}");
             }
         }
 

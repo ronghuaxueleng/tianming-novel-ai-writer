@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,39 +6,36 @@ using System.IO;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.Appearance.Animation.LoadingAnimation
 {
     public class AnimationTypeItem
     {
         public LoadingAnimationType Type { get; set; }
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = string.Empty;
     }
 
     public class PositionItem
     {
         public LoadingPosition Position { get; set; }
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = string.Empty;
     }
 
     public class OverlayModeItem
     {
         public OverlayMode Mode { get; set; }
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = string.Empty;
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LoadingAnimationViewModel : INotifyPropertyChanged
     {
         private readonly LoadingAnimationService _loadingService;
@@ -90,33 +87,33 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             _loadingService = loadingService;
             AnimationTypes = new ObservableCollection<AnimationTypeItem>
             {
-                new AnimationTypeItem { Type = LoadingAnimationType.Spinner, Icon = "🔄", DisplayName = "旋转圈" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Dots, Icon = "⏺️", DisplayName = "跳动点" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Bars, Icon = "📊", DisplayName = "跳动条" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Pulse, Icon = "💓", DisplayName = "脉冲" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Ring, Icon = "⭕", DisplayName = "环形" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Wave, Icon = "🌊", DisplayName = "波浪" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Progress, Icon = "📈", DisplayName = "进度条" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Skeleton, Icon = "💀", DisplayName = "骨架屏" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Custom1, Icon = "🎨", DisplayName = "自定义1" },
-                new AnimationTypeItem { Type = LoadingAnimationType.Custom2, Icon = "🖌️", DisplayName = "自定义2" }
+                new AnimationTypeItem { Type = LoadingAnimationType.Spinner, Icon = IconHelper.TryGet("Icon.Refresh"), DisplayName = "旋转圈" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Dots, Icon = IconHelper.TryGet("Icon.Target"), DisplayName = "跳动点" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Bars, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "跳动条" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Pulse, Icon = IconHelper.TryGet("Icon.Lightning"), DisplayName = "脉冲" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Ring, Icon = IconHelper.TryGet("Icon.Target"), DisplayName = "环形" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Wave, Icon = IconHelper.TryGet("Icon.Sparkle"), DisplayName = "波浪" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Progress, Icon = IconHelper.TryGet("Icon.Chart"), DisplayName = "进度条" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Skeleton, Icon = IconHelper.TryGet("Icon.Package"), DisplayName = "骨架屏" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Custom1, Icon = IconHelper.TryGet("Icon.Palette"), DisplayName = "自定义1" },
+                new AnimationTypeItem { Type = LoadingAnimationType.Custom2, Icon = IconHelper.TryGet("Icon.Edit"), DisplayName = "自定义2" }
             };
 
             Positions = new ObservableCollection<PositionItem>
             {
-                new PositionItem { Position = LoadingPosition.Center, Icon = "⊙", DisplayName = "居中" },
-                new PositionItem { Position = LoadingPosition.Top, Icon = "⬆️", DisplayName = "顶部" },
-                new PositionItem { Position = LoadingPosition.Bottom, Icon = "⬇️", DisplayName = "底部" },
-                new PositionItem { Position = LoadingPosition.TopRight, Icon = "↗️", DisplayName = "右上角" },
-                new PositionItem { Position = LoadingPosition.BottomRight, Icon = "↘️", DisplayName = "右下角" }
+                new PositionItem { Position = LoadingPosition.Center, Icon = IconHelper.TryGet("Icon.Target"), DisplayName = "居中" },
+                new PositionItem { Position = LoadingPosition.Top, Icon = IconHelper.TryGet("Icon.ChevronUp"), DisplayName = "顶部" },
+                new PositionItem { Position = LoadingPosition.Bottom, Icon = IconHelper.TryGet("Icon.ChevronDown"), DisplayName = "底部" },
+                new PositionItem { Position = LoadingPosition.TopRight, Icon = IconHelper.TryGet("Icon.ChevronUp"), DisplayName = "右上角" },
+                new PositionItem { Position = LoadingPosition.BottomRight, Icon = IconHelper.TryGet("Icon.ChevronDown"), DisplayName = "右下角" }
             };
 
             OverlayModes = new ObservableCollection<OverlayModeItem>
             {
-                new OverlayModeItem { Mode = OverlayMode.None, Icon = "🚫", DisplayName = "无遮罩" },
-                new OverlayModeItem { Mode = OverlayMode.Transparent, Icon = "⚪", DisplayName = "半透明" },
-                new OverlayModeItem { Mode = OverlayMode.Blur, Icon = "🌫️", DisplayName = "模糊" },
-                new OverlayModeItem { Mode = OverlayMode.Full, Icon = "⬛", DisplayName = "完全遮罩" }
+                new OverlayModeItem { Mode = OverlayMode.None, Icon = IconHelper.TryGet("Icon.Forbidden"), DisplayName = "无遮罩" },
+                new OverlayModeItem { Mode = OverlayMode.Transparent, Icon = IconHelper.TryGet("Icon.Eye"), DisplayName = "半透明" },
+                new OverlayModeItem { Mode = OverlayMode.Blur, Icon = IconHelper.TryGet("Icon.Sparkle"), DisplayName = "模糊" },
+                new OverlayModeItem { Mode = OverlayMode.Full, Icon = IconHelper.TryGet("Icon.Lock"), DisplayName = "完全遮罩" }
             };
 
             _currentSettings = LoadingAnimationSettings.CreateDefault();
@@ -128,7 +125,7 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             }, "LoadingAnimation");
 
             TestLoadingCommand = new RelayCommand(TestLoading);
-            ApplySettingsCommand = new RelayCommand(ApplySettings);
+            ApplySettingsCommand = new RelayCommand(() => ApplySettings().SafeFireAndForget(ex => TM.App.Log($"[LoadingAnimationViewModel] {ex.Message}")));
             ResetToDefaultCommand = new RelayCommand(ResetToDefault);
             PickPrimaryColorCommand = new RelayCommand(PickPrimaryColor);
             PickSecondaryColorCommand = new RelayCommand(PickSecondaryColor);
@@ -470,7 +467,7 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
 
                 await SaveSettingsAsync();
 
-                _loadingService.ReloadSettings();
+                _loadingService.UpdateSettings(_currentSettings);
 
                 _loadingService.Show(LoadingText, null);
 
@@ -483,16 +480,16 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             catch (Exception ex)
             {
                 TM.App.Log($"[LoadingAnimation] 测试失败: {ex.Message}");
-                StandardDialog.ShowError($"测试失败：\n\n{ex.Message}", "错误", null);
+                StandardDialog.ShowError($"测试失败：{ex.Message}", "测试失败", null);
             }
         }
 
-        private async void ApplySettings()
+        private async Task ApplySettings()
         {
             try
             {
                 await SaveSettingsAsync();
-                _loadingService.ReloadSettings();
+                _loadingService.UpdateSettings(_currentSettings);
 
                 TM.App.Log("[LoadingAnimation] 设置已应用");
                 ToastNotification.ShowSuccess("应用成功", "加载动画设置已应用");
@@ -500,7 +497,7 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             catch (Exception ex)
             {
                 TM.App.Log($"[LoadingAnimation] 应用设置失败: {ex.Message}");
-                StandardDialog.ShowError($"应用设置失败：\n\n{ex.Message}", "错误", null);
+                StandardDialog.ShowError($"应用设置失败：{ex.Message}", "应用失败", null);
             }
         }
 
@@ -590,53 +587,11 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
             _enableSound = _currentSettings.EnableSound;
             _soundPath = _currentSettings.SoundPath;
 
-            OnPropertyChanged(nameof(AnimationSpeed));
-            OnPropertyChanged(nameof(Size));
-            OnPropertyChanged(nameof(PrimaryColor));
-            OnPropertyChanged(nameof(SecondaryColor));
-            OnPropertyChanged(nameof(Opacity));
-            OnPropertyChanged(nameof(ShowText));
-            OnPropertyChanged(nameof(LoadingText));
-            OnPropertyChanged(nameof(TextSize));
-            OnPropertyChanged(nameof(TextColor));
-            OnPropertyChanged(nameof(ShowPercentage));
-            OnPropertyChanged(nameof(OverlayOpacity));
-            OnPropertyChanged(nameof(OverlayColor));
-            OnPropertyChanged(nameof(BlurRadius));
-            OnPropertyChanged(nameof(MinDisplayTime));
-            OnPropertyChanged(nameof(DelayTime));
-            OnPropertyChanged(nameof(CancelOnClick));
-            OnPropertyChanged(nameof(EnableSound));
-            OnPropertyChanged(nameof(SoundPath));
+            _selectedAnimationType = AnimationTypes.FirstOrDefault(x => x.Type == _currentSettings.AnimationType)!;
+            _selectedPosition = Positions.FirstOrDefault(x => x.Position == _currentSettings.Position)!;
+            _selectedOverlayMode = OverlayModes.FirstOrDefault(x => x.Mode == _currentSettings.Overlay)!;
 
-            SelectedAnimationType = AnimationTypes.FirstOrDefault(x => x.Type == _currentSettings.AnimationType)!;
-            SelectedPosition = Positions.FirstOrDefault(x => x.Position == _currentSettings.Position)!;
-            SelectedOverlayMode = OverlayModes.FirstOrDefault(x => x.Mode == _currentSettings.Overlay)!;
-        }
-
-        private void SaveSettings()
-        {
-            try
-            {
-                var settingsFile = StoragePathHelper.GetFilePath(
-                    "Framework",
-                    "Appearance/Animation/LoadingAnimation",
-                    "settings.json"
-                );
-
-                var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(_currentSettings, options);
-                var tmpLav = settingsFile + ".tmp";
-                File.WriteAllText(tmpLav, json);
-                File.Move(tmpLav, settingsFile, overwrite: true);
-
-                TM.App.Log($"[LoadingAnimation] 设置已保存到: {settingsFile}");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoadingAnimation] 保存设置失败: {ex.Message}");
-                throw;
-            }
+            OnPropertyChanged(string.Empty);
         }
 
         private async System.Threading.Tasks.Task SaveSettingsAsync()
@@ -650,9 +605,11 @@ namespace TM.Framework.Appearance.Animation.LoadingAnimation
                 );
 
                 var options = JsonHelper.Default;
-                var json = JsonSerializer.Serialize(_currentSettings, options);
-                var tmpLavA = settingsFile + ".tmp";
-                await File.WriteAllTextAsync(tmpLavA, json);
+                var tmpLavA = settingsFile + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLavA))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _currentSettings, options);
+                }
                 File.Move(tmpLavA, settingsFile, overwrite: true);
 
                 TM.App.Log($"[LoadingAnimation] 设置已异步保存到: {settingsFile}");

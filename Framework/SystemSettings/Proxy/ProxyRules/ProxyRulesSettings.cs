@@ -113,16 +113,6 @@ namespace TM.Framework.SystemSettings.Proxy.ProxyRules
         RuleRemoval
     }
 
-    public class RulePerformanceMetrics
-    {
-        [JsonPropertyName("RuleId")] public string RuleId { get; set; } = string.Empty;
-        [JsonPropertyName("AverageProcessingTime")] public double AverageProcessingTime { get; set; }
-        [JsonPropertyName("AverageLatency")] public double AverageLatency { get; set; }
-        [JsonPropertyName("MemoryUsage")] public long MemoryUsage { get; set; }
-        [JsonPropertyName("CpuUsage")] public double CpuUsage { get; set; }
-        [JsonPropertyName("ResourceImpact")] public int ResourceImpact { get; set; }
-    }
-
     public class RuleReport
     {
         [JsonPropertyName("GeneratedTime")] public DateTime GeneratedTime { get; set; } = DateTime.Now;

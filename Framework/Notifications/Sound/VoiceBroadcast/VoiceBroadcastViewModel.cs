@@ -1,14 +1,14 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Speech.Synthesis;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Notifications.Sound.VoiceBroadcast
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class VoiceBroadcastViewModel : INotifyPropertyChanged
     {
         private bool _isEnabled = false;
@@ -21,7 +21,7 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
         private bool _broadcastOnSuccess = false;
 
         private readonly VoiceBroadcastSettings _settings;
-        private readonly SpeechSynthesizer? _synthesizer;
+        private SpeechSynthesizer? _synthesizer;
         private bool _isTtsAvailable = false;
 
         private static readonly object _debugLogLock = new();
@@ -55,47 +55,45 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
             SaveSettingsCommand = new RelayCommand(SaveSettings);
             ResetToDefaultCommand = new RelayCommand(ResetToDefault);
 
-            try
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
-
-                _synthesizer = new SpeechSynthesizer();
-                _synthesizer.SetOutputToDefaultAudioDevice();
-
-                var voices = _synthesizer.GetInstalledVoices();
-                _isTtsAvailable = voices.Count > 0;
-
-                if (_isTtsAvailable)
+                SpeechSynthesizer? synthesizer = null;
+                bool ttsAvailable = false;
+                try
                 {
-                    TM.App.Log($"[语音播报] 检测到{voices.Count}个语音引擎");
+                    synthesizer = new SpeechSynthesizer();
+                    synthesizer.SetOutputToDefaultAudioDevice();
+                    var voices = synthesizer.GetInstalledVoices();
+                    ttsAvailable = voices.Count > 0;
+                    if (ttsAvailable)
+                        TM.App.Log($"[语音播报] 检测到{voices.Count}个语音引擎");
+                    else
+                        TM.App.Log("[语音播报] 警告：系统未安装语音引擎，将使用系统提示音");
                 }
-                else
+                catch (Exception ex)
                 {
-                    TM.App.Log("[语音播报] 警告：系统未安装语音引擎，将使用系统提示音");
+                    TM.App.Log($"[语音播报] 初始化警告: {ex.Message}，TTS不可用，将使用系统提示音");
                 }
 
-                AsyncSettingsLoader.RunOrDefer(() =>
-                {
-                    _settings.LoadSettings();
-                    return () =>
-                    {
-                        IsEnabled = _settings.IsEnabled;
-                        Speed = _settings.Speed;
-                        Volume = _settings.Volume;
-                        Pitch = _settings.Pitch;
-                        TestText = _settings.TestText;
-                        BroadcastOnNotification = _settings.BroadcastOnNotification;
-                        BroadcastOnError = _settings.BroadcastOnError;
-                        BroadcastOnSuccess = _settings.BroadcastOnSuccess;
-                    };
-                }, "VoiceBroadcast");
+                await _settings.LoadDataAsync().ConfigureAwait(false);
 
-                TM.App.Log("[语音播报] ViewModel初始化完成");
-            }
-            catch (Exception ex)
-            {
-                _isTtsAvailable = false;
-                TM.App.Log($"[语音播报] 初始化警告: {ex.Message}，TTS不可用，将使用系统提示音");
-            }
+                return () =>
+                {
+                    _synthesizer = synthesizer;
+                    _isTtsAvailable = ttsAvailable;
+                    OnPropertyChanged(nameof(IsTtsAvailable));
+                    OnPropertyChanged(nameof(TtsStatusText));
+                    IsEnabled = _settings.IsEnabled;
+                    Speed = _settings.Speed;
+                    Volume = _settings.Volume;
+                    Pitch = _settings.Pitch;
+                    TestText = _settings.TestText;
+                    BroadcastOnNotification = _settings.BroadcastOnNotification;
+                    BroadcastOnError = _settings.BroadcastOnError;
+                    BroadcastOnSuccess = _settings.BroadcastOnSuccess;
+                    TM.App.Log("[语音播报] ViewModel初始化完成");
+                };
+            }, "VoiceBroadcast");
         }
 
         public bool IsTtsAvailable => _isTtsAvailable;
@@ -347,7 +345,7 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
                 catch (Exception innerEx)
                 {
                     DebugLogOnce("PlayFallbackSound", innerEx);
-                    StandardDialog.ShowError($"语音播报失败: {ex.Message}", "播报失败");
+                    StandardDialog.ShowError($"语音播报失败：{innerEx.Message}", "播报失败");
                 }
             }
         }
@@ -373,7 +371,7 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
             catch (Exception ex)
             {
                 TM.App.Log($"[语音播报] 保存设置失败: {ex.Message}");
-                StandardDialog.ShowError($"保存失败: {ex.Message}", "错误");
+                StandardDialog.ShowError($"保存失败：{ex.Message}", "保存失败");
             }
         }
 
@@ -404,7 +402,14 @@ namespace TM.Framework.Notifications.Sound.VoiceBroadcast
         {
             _settings.ResetToDefaults();
 
-            LoadSettings();
+            IsEnabled = _settings.IsEnabled;
+            Speed = _settings.Speed;
+            Volume = _settings.Volume;
+            Pitch = _settings.Pitch;
+            TestText = _settings.TestText;
+            BroadcastOnNotification = _settings.BroadcastOnNotification;
+            BroadcastOnError = _settings.BroadcastOnError;
+            BroadcastOnSuccess = _settings.BroadcastOnSuccess;
 
             TM.App.Log("[语音播报] 设置已重置");
             GlobalToast.Success("重置成功", "已恢复默认语音播报设置");

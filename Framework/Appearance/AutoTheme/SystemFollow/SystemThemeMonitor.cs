@@ -1,7 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
-using System.Linq;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Forms;
@@ -78,36 +76,39 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
         private void OnUserPreferenceChanged(object sender, UserPreferenceChangedEventArgs e)
         {
-            if (e.Category != UserPreferenceCategory.General && 
+            if (e.Category != UserPreferenceCategory.General &&
                 e.Category != UserPreferenceCategory.VisualStyle &&
                 e.Category != UserPreferenceCategory.Color)
             {
                 return;
             }
 
-            try
+            System.Windows.Application.Current?.Dispatcher.BeginInvoke(() =>
             {
-                var startTime = DateTime.Now;
-                var previousTheme = _changeHistory.Count > 0 ? _changeHistory[0].ToTheme : "未知";
-                var themeInfo = DetectCurrentTheme();
-                var duration = DateTime.Now - startTime;
-
-                TM.App.Log($"[SystemThemeMonitor] 检测到系统主题变化: {themeInfo}");
-
-                AddChangeRecord(previousTheme, themeInfo, duration);
-
-                ThemeChanged?.Invoke(this, new SystemThemeChangedEventArgs
+                try
                 {
-                    IsLightTheme = themeInfo.Contains("浅色"),
-                    IsHighContrast = themeInfo.Contains("高对比度"),
-                    AccentColor = GetAccentColor(),
-                    DetectedAt = DateTime.Now
-                });
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[SystemThemeMonitor] 处理主题变化失败: {ex.Message}");
-            }
+                    var startTime = DateTime.Now;
+                    var previousTheme = _changeHistory.Count > 0 ? _changeHistory[0].ToTheme : "未知";
+                    var themeInfo = DetectCurrentTheme();
+                    var duration = DateTime.Now - startTime;
+
+                    TM.App.Log($"[SystemThemeMonitor] 检测到系统主题变化: {themeInfo}");
+
+                    AddChangeRecord(previousTheme, themeInfo, duration);
+
+                    ThemeChanged?.Invoke(this, new SystemThemeChangedEventArgs
+                    {
+                        IsLightTheme = themeInfo.Contains("浅色"),
+                        IsHighContrast = themeInfo.Contains("高对比度"),
+                        AccentColor = GetAccentColor(),
+                        DetectedAt = DateTime.Now
+                    });
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[SystemThemeMonitor] 处理主题变化失败: {ex.Message}");
+                }
+            });
         }
 
         public string DetectCurrentTheme()
@@ -226,7 +227,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
                     var windowColor = key.GetValue("Window");
                     if (windowColor != null)
                     {
-                        return windowColor.ToString()?.StartsWith("255") == true ? "浅色" : "深色";
+                        return windowColor.ToString()?.StartsWith("255", StringComparison.Ordinal) == true ? "浅色" : "深色";
                     }
                 }
             }
@@ -399,7 +400,7 @@ namespace TM.Framework.Appearance.AutoTheme.SystemFollow
 
         public int BitsPerPixel { get; set; }
 
-        public string DisplayText => $"{(IsPrimary ? "🖥️ 主显示器" : "🖥️")} {Index}: {Resolution} ({BitsPerPixel}位色彩)";
+        public string DisplayText => $"{(IsPrimary ? "主显示器" : "显示器")} {Index}: {Resolution} ({BitsPerPixel}位色彩)";
     }
 
     public class ThemeChangeRecord

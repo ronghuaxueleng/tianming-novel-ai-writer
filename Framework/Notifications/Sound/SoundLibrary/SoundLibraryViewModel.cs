@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,11 +6,11 @@ using System.IO;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
 using Microsoft.Win32;
-using TM.Framework.Common.Helpers.MVVM;
 
 namespace TM.Framework.Notifications.Sound.SoundLibrary
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundLibraryViewModel : INotifyPropertyChanged
     {
         private ObservableCollection<SoundFile> _soundFiles;
@@ -165,6 +165,7 @@ namespace TM.Framework.Notifications.Sound.SoundLibrary
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class SoundFile : INotifyPropertyChanged
     {
         private string _name = string.Empty;

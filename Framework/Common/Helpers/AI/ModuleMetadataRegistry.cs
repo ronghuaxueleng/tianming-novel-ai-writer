@@ -36,6 +36,12 @@ public static class ModuleMetadataRegistry
             Description: "基于拆书分析生成三维度创作素材",
             ModuleType: "design"
         ),
+        ["短篇蓝图设计师"] = new(
+            OutputFields: new[] { "全篇简介", "章节蓝图" },
+            InputVariables: new[] { "短篇名称", "题材类型", "总章节数", "每章字数", "写作风格", "基调氛围", "全篇简介" },
+            Description: "生成短篇小说章节蓝图（含全篇简介与各章节事件/人物/结尾规划）",
+            ModuleType: "design"
+        ),
         ["小说设计师"] = new(
             OutputFields: System.Array.Empty<string>(),
             InputVariables: new[] { "规则名称" },

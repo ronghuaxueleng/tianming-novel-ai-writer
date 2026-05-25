@@ -1,11 +1,10 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 
 namespace TM.Services.Modules.ProjectData.Models.Guides
 {
     public class BlueprintGuide
     {
         [System.Text.Json.Serialization.JsonPropertyName("Module")] public string Module { get; set; } = "BlueprintGuide";
-        [System.Text.Json.Serialization.JsonPropertyName("SourceBookId")] public string SourceBookId { get; set; } = string.Empty;
         [System.Text.Json.Serialization.JsonPropertyName("Chapters")] public Dictionary<string, ChapterGuideEntry> Chapters { get; set; } = new();
         [System.Text.Json.Serialization.JsonPropertyName("ReverseIndex")] public ReverseIndex ReverseIndex { get; set; } = new();
     }

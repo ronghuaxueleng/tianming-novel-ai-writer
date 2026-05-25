@@ -1,15 +1,16 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
+using System.Windows.Threading;
 
 namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationHistoryViewModel : INotifyPropertyChanged
     {
         private readonly NotificationHistorySettings _settings;
@@ -28,6 +29,7 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
         }
         private string _searchKeyword = string.Empty;
         private string _selectedFilter = "全部";
+        private DispatcherTimer? _searchDebounce;
         private int _totalCount;
         private int _unreadCount;
 
@@ -40,7 +42,7 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
         public string SearchKeyword
         {
             get => _searchKeyword;
-            set { _searchKeyword = value; OnPropertyChanged(); FilterRecords(); }
+            set { _searchKeyword = value; OnPropertyChanged(); ScheduleFilterUpdate(); }
         }
 
         public string SelectedFilter
@@ -68,21 +70,33 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
         private void LoadRecords()
         {
             var historyData = _settings.GetRecords();
-            foreach (var data in historyData)
+            Records = new ObservableCollection<NotificationRecord>(historyData.Select(data => new NotificationRecord
             {
-                Records.Add(new NotificationRecord
-                {
-                    Id = data.Id,
-                    Title = data.Title,
-                    Content = data.Content,
-                    Time = data.Time,
-                    Type = data.Type,
-                    IsRead = data.IsRead
-                });
-            }
+                Id = data.Id,
+                Title = data.Title,
+                Content = data.Content,
+                Time = data.Time,
+                Type = data.Type,
+                IsRead = data.IsRead
+            }));
 
             UpdateStatistics();
             TM.App.Log($"[NotificationHistory] 加载了 {Records.Count} 条通知历史");
+        }
+
+        private void ScheduleFilterUpdate()
+        {
+            if (_searchDebounce == null)
+            {
+                _searchDebounce = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
+                _searchDebounce.Tick += (_, _) =>
+                {
+                    _searchDebounce.Stop();
+                    FilterRecords();
+                };
+            }
+            _searchDebounce.Stop();
+            _searchDebounce.Start();
         }
 
         private void FilterRecords()
@@ -137,6 +151,7 @@ namespace TM.Framework.Notifications.NotificationManagement.NotificationHistory
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class NotificationRecord : INotifyPropertyChanged
     {
         private bool _isRead;

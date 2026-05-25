@@ -30,21 +30,45 @@ namespace TM.Framework.Common.Services
 
         #endregion
 
+        #region 事件
+
+        public event Action<bool>? HasChaptersOrVolumesChanged;
+
+        #endregion
+
         #region 设置方法
 
         public void SetChapterState(int volumeCount, int chapterCount)
         {
+            var changed = VolumeCount != volumeCount || ChapterCount != chapterCount;
+            var prevHas = HasChaptersOrVolumes;
+
             VolumeCount = volumeCount;
             ChapterCount = chapterCount;
             HasChaptersOrVolumes = volumeCount > 0 || chapterCount > 0;
-            TM.App.Log($"[UIStateCache] 左栏状态已缓存: 分类={volumeCount}, 章节={chapterCount}, 显示引导={!HasChaptersOrVolumes}");
+
+            if (changed)
+            {
+                TM.App.Log($"[UIStateCache] 左栏状态已缓存: 分类={volumeCount}, 章节={chapterCount}, 显示引导={!HasChaptersOrVolumes}");
+            }
+
+            if (HasChaptersOrVolumes != prevHas)
+            {
+                HasChaptersOrVolumesChanged?.Invoke(HasChaptersOrVolumes);
+            }
         }
 
         public void SetSessionState(int sessionCount)
         {
+            var changed = SessionCount != sessionCount;
+
             SessionCount = sessionCount;
             HasHistorySessions = sessionCount > 0;
-            TM.App.Log($"[UIStateCache] 右栏状态已缓存: 会话数={sessionCount}, 显示引导={!HasHistorySessions}");
+
+            if (TM.App.IsDebugMode || changed)
+            {
+                TM.App.Log($"[UIStateCache] 右栏状态已缓存: 会话数={sessionCount}, 显示引导={!HasHistorySessions}");
+            }
         }
 
         public void MarkWarmedUp()

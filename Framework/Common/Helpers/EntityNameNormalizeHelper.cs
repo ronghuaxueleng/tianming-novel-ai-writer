@@ -22,6 +22,21 @@ namespace TM.Framework.Common.Helpers
 
     public static class EntityNameNormalizeHelper
     {
+        private static readonly Regex BracketAnnotationRegex = new(@"\s*[\(（\[【].*?[\)）\]】]\s*$", RegexOptions.Compiled);
+        private static readonly Regex AliasInBracketsRegex = new(@"[\(（\[【](.+?)[\)）\]】]", RegexOptions.Compiled);
+        private static readonly Regex LeadingNumberPrefixRegex = new(@"^\s*\d+\s*[\.、\-:\)）]\s*", RegexOptions.Compiled);
+        private static readonly Regex ChapterPrefixRegex = new(@"^.{0,30}?[-_—–\s]+(?=第\s*[\d一二三四五六七八九十百千零]+\s*[章卷])", RegexOptions.Compiled);
+        private static readonly Regex VolumeChapterPrefixRegex = new(@"^\s*第\s*\d+\s*卷\s*[-_\s]*第\s*\d+\s*章\s*[-_\s]*", RegexOptions.Compiled);
+        private static readonly Regex ChineseVolumeChapterPrefixRegex = new(@"^\s*第\s*[一二三四五六七八九十百千零]+\s*卷\s*[-_\s]*第\s*[一二三四五六七八九十百千零]+\s*章\s*[-_\s]*", RegexOptions.Compiled);
+        private static readonly Regex ChapterPrefixShortRegex = new(@"^\s*第\s*\d+\s*[章卷]\s*[：:、\-—–_]*\s*", RegexOptions.Compiled);
+        private static readonly Regex ChineseChapterPrefixRegex = new(@"^\s*第\s*[一二三四五六七八九十百千零]+\s*[章卷]\s*[：:、\-—–_]*\s*", RegexOptions.Compiled);
+        private static readonly Regex SceneBlueprintPrefixRegex = new(@"^\s*场景蓝图[-_]*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex SceneNumberPrefixRegex = new(@"^\s*场景\s*[-_]?\d+(?:-\d+)?\s*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex VolChPrefixRegex = new(@"^\s*vol\s*\d+\s*[_-]?ch\s*\d+\s*[-_]*\s*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex ChPrefixRegex = new(@"^\s*ch\s*\d+\s*[-_]*\s*", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex SceneRefRegex = new(@"(^|[-_\s])scene\s*[-_]?\d+(?:-\d+)?", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+        private static readonly Regex VolChRefRegex = new(@"(^|[-_\s])vol\d+(_?ch\d+)?(-\d+)?", RegexOptions.Compiled | RegexOptions.IgnoreCase);
+
         #region 核心匹配方法（带模式参数）
 
         public static string NormalizeSingle(string value, IEnumerable<string> candidates, EntityMatchMode mode)
@@ -141,6 +156,21 @@ namespace TM.Framework.Common.Helpers
                 return result;
             }
 
+            var normalizedCn = NormalizeChineseOrdinals(normalized);
+            if (!string.Equals(normalizedCn, normalized, StringComparison.Ordinal))
+            {
+                var cnMatch = list.FirstOrDefault(c =>
+                    string.Equals(c, normalizedCn, StringComparison.OrdinalIgnoreCase) ||
+                    string.Equals(NormalizeChineseOrdinals(c), normalizedCn, StringComparison.OrdinalIgnoreCase));
+                if (!string.IsNullOrEmpty(cnMatch))
+                {
+                    result.IsMatched = true;
+                    result.Matched = cnMatch;
+                    result.MatchType = "ChineseOrdinal";
+                    return result;
+                }
+            }
+
             var contains = list.FirstOrDefault(c => NameExistsInContent(c, normalized) || NameExistsInContent(normalized, c));
             if (!string.IsNullOrEmpty(contains))
             {
@@ -176,17 +206,31 @@ namespace TM.Framework.Common.Helpers
 
         public static bool IsIgnoredValue(string value)
         {
-            return string.Equals(value, "无", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "暂无", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "空", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "无所属", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "不适用", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "N/A", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "NA", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "None", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "-", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "/", StringComparison.OrdinalIgnoreCase) ||
-                   string.Equals(value, "null", StringComparison.OrdinalIgnoreCase);
+            var normalized = value?.Trim() ?? string.Empty;
+            return string.Equals(normalized, "无", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "暂无", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "空", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无所属", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无角色", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无地点", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无势力", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无物品", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无相关", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "无关联", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "不适用", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "未定", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "待定", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "未知", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "不详", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "没有", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "略", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "省略", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "N/A", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "NA", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "None", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "null", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "-", StringComparison.OrdinalIgnoreCase) ||
+                   string.Equals(normalized, "/", StringComparison.OrdinalIgnoreCase);
         }
 
         #endregion
@@ -209,7 +253,7 @@ namespace TM.Framework.Common.Helpers
                 return string.Empty;
 
             var t = name.Trim();
-            t = Regex.Replace(t, @"\s*[\(（\[【].*?[\)）\]】]\s*$", string.Empty);
+            t = BracketAnnotationRegex.Replace(t, string.Empty);
             return t.Trim();
         }
 
@@ -226,7 +270,7 @@ namespace TM.Framework.Common.Helpers
                 && content.Contains(primaryName, StringComparison.OrdinalIgnoreCase))
                 return true;
 
-            var aliasMatches = Regex.Matches(fullName, @"[\(（\[【](.+?)[\)）\]】]");
+            var aliasMatches = AliasInBracketsRegex.Matches(fullName);
             foreach (Match m in aliasMatches)
             {
                 var alias = m.Groups[1].Value.Trim();
@@ -242,21 +286,80 @@ namespace TM.Framework.Common.Helpers
         {
             if (string.IsNullOrWhiteSpace(name)) return string.Empty;
             var t = name.Trim();
-            t = Regex.Replace(t, @"^\s*\d+\s*[\.、\-:\)）]\s*", string.Empty);
-            t = Regex.Replace(t, @"^.{0,30}?[-_—–\s]+(?=第\s*[\d一二三四五六七八九十百千零]+\s*[章卷])", string.Empty);
-            t = Regex.Replace(t, @"^\s*第\s*\d+\s*卷\s*[-_\s]*第\s*\d+\s*章\s*[-_\s]*", string.Empty);
-            t = Regex.Replace(t, @"^\s*第\s*[一二三四五六七八九十百千零]+\s*卷\s*[-_\s]*第\s*[一二三四五六七八九十百千零]+\s*章\s*[-_\s]*", string.Empty);
-            t = Regex.Replace(t, @"^\s*第\s*\d+\s*[章卷]\s*[：:、\-—–_]*\s*", string.Empty);
-            t = Regex.Replace(t, @"^\s*第\s*[一二三四五六七八九十百千零]+\s*[章卷]\s*[：:、\-—–_]*\s*", string.Empty);
-            t = Regex.Replace(t, @"^\s*场景蓝图[-_]*", string.Empty, RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"^\s*场景\s*[-_]?\d+(?:-\d+)?\s*", string.Empty, RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"^\s*vol\s*\d+\s*[_-]?ch\s*\d+\s*[-_]*\s*", string.Empty, RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"^\s*ch\s*\d+\s*[-_]*\s*", string.Empty, RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"(^|[-_\s])scene\s*[-_]?\d+(?:-\d+)?", " ", RegexOptions.IgnoreCase);
-            t = Regex.Replace(t, @"(^|[-_\s])vol\d+(_?ch\d+)?(-\d+)?", " ", RegexOptions.IgnoreCase);
+            t = LeadingNumberPrefixRegex.Replace(t, string.Empty);
+            t = ChapterPrefixRegex.Replace(t, string.Empty);
+            t = VolumeChapterPrefixRegex.Replace(t, string.Empty);
+            t = ChineseVolumeChapterPrefixRegex.Replace(t, string.Empty);
+            t = ChapterPrefixShortRegex.Replace(t, string.Empty);
+            t = ChineseChapterPrefixRegex.Replace(t, string.Empty);
+            t = SceneBlueprintPrefixRegex.Replace(t, string.Empty);
+            t = SceneNumberPrefixRegex.Replace(t, string.Empty);
+            t = VolChPrefixRegex.Replace(t, string.Empty);
+            t = ChPrefixRegex.Replace(t, string.Empty);
+            t = SceneRefRegex.Replace(t, " ");
+            t = VolChRefRegex.Replace(t, " ");
             t = t.Replace("__", " ").Replace("--", " ");
             t = t.Trim(' ', '-', '_');
             return t.Trim();
+        }
+
+        private static readonly Regex ChineseOrdinalPattern = new(
+            @"第([〇零一二两三四五六七八九十百千万]+)([卷章节期集部篇回])",
+            RegexOptions.Compiled);
+
+        private static string NormalizeChineseOrdinals(string input)
+        {
+            if (string.IsNullOrWhiteSpace(input)) return input ?? string.Empty;
+            return ChineseOrdinalPattern.Replace(input, m =>
+            {
+                var num = ParseChineseNumber(m.Groups[1].Value);
+                return num > 0 ? $"第{num}{m.Groups[2].Value}" : m.Value;
+            });
+        }
+
+        private static int ParseChineseNumber(string s)
+        {
+            if (string.IsNullOrWhiteSpace(s)) return -1;
+
+            int result = 0, current = 0;
+            foreach (var c in s)
+            {
+                switch (c)
+                {
+                    case '〇':
+                    case '零': current = 0; break;
+                    case '一': current = 1; break;
+                    case '二':
+                    case '两': current = 2; break;
+                    case '三': current = 3; break;
+                    case '四': current = 4; break;
+                    case '五': current = 5; break;
+                    case '六': current = 6; break;
+                    case '七': current = 7; break;
+                    case '八': current = 8; break;
+                    case '九': current = 9; break;
+                    case '十':
+                        result += (current == 0 ? 1 : current) * 10;
+                        current = 0;
+                        break;
+                    case '百':
+                        result += (current == 0 ? 1 : current) * 100;
+                        current = 0;
+                        break;
+                    case '千':
+                        result += (current == 0 ? 1 : current) * 1000;
+                        current = 0;
+                        break;
+                    case '万':
+                        result += (current == 0 ? 1 : current) * 10000;
+                        current = 0;
+                        break;
+                    default:
+                        return -1;
+                }
+            }
+            result += current;
+            return result > 0 ? result : -1;
         }
 
         private static int LongestCommonSubstringLength(string a, string b)

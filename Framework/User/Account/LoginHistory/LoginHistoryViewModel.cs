@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
@@ -6,22 +6,21 @@ using System.Linq;
 using System.Runtime.CompilerServices;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.User.Account.LoginHistory;
 using TM.Framework.Common.Controls;
-using TM.Framework.Common.Services;
+using TM.Framework.Common.ViewModels;
 
 namespace TM.Framework.User.Account.LoginHistory
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LoginHistoryViewModel : INotifyPropertyChanged
     {
         private readonly LoginHistoryService _historyService;
 
         #region 属性
 
-        private ObservableCollection<LoginHistoryModel> _loginRecords;
-        public ObservableCollection<LoginHistoryModel> LoginRecords
+        private RangeObservableCollection<LoginHistoryModel> _loginRecords;
+        public RangeObservableCollection<LoginHistoryModel> LoginRecords
         {
             get => _loginRecords;
             set
@@ -32,7 +31,7 @@ namespace TM.Framework.User.Account.LoginHistory
             }
         }
 
-        public ObservableCollection<TreeNodeItem> LoginTree { get; } = new();
+        public RangeObservableCollection<TreeNodeItem> LoginTree { get; } = new();
 
         private DateTime? _filterStartDate;
         public DateTime? FilterStartDate
@@ -113,7 +112,7 @@ namespace TM.Framework.User.Account.LoginHistory
             }
         }
 
-        public string SecurityScoreColor => SecurityScore >= 80 ? "#4CAF50" : 
+        public string SecurityScoreColor => SecurityScore >= 80 ? "#4CAF50" :
                                            SecurityScore >= 60 ? "#FFA726" :
                                            SecurityScore >= 40 ? "#FF7043" : "#F44336";
 
@@ -143,8 +142,8 @@ namespace TM.Framework.User.Account.LoginHistory
             }
         }
 
-        private ObservableCollection<LoginHistoryModel> _activeSessions;
-        public ObservableCollection<LoginHistoryModel> ActiveSessions
+        private RangeObservableCollection<LoginHistoryModel> _activeSessions;
+        public RangeObservableCollection<LoginHistoryModel> ActiveSessions
         {
             get => _activeSessions;
             set
@@ -185,14 +184,14 @@ namespace TM.Framework.User.Account.LoginHistory
         public LoginHistoryViewModel(LoginHistoryService historyService)
         {
             _historyService = historyService;
-            _loginRecords = new ObservableCollection<LoginHistoryModel>();
-            _activeSessions = new ObservableCollection<LoginHistoryModel>();
+            _loginRecords = new RangeObservableCollection<LoginHistoryModel>();
+            _activeSessions = new RangeObservableCollection<LoginHistoryModel>();
             DeviceTypes = new ObservableCollection<string> { "全部", "Windows PC", "移动设备", "其他" };
 
             RefreshCommand = new RelayCommand(LoadLoginRecords);
             FilterCommand = new RelayCommand(ApplyFilter);
             ClearHistoryCommand = new RelayCommand(ClearHistory);
-            ExportCommand = new RelayCommand(ExportHistory);
+            ExportCommand = new AsyncRelayCommand(ExportHistoryAsync);
             ViewDetailsCommand = new RelayCommand<LoginHistoryModel>(ViewDetails);
             EndSessionCommand = new RelayCommand<string>(EndSession);
             ShowAnalyticsCommand = new RelayCommand(ShowAnalytics);
@@ -207,29 +206,24 @@ namespace TM.Framework.User.Account.LoginHistory
             try
             {
                 var sessions = _historyService.GetActiveSessions();
-                ActiveSessions.Clear();
-
-                foreach (var session in sessions)
+                ActiveSessions.ReplaceAll(sessions.Select(session => new LoginHistoryModel
                 {
-                    ActiveSessions.Add(new LoginHistoryModel
-                    {
-                        Id = session.Id,
-                        LoginTime = session.LoginTime,
-                        IpAddress = session.IpAddress,
-                        DeviceType = session.DeviceType,
-                        DeviceName = session.DeviceName,
-                        Location = session.Location,
-                        Browser = session.Browser,
-                        OperatingSystem = session.OperatingSystem,
-                        IsSuccess = session.IsSuccess,
-                        IsAbnormal = session.IsAbnormal,
-                        SessionId = session.SessionId,
-                        LogoutTime = session.LogoutTime,
-                        SessionDuration = session.SessionDuration,
-                        RiskLevel = session.RiskLevel,
-                        RiskReason = session.RiskReason
-                    });
-                }
+                    Id = session.Id,
+                    LoginTime = session.LoginTime,
+                    IpAddress = session.IpAddress,
+                    DeviceType = session.DeviceType,
+                    DeviceName = session.DeviceName,
+                    Location = session.Location,
+                    Browser = session.Browser,
+                    OperatingSystem = session.OperatingSystem,
+                    IsSuccess = session.IsSuccess,
+                    IsAbnormal = session.IsAbnormal,
+                    SessionId = session.SessionId,
+                    LogoutTime = session.LogoutTime,
+                    SessionDuration = session.SessionDuration,
+                    RiskLevel = session.RiskLevel,
+                    RiskReason = session.RiskReason
+                }).ToList());
 
                 ActiveSessionsCount = ActiveSessions.Count;
                 TM.App.Log($"[LoginHistoryViewModel] 加载了 {ActiveSessionsCount} 个活动会话");
@@ -250,14 +244,9 @@ namespace TM.Framework.User.Account.LoginHistory
             try
             {
                 var records = await _historyService.GetAllRecordsFromServerAsync();
-                LoginRecords.Clear();
-
-                foreach (var record in records)
-                {
-                    if (ShowOnlyAbnormal && !record.IsAbnormal)
-                        continue;
-
-                    LoginRecords.Add(new LoginHistoryModel
+                var newItems = records
+                    .Where(record => !ShowOnlyAbnormal || record.IsAbnormal)
+                    .Select(record => new LoginHistoryModel
                     {
                         Id = record.Id,
                         LoginTime = record.LoginTime,
@@ -274,8 +263,8 @@ namespace TM.Framework.User.Account.LoginHistory
                         SessionDuration = record.SessionDuration,
                         RiskLevel = record.RiskLevel,
                         RiskReason = record.RiskReason
-                    });
-                }
+                    }).ToList();
+                LoginRecords.ReplaceAll(newItems);
 
                 UpdateStatistics();
                 LoadActiveSessions();
@@ -284,53 +273,57 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 加载登录记录失败: {ex.Message}");
-                GlobalToast.Error("加载失败", ex.Message);
+                GlobalToast.Error("加载失败", $"加载失败：{ex.Message}");
             }
         }
 
         private void ApplyFilter()
         {
+            _ = ApplyFilterAsync();
+        }
+
+        private async Task ApplyFilterAsync()
+        {
             try
             {
-                var records = _historyService.GetFilteredRecords(
-                    FilterStartDate,
-                    FilterEndDate,
-                    SelectedDeviceType == "全部" ? null : SelectedDeviceType
-                );
+                var startDate = FilterStartDate;
+                var endDate = FilterEndDate;
+                var deviceType = SelectedDeviceType == "全部" ? null : SelectedDeviceType;
+                var onlyAbnormal = ShowOnlyAbnormal;
 
-                LoginRecords.Clear();
-                foreach (var record in records)
+                var filteredItems = await Task.Run(() =>
                 {
-                    if (ShowOnlyAbnormal && !record.IsAbnormal)
-                        continue;
+                    var records = _historyService.GetFilteredRecords(startDate, endDate, deviceType);
+                    return records
+                        .Where(record => !onlyAbnormal || record.IsAbnormal)
+                        .Select(record => new LoginHistoryModel
+                        {
+                            Id = record.Id,
+                            LoginTime = record.LoginTime,
+                            IpAddress = record.IpAddress,
+                            DeviceType = record.DeviceType,
+                            DeviceName = record.DeviceName,
+                            Location = record.Location,
+                            Browser = record.Browser,
+                            OperatingSystem = record.OperatingSystem,
+                            IsSuccess = record.IsSuccess,
+                            IsAbnormal = record.IsAbnormal,
+                            SessionId = record.SessionId,
+                            LogoutTime = record.LogoutTime,
+                            SessionDuration = record.SessionDuration,
+                            RiskLevel = record.RiskLevel,
+                            RiskReason = record.RiskReason
+                        }).ToList();
+                });
 
-                    LoginRecords.Add(new LoginHistoryModel
-                    {
-                        Id = record.Id,
-                        LoginTime = record.LoginTime,
-                        IpAddress = record.IpAddress,
-                        DeviceType = record.DeviceType,
-                        DeviceName = record.DeviceName,
-                        Location = record.Location,
-                        Browser = record.Browser,
-                        OperatingSystem = record.OperatingSystem,
-                        IsSuccess = record.IsSuccess,
-                        IsAbnormal = record.IsAbnormal,
-                        SessionId = record.SessionId,
-                        LogoutTime = record.LogoutTime,
-                        SessionDuration = record.SessionDuration,
-                        RiskLevel = record.RiskLevel,
-                        RiskReason = record.RiskReason
-                    });
-                }
-
+                LoginRecords.ReplaceAll(filteredItems);
                 UpdateStatistics();
                 GlobalToast.Info("筛选结果", $"找到 {LoginRecords.Count} 条记录");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 筛选失败: {ex.Message}");
-                GlobalToast.Error("筛选失败", ex.Message);
+                GlobalToast.Error("筛选失败", $"筛选失败：{ex.Message}");
             }
         }
 
@@ -352,15 +345,15 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 清空历史失败: {ex.Message}");
-                GlobalToast.Error("清空失败", ex.Message);
+                GlobalToast.Error("清空失败", $"清空失败：{ex.Message}");
             }
         }
 
-        private void ExportHistory()
+        private async System.Threading.Tasks.Task ExportHistoryAsync()
         {
             try
             {
-                var exportPath = _historyService.ExportHistory();
+                var exportPath = await _historyService.ExportHistoryAsync();
                 if (!string.IsNullOrEmpty(exportPath))
                 {
                     GlobalToast.Success("导出成功", $"已导出到: {exportPath}");
@@ -373,7 +366,7 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 导出失败: {ex.Message}");
-                GlobalToast.Error("导出失败", ex.Message);
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
@@ -413,7 +406,7 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 查看详情失败: {ex.Message}");
-                GlobalToast.Error("查看详情", $"操作失败: {ex.Message}");
+                GlobalToast.Error("查看详情", $"操作失败：{ex.Message}");
             }
         }
 
@@ -435,7 +428,7 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 结束会话失败: {ex.Message}");
-                GlobalToast.Error("结束会话", $"操作失败: {ex.Message}");
+                GlobalToast.Error("结束会话", $"操作失败：{ex.Message}");
             }
         }
 
@@ -456,11 +449,13 @@ namespace TM.Framework.User.Account.LoginHistory
 
                 if (stats.LocationDistribution.Count > 0)
                 {
-                    analytics += "\n\n地理位置分布:";
+                    var sb = new System.Text.StringBuilder(analytics);
+                    sb.Append("\n\n地理位置分布:");
                     foreach (var loc in stats.LocationDistribution.OrderByDescending(kv => kv.Value).Take(5))
                     {
-                        analytics += $"\n{loc.Key}: {loc.Value}次";
+                        sb.Append($"\n{loc.Key}: {loc.Value}次");
                     }
+                    analytics = sb.ToString();
                 }
 
                 StandardDialog.ShowInfo("统计分析", analytics);
@@ -468,36 +463,33 @@ namespace TM.Framework.User.Account.LoginHistory
             catch (Exception ex)
             {
                 TM.App.Log($"[LoginHistoryViewModel] 显示分析失败: {ex.Message}");
-                GlobalToast.Error("统计分析", $"操作失败: {ex.Message}");
+                GlobalToast.Error("统计分析", $"操作失败：{ex.Message}");
             }
         }
 
         private void BuildLoginTree()
         {
-            LoginTree.Clear();
-            foreach (var record in LoginRecords)
+            var newItems = LoginRecords.Select(record => new TreeNodeItem
             {
-                string icon = record.IsAbnormal ? "⚠️" : (record.SessionStatus == "活动中" ? "🟢" : "✅");
-                LoginTree.Add(new TreeNodeItem
-                {
-                    Name = $"{record.LoginTime:yyyy-MM-dd HH:mm} - {record.Location}",
-                    Icon = icon,
-                    Tag = record,
-                    IsExpanded = false,
-                    ShowChildCount = false
-                });
-            }
+                Name = $"{record.LoginTime:yyyy-MM-dd HH:mm} - {record.Location}",
+                Icon = record.IsAbnormal ? IconHelper.Get("Icon.Warning") : (record.SessionStatus == "活动中" ? IconHelper.Get("Icon.Online") : IconHelper.Get("Icon.CheckCircle")),
+                Tag = record,
+                IsExpanded = false,
+                ShowChildCount = false
+            }).ToList();
+            LoginTree.ReplaceAll(newItems);
             OnPropertyChanged(nameof(LoginTree));
         }
+
+        private TreeNodeItem? _selectedLoginNode;
 
         private void SelectLoginFromTree(object? parameter)
         {
             if (parameter is TreeNodeItem node)
             {
-                foreach (var item in LoginTree)
-                {
-                    item.IsSelected = false;
-                }
+                if (_selectedLoginNode != null)
+                    _selectedLoginNode.IsSelected = false;
+                _selectedLoginNode = node;
                 node.IsSelected = true;
             }
         }

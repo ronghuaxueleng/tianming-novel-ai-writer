@@ -7,16 +7,20 @@ using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Services.Framework.Settings;
 
 namespace TM.Framework.SystemSettings.Logging.LogFormat
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class LogFormatViewModel : INotifyPropertyChanged
     {
+        private static readonly Regex PlaceholderRegex = new(@"\{(\w+)(?::[\w\-:\.]+)?\}", RegexOptions.Compiled);
+        private static readonly Regex FieldNameRegex = new(@"^[a-zA-Z_][a-zA-Z0-9_]*$", RegexOptions.Compiled);
+
         private LogFormatSettings _settings;
         private readonly string _settingsFilePath;
         private readonly LogManager _logManager;
@@ -53,8 +57,8 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
             PresetTemplates = LogFormatSettings.PresetTemplates.Keys.ToList();
 
-            CustomFields = new ObservableCollection<CustomField>();
-            SavedTemplates = new ObservableCollection<FormatTemplate>();
+            CustomFields = new RangeObservableCollection<CustomField>();
+            SavedTemplates = new RangeObservableCollection<FormatTemplate>();
             ValidationResults = new ObservableCollection<ValidationResult>();
 
             AsyncSettingsLoader.LoadOrDefer<LogFormatSettings>(_settingsFilePath, s =>
@@ -67,7 +71,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                 ValidateTemplate();
             }, "LogFormat");
 
-            SaveCommand = new RelayCommand(SaveSettings);
+            SaveCommand = new RelayCommand(() => SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}")));
             ResetCommand = new RelayCommand(ResetSettings);
             ApplyPresetCommand = new RelayCommand(param => ApplyPreset((param as string)!));
             PreviewCommand = new RelayCommand(GeneratePreview);
@@ -79,8 +83,8 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             SaveAsTemplateCommand = new RelayCommand(SaveAsTemplate);
             LoadTemplateCommand = new RelayCommand(LoadTemplate);
             DeleteTemplateCommand = new RelayCommand(DeleteTemplate);
-            ExportTemplateCommand = new RelayCommand(ExportTemplate);
-            ImportTemplateCommand = new RelayCommand(ImportTemplate);
+            ExportTemplateCommand = new RelayCommand(() => ExportTemplate().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}")));
+            ImportTemplateCommand = new RelayCommand(() => ImportTemplate().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}")));
         }
 
         public string FormatTemplate
@@ -167,8 +171,8 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
         public List<OutputFormatType> OutputFormatTypes { get; }
         public List<FieldDataType> FieldDataTypes { get; }
         public List<string> PresetTemplates { get; }
-        public ObservableCollection<CustomField> CustomFields { get; }
-        public ObservableCollection<FormatTemplate> SavedTemplates { get; }
+        public RangeObservableCollection<CustomField> CustomFields { get; }
+        public RangeObservableCollection<FormatTemplate> SavedTemplates { get; }
         public ObservableCollection<ValidationResult> ValidationResults { get; }
 
         public ICommand SaveCommand { get; }
@@ -184,7 +188,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
         public ICommand ExportTemplateCommand { get; }
         public ICommand ImportTemplateCommand { get; }
 
-        private async void SaveSettings()
+        private async Task SaveSettings()
         {
             try
             {
@@ -194,12 +198,14 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                     Directory.CreateDirectory(directory);
                 }
 
-                var json = JsonSerializer.Serialize(_settings, JsonHelper.Default);
-                var tmpLfs = _settingsFilePath + ".tmp";
-                await File.WriteAllTextAsync(tmpLfs, json);
+                var tmpLfs = _settingsFilePath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLfs))
+                {
+                    await JsonSerializer.SerializeAsync(stream, _settings, JsonHelper.Default);
+                }
                 File.Move(tmpLfs, _settingsFilePath, overwrite: true);
 
-                _logManager.Reload();
+                await _logManager.ReloadAsync();
 
                 TM.App.Log($"[LogFormat] 保存设置成功");
                 GlobalToast.Success("保存成功", "日志格式设置已保存");
@@ -207,7 +213,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             catch (Exception ex)
             {
                 TM.App.Log($"[LogFormat] 保存设置失败: {ex.Message}");
-                GlobalToast.Error("保存失败", $"无法保存日志格式设置: {ex.Message}");
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
             }
         }
 
@@ -222,7 +228,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             {
                 _settings = new LogFormatSettings();
                 OnAllPropertiesChanged();
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}"));
                 GeneratePreview();
                 TM.App.Log($"[LogFormat] 重置设置成功");
                 GlobalToast.Info("已重置", "日志格式设置已恢复为默认值");
@@ -231,9 +237,9 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
         private void ApplyPreset(string presetName)
         {
-            if (!string.IsNullOrEmpty(presetName) && LogFormatSettings.PresetTemplates.ContainsKey(presetName))
+            if (!string.IsNullOrEmpty(presetName) && LogFormatSettings.PresetTemplates.TryGetValue(presetName, out var presetTemplate))
             {
-                FormatTemplate = LogFormatSettings.PresetTemplates[presetName];
+                FormatTemplate = presetTemplate;
                 TM.App.Log($"[LogFormat] 应用预设模板: {presetName}");
                 GlobalToast.Success("已应用", $"已应用预设模板 '{presetName}'");
             }
@@ -291,7 +297,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                 var allFields = new List<string>(LogFormatSettings.BuiltInFields);
                 allFields.AddRange(CustomFields.Select(f => f.Placeholder));
 
-                var placeholders = Regex.Matches(template, @"\{(\w+)(?::[\w\-:\.]+)?\}");
+                var placeholders = PlaceholderRegex.Matches(template);
 
                 foreach (Match match in placeholders)
                 {
@@ -336,13 +342,13 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
                 if (ValidationResults.Count == 0)
                 {
-                    ValidationMessage = "✅ 模板格式正确";
+                    ValidationMessage = "✓ 模板格式正确";
                 }
                 else
                 {
                     var errorCount = ValidationResults.Count(r => r.Severity == ValidationSeverity.Error);
                     var warningCount = ValidationResults.Count(r => r.Severity == ValidationSeverity.Warning);
-                    ValidationMessage = $"❌ {errorCount} 个错误, ⚠️ {warningCount} 个警告";
+                    ValidationMessage = $"✗ {errorCount} 个错误, [!] {warningCount} 个警告";
                 }
             }
             catch (Exception ex)
@@ -354,11 +360,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
         private void LoadCustomFields()
         {
-            CustomFields.Clear();
-            foreach (var field in _settings.CustomFields)
-            {
-                CustomFields.Add(field);
-            }
+            CustomFields.ReplaceAll(_settings.CustomFields.ToList());
         }
 
         private void AddCustomField()
@@ -366,7 +368,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             var fieldName = StandardDialog.ShowInput("请输入自定义字段名称（英文，无空格）", "添加自定义字段");
             if (!string.IsNullOrWhiteSpace(fieldName))
             {
-                if (!Regex.IsMatch(fieldName, @"^[a-zA-Z_][a-zA-Z0-9_]*$"))
+                if (!FieldNameRegex.IsMatch(fieldName))
                 {
                     GlobalToast.Error("格式错误", "字段名称只能包含字母、数字和下划线，且不能以数字开头");
                     return;
@@ -423,11 +425,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
         private void LoadSavedTemplates()
         {
-            SavedTemplates.Clear();
-            foreach (var template in _settings.SavedTemplates)
-            {
-                SavedTemplates.Add(template);
-            }
+            SavedTemplates.ReplaceAll(_settings.SavedTemplates.ToList());
         }
 
         private void SaveAsTemplate()
@@ -464,7 +462,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
 
                 SavedTemplates.Insert(0, template);
                 _settings.SavedTemplates.Insert(0, template);
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}"));
 
                 TM.App.Log($"[LogFormat] 保存模板: {templateName}");
                 GlobalToast.Success("保存成功", $"已保存模板 '{templateName}'");
@@ -479,13 +477,13 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                 return;
             }
 
-            var template = SavedTemplates.OrderByDescending(t => t.LastUsedTime).FirstOrDefault();
+            var template = SavedTemplates.MaxBy(t => t.LastUsedTime);
             if (template != null)
             {
                 FormatTemplate = template.Template;
                 template.LastUsedTime = DateTime.Now;
                 template.UsageCount++;
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}"));
 
                 TM.App.Log($"[LogFormat] 加载模板: {template.Name}");
                 GlobalToast.Success("加载成功", $"已加载模板 '{template.Name}'");
@@ -506,7 +504,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                 {
                     SavedTemplates.Remove(template);
                     _settings.SavedTemplates.Remove(template);
-                    SaveSettings();
+                    SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}"));
 
                     TM.App.Log($"[LogFormat] 删除模板: {template.Name}");
                     GlobalToast.Success("删除成功", $"已删除模板 '{template.Name}'");
@@ -518,7 +516,7 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             }
         }
 
-        private async void ExportTemplate()
+        private async Task ExportTemplate()
         {
             try
             {
@@ -536,9 +534,11 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                     ExportTime = DateTime.Now
                 };
 
-                var json = JsonSerializer.Serialize(exportData, JsonHelper.Default);
-                var tmpLfe = exportPath + ".tmp";
-                await File.WriteAllTextAsync(tmpLfe, json);
+                var tmpLfe = exportPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+                await using (var stream = File.Create(tmpLfe))
+                {
+                    await JsonSerializer.SerializeAsync(stream, exportData, JsonHelper.Default);
+                }
                 File.Move(tmpLfe, exportPath, overwrite: true);
 
                 TM.App.Log($"[LogFormat] 导出模板到: {exportPath}");
@@ -547,11 +547,11 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
             catch (Exception ex)
             {
                 TM.App.Log($"[LogFormat] 导出模板失败: {ex.Message}");
-                GlobalToast.Error("导出失败", $"无法导出模板: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 
-        private async void ImportTemplate()
+        private async Task ImportTemplate()
         {
             try
             {
@@ -563,12 +563,12 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                     return;
                 }
 
-                var json = await File.ReadAllTextAsync(importPath).ConfigureAwait(true);
-                var importData = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(json);
+                await using var stream = File.OpenRead(importPath);
+                var importData = await JsonSerializer.DeserializeAsync<Dictionary<string, JsonElement>>(stream).ConfigureAwait(true);
 
-                if (importData != null && importData.ContainsKey("Templates"))
+                if (importData != null && importData.TryGetValue("Templates", out var templatesElement))
                 {
-                    var templates = JsonSerializer.Deserialize<List<FormatTemplate>>(importData["Templates"].GetRawText());
+                    var templates = JsonSerializer.Deserialize<List<FormatTemplate>>(templatesElement.GetRawText());
                     if (templates != null)
                     {
                         foreach (var template in templates)
@@ -582,9 +582,9 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                     }
                 }
 
-                if (importData != null && importData.ContainsKey("CustomFields"))
+                if (importData != null && importData.TryGetValue("CustomFields", out var customFieldsElement))
                 {
-                    var fields = JsonSerializer.Deserialize<List<CustomField>>(importData["CustomFields"].GetRawText());
+                    var fields = JsonSerializer.Deserialize<List<CustomField>>(customFieldsElement.GetRawText());
                     if (fields != null)
                     {
                         foreach (var field in fields)
@@ -598,14 +598,14 @@ namespace TM.Framework.SystemSettings.Logging.LogFormat
                     }
                 }
 
-                SaveSettings();
+                SaveSettings().SafeFireAndForget(ex => TM.App.Log($"[LogFormatViewModel] {ex.Message}"));
                 TM.App.Log($"[LogFormat] 导入模板成功");
                 GlobalToast.Success("导入成功", "已导入模板和自定义字段");
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[LogFormat] 导入模板失败: {ex.Message}");
-                GlobalToast.Error("导入失败", $"无法导入模板: {ex.Message}");
+                GlobalToast.Error("导入失败", $"导入失败：{ex.Message}");
             }
         }
 

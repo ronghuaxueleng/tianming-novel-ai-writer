@@ -1,8 +1,8 @@
 using System;
 using System.Collections.Generic;
 using System.Linq;
+using System.Reflection;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Services.Modules.ProjectData.Models.Generate.VolumeDesign;
 
 namespace TM.Modules.Generate.Elements.VolumeDesign.Services
@@ -10,33 +10,68 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
     public class CategoryDeletedEventArgs : EventArgs
     {
         public string CategoryName { get; }
-        public CategoryDeletedEventArgs(string categoryName) => CategoryName = categoryName;
+        public string CategoryId { get; }
+        public CategoryDeletedEventArgs(string categoryName, string categoryId)
+        {
+            CategoryName = categoryName;
+            CategoryId = categoryId;
+        }
     }
 
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
     public class VolumeDesignService : ModuleServiceBase<VolumeDesignCategory, VolumeDesignData>
     {
         public event EventHandler<EventArgs>? DataChanged;
 
         public event EventHandler<CategoryDeletedEventArgs>? CategoryDeleted;
 
+        private int _dataChangePending;
+
         private void RaiseDataChanged()
         {
-            try
+            if (System.Threading.Interlocked.Exchange(ref _dataChangePending, 1) == 1) return;
+            var dispatcher = System.Windows.Application.Current?.Dispatcher;
+            if (dispatcher != null)
             {
-                DataChanged?.Invoke(this, EventArgs.Empty);
+                dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, new Action(() =>
+                {
+                    try
+                    {
+                        DataChanged?.Invoke(this, EventArgs.Empty);
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[VolumeDesignService] 通知数据变更事件失败: {ex.Message}");
+                    }
+                    finally
+                    {
+                        System.Threading.Interlocked.Exchange(ref _dataChangePending, 0);
+                    }
+                }));
             }
-            catch (Exception ex)
+            else
             {
-                TM.App.Log($"[VolumeDesignService] 通知数据变更事件失败: {ex.Message}");
+                try
+                {
+                    DataChanged?.Invoke(this, EventArgs.Empty);
+                }
+                catch (Exception ex)
+                {
+                    TM.App.Log($"[VolumeDesignService] 通知数据变更事件失败: {ex.Message}");
+                }
+                finally
+                {
+                    System.Threading.Interlocked.Exchange(ref _dataChangePending, 0);
+                }
             }
         }
 
-        public void RaiseCategoryDeleted(string categoryName)
+        public void RaiseCategoryDeleted(string categoryName, string categoryId)
         {
             try
             {
-                CategoryDeleted?.Invoke(this, new CategoryDeletedEventArgs(categoryName));
-                TM.App.Log($"[VolumeDesignService] 分类删除事件已触发: {categoryName}");
+                CategoryDeleted?.Invoke(this, new CategoryDeletedEventArgs(categoryName, categoryId));
+                TM.App.Log($"[VolumeDesignService] 分类删除事件已触发: {categoryName} (id={categoryId})");
             }
             catch (Exception ex)
             {
@@ -52,6 +87,8 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
         {
         }
 
+        protected override string? GetEntityTypeKeyForPropagation() => "volumedesign";
+
         public List<VolumeDesignData> GetAllVolumeDesigns() => GetAllData();
 
         public void AddVolumeDesign(VolumeDesignData data)
@@ -60,6 +97,11 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
             if (string.IsNullOrWhiteSpace(data.Id))
             {
                 data.Id = ShortIdGenerator.New("D");
+            }
+            if (data.VolumeNumber > 0 && GetAllData().Any(v => v.VolumeNumber == data.VolumeNumber))
+            {
+                TM.App.Log($"[VolumeDesignService] 卷号 {data.VolumeNumber} 已存在，跳过添加");
+                return;
             }
             data.CreatedAt = DateTime.Now;
             data.UpdatedAt = DateTime.Now;
@@ -73,6 +115,11 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
             if (string.IsNullOrWhiteSpace(data.Id))
             {
                 data.Id = ShortIdGenerator.New("D");
+            }
+            if (data.VolumeNumber > 0 && GetAllData().Any(v => v.VolumeNumber == data.VolumeNumber))
+            {
+                TM.App.Log($"[VolumeDesignService] 卷号 {data.VolumeNumber} 已存在，跳过添加");
+                return;
             }
             data.CreatedAt = DateTime.Now;
             data.UpdatedAt = DateTime.Now;
@@ -101,7 +148,7 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
             var item = DataItems.FirstOrDefault(d => d.Id == id);
             if (item != null)
             {
-                RaiseCategoryDeleted(GetDerivedCategoryName(item));
+                RaiseCategoryDeleted(GetDerivedCategoryName(item), item.Id);
             }
             DeleteData(id);
             RaiseDataChanged();
@@ -111,7 +158,7 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
         {
             foreach (var item in DataItems.ToList())
             {
-                RaiseCategoryDeleted(GetDerivedCategoryName(item));
+                RaiseCategoryDeleted(GetDerivedCategoryName(item), item.Id);
             }
             var count = DataItems.Count;
             DataItems.Clear();
@@ -122,9 +169,11 @@ namespace TM.Modules.Generate.Elements.VolumeDesign.Services
 
         private static string GetDerivedCategoryName(VolumeDesignData item)
         {
-            return item.VolumeNumber > 0
-                ? $"第{item.VolumeNumber}卷 {item.VolumeTitle}".Trim()
-                : item.Name;
+            if (item.VolumeNumber <= 0) return item.Name;
+            var cleanTitle = System.Text.RegularExpressions.Regex.Replace(
+                (item.VolumeTitle ?? string.Empty).Trim(),
+                @"^第\s*\d+\s*卷\s*[：:]\s*", string.Empty);
+            return $"第{item.VolumeNumber}卷 {cleanTitle}".Trim();
         }
 
         protected override int OnBeforeDeleteData(string dataId)

@@ -1,7 +1,7 @@
-<UserControl x:Class="TM.Framework.Common.Controls.EmojiPicker"
+﻿<UserControl x:Class="TM.Framework.Common.Controls.EmojiPicker"
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-             xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
+             xmlns:System="clr-namespace:System;assembly=mscorlib"
              x:Name="Root">
 
     <ComboBox SelectedItem="{Binding SelectedEmoji, ElementName=Root, Mode=TwoWay}"
@@ -9,7 +9,8 @@
               Height="36">
         <ComboBox.ItemTemplate>
             <DataTemplate>
-                <emoji:TextBlock Text="{Binding}" FontSize="16"/>
+                <Image Source="{Binding Converter={StaticResource IconKeyToImageSourceConverter}}"
+                       Width="18" Height="18" Margin="2"/>
             </DataTemplate>
         </ComboBox.ItemTemplate>
         <ComboBox.ItemContainerStyle>
@@ -18,13 +19,13 @@
                 <Setter Property="Template">
                     <Setter.Value>
                         <ControlTemplate TargetType="ComboBoxItem">
-                            <Border x:Name="ItemBorder" 
-                                    Background="Transparent" 
+                            <Border x:Name="ItemBorder"
+                                    Background="Transparent"
                                     Padding="{TemplateBinding Padding}"
                                     CornerRadius="4">
                                 <Border x:Name="IconBorder"
-                                        Background="{DynamicResource ContentBackground}"
-                                        BorderBrush="{DynamicResource BorderBrush}"
+                                        Background="{DynamicResource ContentBackgroundGlass}"
+                                        BorderBrush="{DynamicResource GlassBorderBrush}"
                                         BorderThickness="1"
                                         CornerRadius="6"
                                         Padding="8,6"
@@ -48,63 +49,63 @@
         </ComboBox.ItemContainerStyle>
 
         <ComboBox.Items>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🎨</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📁</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">💾</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🗑️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">⚙️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔄</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">➕</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">✏️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📤</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📥</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">✅</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">❌</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">⚠️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">ℹ️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">⭐</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔒</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔓</System:String>
+            <System:String>Icon.Palette</System:String>
+            <System:String>Icon.Folder</System:String>
+            <System:String>Icon.Save</System:String>
+            <System:String>Icon.Delete</System:String>
+            <System:String>Icon.Settings</System:String>
+            <System:String>Icon.Refresh</System:String>
+            <System:String>Icon.Add</System:String>
+            <System:String>Icon.Edit</System:String>
+            <System:String>Icon.Export</System:String>
+            <System:String>Icon.Import</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🏠</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">👤</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔔</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🌍</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🎯</System:String>
+            <System:String>Icon.Check</System:String>
+            <System:String>Icon.Close</System:String>
+            <System:String>Icon.Warning</System:String>
+            <System:String>Icon.Info</System:String>
+            <System:String>Icon.Star</System:String>
+            <System:String>Icon.Lock</System:String>
+            <System:String>Icon.Unlock</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📝</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📖</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📚</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📜</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔍</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🗂️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📋</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📑</System:String>
+            <System:String>Icon.Home</System:String>
+            <System:String>Icon.User</System:String>
+            <System:String>Icon.Bell</System:String>
+            <System:String>Icon.Globe</System:String>
+            <System:String>Icon.Target</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🌍</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🏛️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🗺️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🕰️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">⚔️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🗓️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🧭</System:String>
+            <System:String>Icon.Note</System:String>
+            <System:String>Icon.Book</System:String>
+            <System:String>Icon.Books</System:String>
+            <System:String>Icon.Scroll</System:String>
+            <System:String>Icon.Search</System:String>
+            <System:String>Icon.Drawer</System:String>
+            <System:String>Icon.Clipboard</System:String>
+            <System:String>Icon.Document</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">👤</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🎭</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">💪</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🧠</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">❤️</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔗</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">✨</System:String>
+            <System:String>Icon.Landscape</System:String>
+            <System:String>Icon.Institution</System:String>
+            <System:String>Icon.Map</System:String>
+            <System:String>Icon.Timer</System:String>
+            <System:String>Icon.Sword</System:String>
+            <System:String>Icon.Calendar</System:String>
+            <System:String>Icon.Crosshair</System:String>
 
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">📦</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🔧</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">💡</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🚀</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🎪</System:String>
-            <System:String xmlns:System="clr-namespace:System;assembly=mscorlib">🎲</System:String>
+            <System:String>Icon.Character</System:String>
+            <System:String>Icon.Mask</System:String>
+            <System:String>Icon.Shield</System:String>
+            <System:String>Icon.Brain</System:String>
+            <System:String>Icon.Heart</System:String>
+            <System:String>Icon.Link</System:String>
+            <System:String>Icon.Sparkle</System:String>
+
+            <System:String>Icon.Package</System:String>
+            <System:String>Icon.Tools</System:String>
+            <System:String>Icon.Lightbulb</System:String>
+            <System:String>Icon.Rocket</System:String>
+            <System:String>Icon.Fire</System:String>
+            <System:String>Icon.Diamond</System:String>
         </ComboBox.Items>
     </ComboBox>
 </UserControl>
-

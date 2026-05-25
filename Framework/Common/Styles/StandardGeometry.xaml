@@ -4,7 +4,7 @@
 
     <CornerRadius x:Key="SmallRadius">6,6,6,6</CornerRadius>
     <CornerRadius x:Key="MediumRadius">8,8,8,8</CornerRadius>
-    <CornerRadius x:Key="LargeRadius">4,4,4,4</CornerRadius>
+    <CornerRadius x:Key="LargeRadius">8,8,8,8</CornerRadius>
 
     <Thickness x:Key="StandardBorder">1,1,1,1</Thickness>
     <Thickness x:Key="ThickBorder">2,2,2,2</Thickness>
@@ -25,11 +25,12 @@
     <sys:Double x:Key="ThemeCardWidth">165</sys:Double>
     <sys:Double x:Key="ThemeCardHeight">145</sys:Double>
 
-    <DropShadowEffect x:Key="StandardShadowEffect" 
-                      ShadowDepth="0" 
-                      BlurRadius="12" 
-                      Opacity="0.2" 
-                      Color="#000000"/>
+    <DropShadowEffect x:Key="StandardShadowEffect"
+                      ShadowDepth="0"
+                      BlurRadius="12"
+                      Opacity="0.2"
+                      Color="#000000"
+                      RenderingBias="Performance"/>
 
 </ResourceDictionary>
 

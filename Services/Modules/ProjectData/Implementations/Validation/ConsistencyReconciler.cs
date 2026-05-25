@@ -1,33 +1,31 @@
-using System;
+﻿using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Services;
-using TM.Services.Framework.AI.SemanticKernel;
-using TM.Services.Modules.ProjectData.Models.Guides;
+using TM.Services.Modules.ProjectData.Implementations.Guides;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
-    public class ConsistencyReconciler
+    public partial class ConsistencyReconciler
     {
         private readonly GuideManager _guideManager;
         private readonly ChapterSummaryStore _summaryStore;
         private readonly ChapterMilestoneStore _milestoneStore;
-        private readonly VectorSearchService _vectorSearchService;
+        private readonly ChapterChangesWalStore _changesWalStore;
 
         public ConsistencyReconciler(
             GuideManager guideManager,
             ChapterSummaryStore summaryStore,
             ChapterMilestoneStore milestoneStore,
-            VectorSearchService vectorSearchService)
+            ChapterChangesWalStore changesWalStore)
         {
             _guideManager = guideManager;
             _summaryStore = summaryStore;
             _milestoneStore = milestoneStore;
-            _vectorSearchService = vectorSearchService;
+            _changesWalStore = changesWalStore;
         }
 
         public class ReconcileResult
@@ -42,18 +40,24 @@ namespace TM.Services.Modules.ProjectData.Implementations
             public int KeywordIndexRepaired { get; set; }
             public int FactArchivesRepaired { get; set; }
             public int TrackingOrphansCleared { get; set; }
-            public List<string> Errors { get; set; } = new();
+            public int TrackingGapsRepaired { get; set; }
+            public int VectorOrphansCleared { get; set; }
+            public int FirstDescriptionCaptured { get; set; }
+            public ConcurrentBag<string> Errors { get; set; } = new();
 
             public bool HasRepairs =>
                 StagingCleaned > 0 || BakCleaned > 0 ||
                 SummariesRepaired > 0 || VectorReindexed > 0 ||
                 CorruptedGuides.Count > 0 || TrackingGapSummariesRepaired > 0 ||
-                KeywordIndexRepaired > 0 || FactArchivesRepaired > 0 || TrackingOrphansCleared > 0;
+                KeywordIndexRepaired > 0 || FactArchivesRepaired > 0 ||
+                TrackingOrphansCleared > 0 || TrackingGapsRepaired > 0 ||
+                VectorOrphansCleared > 0 || FirstDescriptionCaptured > 0;
         }
 
         public async Task<ReconcileResult> ReconcileAsync()
         {
             var result = new ReconcileResult();
+            var projectAtStart = TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName;
             TM.App.Log("[Reconciler] 开始一致性对账...");
 
             try
@@ -69,18 +73,24 @@ namespace TM.Services.Modules.ProjectData.Implementations
             try
             {
                 CleanStagingAndBackups(result);
+                if (TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName != projectAtStart) return result;
 
-                await ValidateGuidesIntegrityAsync(result);
+                await ValidateGuidesIntegrityAsync(result).ConfigureAwait(false);
+                if (TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName != projectAtStart) return result;
 
-                await ReconcileSummariesAsync(result);
+                await ReconcileChangesWalAsync(result).ConfigureAwait(false);
+                if (TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName != projectAtStart) return result;
 
-                await ReconcileVectorIndexAsync(result);
+                await ReconcileSummariesAsync(result).ConfigureAwait(false);
+                if (TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName != projectAtStart) return result;
 
-                await DetectTrackingGapsAsync(result);
+                await DetectTrackingGapsAsync(result).ConfigureAwait(false);
+                if (TM.Framework.Common.Helpers.Storage.StoragePathHelper.CurrentProjectName != projectAtStart) return result;
 
-                await ReconcileKeywordIndexAsync(result);
-
-                await ReconcileFactArchivesAsync(result);
+                await Task.WhenAll(
+                    ReconcileKeywordIndexAsync(result),
+                    ReconcileFactArchivesAsync(result),
+                    ReconcileVectorIndicesAsync(result)).ConfigureAwait(false);
             }
             catch (Exception ex)
             {
@@ -93,7 +103,9 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 TM.App.Log($"[Reconciler] done: s={result.StagingCleaned}, b={result.BakCleaned}, " +
                            $"sm={result.SummariesRepaired}, vi={result.VectorReindexed}, " +
                            $"cg={result.CorruptedGuides.Count}, tg={result.TrackingGaps.Count}, " +
-                           $"kw={result.KeywordIndexRepaired}, fa={result.FactArchivesRepaired}");
+                           $"wal={result.TrackingGapsRepaired}, " +
+                           $"kw={result.KeywordIndexRepaired}, fa={result.FactArchivesRepaired}, " +
+                           $"fd={result.FirstDescriptionCaptured}");
             }
             else
             {
@@ -101,6 +113,69 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
 
             return result;
+        }
+
+        private async Task ReconcileChangesWalAsync(ReconcileResult result)
+        {
+            try
+            {
+                _changesWalStore.CleanupOrphanTmp();
+
+                var chaptersPath = StoragePathHelper.GetProjectChaptersPath();
+                if (!Directory.Exists(chaptersPath)) return;
+
+                var walDir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides", "changes_wal");
+
+                var mdFiles = Directory.GetFiles(chaptersPath, "*.md", SearchOption.TopDirectoryOnly);
+                if (mdFiles.Length == 0) return;
+
+                var mdChapterIds = new HashSet<string>(
+                    mdFiles.Select(f => Path.GetFileNameWithoutExtension(f)),
+                    StringComparer.OrdinalIgnoreCase);
+
+                var walIds = _changesWalStore.GetAllChapterIds();
+                if (walIds.Count == 0) return;
+
+                var callback = ServiceLocator.Get<ContentGenerationCallback>();
+                foreach (var walId in walIds)
+                {
+                    if (!mdChapterIds.Contains(walId))
+                    {
+                        _changesWalStore.Delete(walId);
+                        continue;
+                    }
+
+                    try
+                    {
+                        var mdPath = Path.Combine(chaptersPath, $"{walId}.md");
+                        var walPath = Path.Combine(walDir, $"{walId}.json");
+                        if (!File.Exists(mdPath) || !File.Exists(walPath))
+                        {
+                            _changesWalStore.Delete(walId);
+                            continue;
+                        }
+                        if (File.GetLastWriteTimeUtc(mdPath) < File.GetLastWriteTimeUtc(walPath))
+                        {
+                            _changesWalStore.Delete(walId);
+                            continue;
+                        }
+                    }
+                    catch
+                    {
+                        continue;
+                    }
+
+                    var changes = await _changesWalStore.TryReadAsync(walId).ConfigureAwait(false);
+                    if (changes == null) continue;
+
+                    var ok = await callback.RepairTrackingFromWalAsync(walId, changes).ConfigureAwait(false);
+                    if (ok) result.TrackingGapsRepaired++;
+                }
+            }
+            catch (Exception ex)
+            {
+                result.Errors.Add($"WAL回放失败: {ex.Message}");
+            }
         }
 
         private void CleanStagingAndBackups(ReconcileResult result)
@@ -244,9 +319,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
             var guideFiles = Directory.GetFiles(guidesPath, "*.json", SearchOption.AllDirectories);
             foreach (var file in guideFiles)
             {
+                var rel = Path.GetRelativePath(guidesPath, file);
+                if (rel.StartsWith($"changes_wal{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase))
+                    continue;
+
                 try
                 {
-                    var json = await File.ReadAllTextAsync(file);
+                    var json = await File.ReadAllTextAsync(file).ConfigureAwait(false);
                     using var doc = JsonDocument.Parse(json);
                 }
                 catch (Exception ex)
@@ -260,9 +339,14 @@ namespace TM.Services.Modules.ProjectData.Implementations
                     {
                         try
                         {
-                            var bakJson = await File.ReadAllTextAsync(bakFile);
+                            var bakJson = await File.ReadAllTextAsync(bakFile).ConfigureAwait(false);
                             using var bakDoc = JsonDocument.Parse(bakJson);
-                            File.Copy(bakFile, file, overwrite: true);
+                            await Task.Run(async () =>
+                            {
+                                await using var s = File.OpenRead(bakFile);
+                                await using var d = File.Create(file);
+                                await s.CopyToAsync(d).ConfigureAwait(false);
+                            }).ConfigureAwait(false);
                             result.CorruptedGuides.Remove(fileName);
                             TM.App.Log($"[Reconciler] 已从 bak恢复损坏的guide: {fileName}");
                         }
@@ -278,7 +362,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         var msg = $"content_guide 分片 [{fileName}] 已损坏且无法自动恢复，请重新执行【全量打包】以重建指导文件。";
                         if (!result.Errors.Contains(msg))
                             result.Errors.Add(msg);
-                        TM.App.Log($"[Reconciler] ⚠️ {msg}");
+                        TM.App.Log($"[Reconciler] [!] {msg}");
                     }
                 }
             }
@@ -288,7 +372,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 try
                 {
-                    await File.ReadAllTextAsync(file);
+                    await File.ReadAllTextAsync(file).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -310,7 +394,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             Dictionary<string, string> existingSummaries;
             try
             {
-                existingSummaries = await _summaryStore.GetAllSummariesAsync();
+                existingSummaries = await _summaryStore.GetAllSummariesAsync().ConfigureAwait(false);
             }
             catch
             {
@@ -327,13 +411,13 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 {
                     try
                     {
-                        await _summaryStore.RemoveSummaryAsync(orphanId);
+                        await _summaryStore.RemoveSummaryAsync(orphanId).ConfigureAwait(false);
                         TM.App.Log($"[Reconciler] 删除孤立摘要: {orphanId}（MD不存在）");
                         result.SummariesRepaired++;
                         var p = ChapterParserHelper.ParseChapterId(orphanId);
                         if (p.HasValue) orphanAffectedVolumes.Add(p.Value.volumeNumber);
                     }
-                    catch { }
+                    catch (Exception ex) { TM.App.Log($"[Reconciler] 删除孤立摘要失败 {orphanId}: {ex.Message}"); }
                 }
             }
 
@@ -341,8 +425,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 try
                 {
-                    var volSummaries = await _summaryStore.GetVolumeSummariesAsync(vol);
-                    await _milestoneStore.RebuildVolumeMilestoneAsync(vol, volSummaries);
+                    var volSummaries = await _summaryStore.GetVolumeSummariesAsync(vol).ConfigureAwait(false);
+                    await _milestoneStore.RebuildVolumeMilestoneAsync(vol, volSummaries).ConfigureAwait(false);
                     TM.App.Log($"[Reconciler] 已重建第{vol}卷里程碑（因清理{orphanAffectedVolumes.Count}条孤立摘要）");
                 }
                 catch (Exception ex)
@@ -360,11 +444,11 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
                 try
                 {
-                    var content = await ReadHeadAsync(mdFile, 2000);
+                    var content = await ReadHeadAsync(mdFile, 2000).ConfigureAwait(false);
                     var summary = ExtractSummaryFromHead(content);
                     if (!string.IsNullOrWhiteSpace(summary))
                     {
-                        await _summaryStore.SetSummaryAsync(chapterId, summary);
+                        await _summaryStore.SetSummaryAsync(chapterId, summary).ConfigureAwait(false);
                         result.SummariesRepaired++;
                         TM.App.Log($"[Reconciler] 补建摘要: {chapterId}");
                         var vol = ChapterParserHelper.ParseChapterId(chapterId)?.volumeNumber ?? 1;
@@ -381,8 +465,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
             {
                 try
                 {
-                    var volSummaries = await _summaryStore.GetVolumeSummariesAsync(vol);
-                    await _milestoneStore.RebuildVolumeMilestoneAsync(vol, volSummaries);
+                    var volSummaries = await _summaryStore.GetVolumeSummariesAsync(vol).ConfigureAwait(false);
+                    await _milestoneStore.RebuildVolumeMilestoneAsync(vol, volSummaries).ConfigureAwait(false);
                     TM.App.Log($"[Reconciler] 已重建第{vol}卷里程碑（因补建{volSummaries.Count}条摘要）");
                 }
                 catch (Exception ex)
@@ -392,455 +476,6 @@ namespace TM.Services.Modules.ProjectData.Implementations
             }
         }
 
-        private async Task ReconcileVectorIndexAsync(ReconcileResult result)
-        {
-            try
-            {
-                var flagPath = GetVectorDegradedFlagPath();
-                var wasDegraded = File.Exists(flagPath);
-                if (wasDegraded)
-                    TM.App.Log("[Reconciler] 检测到向量索引降级标志，将尝试重建...");
-
-                await _vectorSearchService.InitializeAsync();
-
-                if (wasDegraded && File.Exists(flagPath))
-                {
-                    if (_vectorSearchService.CurrentMode != SearchMode.Keyword)
-                    {
-                        try { File.Delete(flagPath); } catch { }
-                        TM.App.Log("[Reconciler] 向量索引重建完成，已清除降级标志");
-                        result.VectorReindexed++;
-                    }
-                    else
-                    {
-                        TM.App.Log("[Reconciler] 向量服务处于Keyword模式，保留降级标志以便后续自愈");
-                    }
-                }
-                else
-                {
-                    TM.App.Log("[Reconciler] 向量索引增量对账完成");
-                }
-            }
-            catch (Exception ex)
-            {
-                result.Errors.Add($"向量索引对账失败: {ex.Message}");
-                TM.App.Log($"[Reconciler] 向量索引对账失败: {ex.Message}");
-            }
-        }
-
-        private static string GetVectorDegradedFlagPath()
-        {
-            return Path.Combine(StoragePathHelper.GetCurrentProjectPath(), "vector_degraded.flag");
-        }
-
-        private async Task DetectTrackingGapsAsync(ReconcileResult result)
-        {
-            var chaptersPath = StoragePathHelper.GetProjectChaptersPath();
-            if (!Directory.Exists(chaptersPath)) return;
-
-            var mdFiles = Directory.GetFiles(chaptersPath, "*.md", SearchOption.TopDirectoryOnly);
-            if (mdFiles.Length <= 1) return;
-
-            try
-            {
-                var _rcVols = _guideManager.GetExistingVolumeNumbers("character_state_guide.json");
-                var stateGuide = new CharacterStateGuide();
-                foreach (var _rcV in _rcVols.TakeLast(5))
-                {
-                    var _rcG = await _guideManager.GetGuideAsync<CharacterStateGuide>(GuideManager.GetVolumeFileName("character_state_guide.json", _rcV));
-                    foreach (var (_rcId, _rcE) in _rcG.Characters)
-                    {
-                        if (!stateGuide.Characters.ContainsKey(_rcId))
-                            stateGuide.Characters[_rcId] = new CharacterStateEntry { Name = _rcE.Name };
-                        stateGuide.Characters[_rcId].StateHistory.AddRange(_rcE.StateHistory);
-                    }
-                }
-
-                var trackedChapters = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var entry in stateGuide.Characters.Values)
-                {
-                    foreach (var state in entry.StateHistory)
-                    {
-                        if (!string.IsNullOrWhiteSpace(state.Chapter))
-                            trackedChapters.Add(state.Chapter);
-                    }
-                }
-
-                if (trackedChapters.Count == 0) return;
-
-                foreach (var mdFile in mdFiles)
-                {
-                    var chapterId = Path.GetFileNameWithoutExtension(mdFile);
-                    if (!trackedChapters.Contains(chapterId))
-                    {
-                        result.TrackingGaps.Add(chapterId);
-                    }
-                }
-
-                var mdChapterIds = new HashSet<string>(
-                    mdFiles.Select(f => Path.GetFileNameWithoutExtension(f)),
-                    StringComparer.OrdinalIgnoreCase);
-
-                var orphanTracked = trackedChapters
-                    .Where(id => !mdChapterIds.Contains(id))
-                    .ToList();
-
-                if (orphanTracked.Count > 0)
-                {
-                    TM.App.Log($"[Reconciler] 发现{orphanTracked.Count}个追踪 guide 孤立章节，开始清理...");
-                    var callback = ServiceLocator.Get<ContentGenerationCallback>();
-                    foreach (var orphanId in orphanTracked)
-                    {
-                        try
-                        {
-                            await callback.OnChapterDeletedAsync(orphanId);
-                            result.TrackingOrphansCleared++;
-                            TM.App.Log($"[Reconciler] 已清理孤立追踪数据: {orphanId}");
-                        }
-                        catch (Exception ex)
-                        {
-                            TM.App.Log($"[Reconciler] 清理孤立追踪数据失败: {orphanId}: {ex.Message}");
-                        }
-                    }
-                }
-
-                if (result.TrackingGaps.Count > 0)
-                {
-                    TM.App.Log($"[Reconciler] gaps: {result.TrackingGaps.Count}: " +
-                               string.Join(", ", result.TrackingGaps.Take(10)));
-
-                    foreach (var gapId in result.TrackingGaps)
-                    {
-                        try
-                        {
-                            var existing = await _summaryStore.GetSummaryAsync(gapId);
-                            if (!string.IsNullOrWhiteSpace(existing)) continue;
-
-                            var mdPath = Path.Combine(chaptersPath, $"{gapId}.md");
-                            if (!File.Exists(mdPath)) continue;
-
-                            var head = await ReadHeadAsync(mdPath, 2000);
-                            var summary = ExtractSummaryFromHead(head);
-                            if (string.IsNullOrWhiteSpace(summary)) continue;
-
-                            await _summaryStore.SetSummaryAsync(gapId, summary);
-                            result.TrackingGapSummariesRepaired++;
-                        }
-                        catch { }
-                    }
-
-                    if (result.TrackingGapSummariesRepaired > 0)
-                        TM.App.Log($"[Reconciler] 已为{result.TrackingGapSummariesRepaired}个缺章补齐摘要");
-
-                    try
-                    {
-                        var chapList = string.Join("、", result.TrackingGaps.Take(5));
-                        var suffix = result.TrackingGaps.Count > 5 ? $" 等{result.TrackingGaps.Count}章" : string.Empty;
-                        GlobalToast.Warning("追踪数据缺口",
-                            $"{chapList}{suffix} 的角色/冲突等追踪数据缺失，建议重新导入该章内容修复。");
-                    }
-                    catch { }
-                }
-            }
-            catch (Exception ex)
-            {
-                result.Errors.Add($"追踪缺章检测失败: {ex.Message}");
-            }
-        }
-
-        private async Task ReconcileKeywordIndexAsync(ReconcileResult result)
-        {
-            var chaptersPath = StoragePathHelper.GetProjectChaptersPath();
-            if (!Directory.Exists(chaptersPath)) return;
-
-            var mdFiles = Directory.GetFiles(chaptersPath, "*.md", SearchOption.TopDirectoryOnly);
-            if (mdFiles.Length == 0) return;
-
-            try
-            {
-                var kwIndexService = ServiceLocator.Get<KeywordChapterIndexService>();
-
-                var indexedIds = await kwIndexService.GetIndexedChapterIdsAsync();
-                var missingIds = mdFiles
-                    .Select(f => Path.GetFileNameWithoutExtension(f))
-                    .Where(id => !indexedIds.Contains(id))
-                    .ToList();
-
-                if (missingIds.Count == 0) return;
-                TM.App.Log($"[Reconciler] 关键词索引缺失 {missingIds.Count} 章，开始 best-effort 补建...");
-
-                var knownEntityNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                try
-                {
-                    var volNums = _guideManager.GetExistingVolumeNumbers("character_state_guide.json");
-                    foreach (var vol in volNums.TakeLast(5))
-                    {
-                        var guide = await _guideManager.GetGuideAsync<CharacterStateGuide>(
-                            GuideManager.GetVolumeFileName("character_state_guide.json", vol));
-                        foreach (var entry in guide.Characters.Values)
-                            if (!string.IsNullOrWhiteSpace(entry.Name))
-                                knownEntityNames.Add(entry.Name);
-                    }
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[Reconciler] 关键词对账：读取角色Guide失败（仍继续）: {ex.Message}");
-                }
-
-                try
-                {
-                    var foreshadowGuide = await _guideManager.GetGuideAsync<ForeshadowingStatusGuide>("foreshadowing_status_guide.json");
-                    foreach (var f in foreshadowGuide.Foreshadowings.Values)
-                        if (!string.IsNullOrWhiteSpace(f.Name)) knownEntityNames.Add(f.Name);
-                }
-                catch { }
-
-                try
-                {
-                    var locVolNums = _guideManager.GetExistingVolumeNumbers("location_state_guide.json");
-                    foreach (var vol in locVolNums.TakeLast(5))
-                    {
-                        var locGuide = await _guideManager.GetGuideAsync<LocationStateGuide>(
-                            GuideManager.GetVolumeFileName("location_state_guide.json", vol));
-                        foreach (var e in locGuide.Locations.Values)
-                            if (!string.IsNullOrWhiteSpace(e.Name)) knownEntityNames.Add(e.Name);
-                    }
-                }
-                catch { }
-
-                try
-                {
-                    var facVolNums = _guideManager.GetExistingVolumeNumbers("faction_state_guide.json");
-                    foreach (var vol in facVolNums.TakeLast(5))
-                    {
-                        var facGuide = await _guideManager.GetGuideAsync<FactionStateGuide>(
-                            GuideManager.GetVolumeFileName("faction_state_guide.json", vol));
-                        foreach (var e in facGuide.Factions.Values)
-                            if (!string.IsNullOrWhiteSpace(e.Name)) knownEntityNames.Add(e.Name);
-                    }
-                }
-                catch { }
-
-                foreach (var chapterId in missingIds)
-                {
-                    try
-                    {
-                        var summary = await _summaryStore.GetSummaryAsync(chapterId);
-                        if (string.IsNullOrWhiteSpace(summary)) continue;
-
-                        var matched = knownEntityNames
-                            .Where(name => summary.Contains(name, StringComparison.OrdinalIgnoreCase))
-                            .ToList();
-
-                        if (matched.Count == 0) continue;
-
-                        await kwIndexService.IndexChapterFromKeywordsAsync(chapterId, matched);
-                        result.KeywordIndexRepaired++;
-                    }
-                    catch { }
-                }
-
-                if (result.KeywordIndexRepaired > 0)
-                    TM.App.Log($"[Reconciler] 关键词索引 best-effort 补建完成: {result.KeywordIndexRepaired} 章");
-            }
-            catch (Exception ex)
-            {
-                result.Errors.Add($"关键词索引对账失败: {ex.Message}");
-                TM.App.Log($"[Reconciler] 关键词索引对账失败: {ex.Message}");
-            }
-        }
-
-        private async Task ReconcileFactArchivesAsync(ReconcileResult result)
-        {
-            try
-            {
-                var archivesDir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides", "fact_archives");
-                var allSummaries = await _summaryStore.GetAllSummariesAsync();
-                if (allSummaries.Count == 0) return;
-
-                var presentVolumes = new HashSet<int>();
-                foreach (var chapterId in allSummaries.Keys)
-                {
-                    var p = ChapterParserHelper.ParseChapterId(chapterId);
-                    if (p.HasValue) presentVolumes.Add(p.Value.volumeNumber);
-                }
-
-                var volumeDesignService = ServiceLocator.Get<TM.Modules.Generate.Elements.VolumeDesign.Services.VolumeDesignService>();
-                if (!volumeDesignService.IsInitialized)
-                    await volumeDesignService.InitializeAsync();
-                var allVolumeDesigns = volumeDesignService.GetAllVolumeDesigns();
-
-                foreach (var vol in presentVolumes.OrderBy(v => v))
-                {
-                    var isMaxVol = !presentVolumes.Contains(vol + 1);
-                    bool isCompleted;
-                    var volDesign = allVolumeDesigns.FirstOrDefault(d => d.VolumeNumber == vol);
-                    if (volDesign != null && volDesign.EndChapter > 0)
-                    {
-                        var endChapterId = $"vol{vol}_ch{volDesign.EndChapter}";
-                        isCompleted = allSummaries.ContainsKey(endChapterId);
-                    }
-                    else
-                    {
-                        var volChapterCount = allSummaries.Keys
-                            .Count(id => ChapterParserHelper.ParseChapterId(id)?.volumeNumber == vol);
-                        isCompleted = !isMaxVol || volChapterCount >= 7;
-                    }
-                    if (!isCompleted) continue;
-
-                    var archivePath = Path.Combine(archivesDir, $"vol{vol}.json");
-                    if (File.Exists(archivePath)) continue;
-
-                    try
-                    {
-                        var volSummaries = await _summaryStore.GetVolumeSummariesAsync(vol);
-                        var lastChapterId = volSummaries.Keys
-                            .Where(id => ChapterParserHelper.ParseChapterId(id)?.volumeNumber == vol)
-                            .OrderBy(id => ChapterParserHelper.ParseChapterId(id)?.chapterNumber ?? 0)
-                            .LastOrDefault() ?? $"vol{vol}_ch0";
-
-                        var snapshot = await ServiceLocator.Get<FactSnapshotExtractor>().ExtractVolumeEndSnapshotAsync(lastChapterId);
-                        Directory.CreateDirectory(archivesDir);
-                        await ServiceLocator.Get<VolumeFactArchiveStore>().ArchiveVolumeAsync(vol, snapshot, lastChapterId);
-
-                        result.FactArchivesRepaired++;
-                        TM.App.Log($"[Reconciler] 已回补第{vol}卷 fact_archive（full snapshot）");
-                    }
-                    catch (Exception ex)
-                    {
-                        TM.App.Log($"[Reconciler] 第{vol}卷 fact_archive 回补失败: {ex.Message}");
-                    }
-                }
-            }
-            catch (Exception ex)
-            {
-                result.Errors.Add($"fact_archive对账失败: {ex.Message}");
-            }
-        }
-
-        public async Task AutoArchiveVolumeIfNeededAsync(int volumeNumber)
-        {
-            try
-            {
-                var volSummaries = await _summaryStore.GetVolumeSummariesAsync(volumeNumber);
-                var lastChapterId = volSummaries.Keys
-                    .Where(id => ChapterParserHelper.ParseChapterId(id)?.volumeNumber == volumeNumber)
-                    .OrderBy(id => ChapterParserHelper.ParseChapterId(id)?.chapterNumber ?? 0)
-                    .LastOrDefault();
-
-                if (string.IsNullOrEmpty(lastChapterId))
-                {
-                    try
-                    {
-                        var chaptersPath = StoragePathHelper.GetProjectChaptersPath();
-                        if (Directory.Exists(chaptersPath))
-                        {
-                            var pattern = $"vol{volumeNumber}_ch";
-                            var mdFiles = Directory.GetFiles(chaptersPath, "*.md", SearchOption.TopDirectoryOnly)
-                                .Select(Path.GetFileNameWithoutExtension)
-                                .Where(n => !string.IsNullOrWhiteSpace(n) && n.StartsWith(pattern, StringComparison.OrdinalIgnoreCase))
-                                .Select(n => n!)
-                                .ToList();
-
-                            var best = mdFiles
-                                .Select(id => new { Id = id, Parsed = ChapterParserHelper.ParseChapterId(id) })
-                                .Where(x => x.Parsed.HasValue && x.Parsed.Value.volumeNumber == volumeNumber)
-                                .OrderBy(x => x.Parsed!.Value.chapterNumber)
-                                .LastOrDefault();
-
-                            if (best != null)
-                            {
-                                lastChapterId = best.Id;
-                                TM.App.Log($"[Reconciler] 第{volumeNumber}卷摘要缺失，已从章节文件推断卷末章: {lastChapterId}");
-                            }
-                        }
-                    }
-                    catch (Exception inferEx)
-                    {
-                        TM.App.Log($"[Reconciler] 第{volumeNumber}卷推断卷末章失败: {inferEx.Message}");
-                    }
-                }
-
-                if (string.IsNullOrEmpty(lastChapterId))
-                {
-                    TM.App.Log($"[Reconciler] 第{volumeNumber}卷无已生成章节，跳过自动存档");
-                    return;
-                }
-
-                try
-                {
-                    var volumeDesignService = ServiceLocator.Get<TM.Modules.Generate.Elements.VolumeDesign.Services.VolumeDesignService>();
-                    if (!volumeDesignService.IsInitialized)
-                        await volumeDesignService.InitializeAsync();
-                    var volDesign = volumeDesignService.GetAllVolumeDesigns().FirstOrDefault(d => d.VolumeNumber == volumeNumber);
-                    if (volDesign != null && volDesign.EndChapter > 0)
-                    {
-                        var endChapterId = $"vol{volumeNumber}_ch{volDesign.EndChapter}";
-                        if (!string.Equals(lastChapterId, endChapterId, StringComparison.OrdinalIgnoreCase))
-                        {
-                            var chaptersPath = StoragePathHelper.GetProjectChaptersPath();
-                            var endFile = Path.Combine(chaptersPath, $"{endChapterId}.md");
-                            if (volSummaries.ContainsKey(endChapterId) || File.Exists(endFile))
-                            {
-                                lastChapterId = endChapterId;
-                            }
-                            else
-                            {
-                                TM.App.Log($"[Reconciler] 第{volumeNumber}卷未到EndChapter={volDesign.EndChapter}，跳过自动存档（last={lastChapterId}）");
-                                return;
-                            }
-                        }
-                    }
-                }
-                catch (Exception p6Ex)
-                {
-                    TM.App.Log($"[Reconciler] P6 EndChapter校验失败（非致命，继续旧逻辑）: {p6Ex.Message}");
-                }
-
-                var snapshot = await ServiceLocator.Get<FactSnapshotExtractor>().ExtractVolumeEndSnapshotAsync(lastChapterId);
-                var archivesDir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides", "fact_archives");
-                Directory.CreateDirectory(archivesDir);
-                await ServiceLocator.Get<VolumeFactArchiveStore>().ArchiveVolumeAsync(volumeNumber, snapshot, lastChapterId);
-
-                TM.App.Log($"[Reconciler] 第{volumeNumber}卷自动存档完成，最后章节: {lastChapterId}");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[Reconciler] 第{volumeNumber}卷自动存档失败（非致命）: {ex.Message}");
-            }
-        }
-
-        private static async Task<string> ReadHeadAsync(string filePath, int maxChars)
-        {
-            var bufferSize = maxChars * 3;
-            var buffer = new byte[bufferSize];
-            int bytesRead;
-
-            using (var stream = new FileStream(filePath, FileMode.Open, FileAccess.Read, FileShare.Read))
-            {
-                bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length);
-            }
-
-            if (bytesRead == 0) return string.Empty;
-            var text = System.Text.Encoding.UTF8.GetString(buffer, 0, bytesRead);
-            return text.Length > maxChars ? text[..maxChars] : text;
-        }
-
-        private static string ExtractSummaryFromHead(string content)
-        {
-            if (string.IsNullOrEmpty(content)) return string.Empty;
-
-            var cleaned = content.Replace("\r\n", " ").Replace("\n", " ").Trim();
-            if (cleaned.Length <= 500) return cleaned;
-
-            var cutRegion = cleaned[..500];
-            var lastSentenceEnd = cutRegion.LastIndexOfAny(new[] { '。', '！', '？', '…', '"' });
-            if (lastSentenceEnd > 200)
-            {
-                return cutRegion[..(lastSentenceEnd + 1)] + "……";
-            }
-
-            return cutRegion + "……";
-        }
     }
 }
+

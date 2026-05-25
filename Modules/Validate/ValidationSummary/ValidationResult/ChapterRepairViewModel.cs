@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
@@ -6,19 +6,21 @@ using System.Runtime.CompilerServices;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Controls.Dialogs;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
 using TM.Framework.UI.Workspace.CenterPanel.Controls;
+using System.Reflection;
 using TM.Services.Modules.ProjectData.Interfaces;
 
 namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 {
+    [Obfuscation(Exclude = true)]
     public enum RepairDialogState { Reading, Generating, Comparing }
 
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class ChapterRepairViewModel : INotifyPropertyChanged
     {
         private readonly string _chapterId;
+        private readonly Guid _repairSessionId = Guid.NewGuid();
         private readonly IGeneratedContentService _contentService;
         private CancellationTokenSource? _repairCts;
 
@@ -29,8 +31,8 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             Problems = problems;
             _contentService = ServiceLocator.Get<IGeneratedContentService>();
 
-            RepairCommand = new RelayCommand(_ => StartRepairAsync(), () => State == RepairDialogState.Reading);
-            ConfirmCommand = new RelayCommand(_ => ConfirmSaveAsync(), () => State == RepairDialogState.Comparing);
+            RepairCommand = new RelayCommand(_ => StartRepairAsync().SafeFireAndForget(ex => TM.App.Log($"[ChapterRepairViewModel] {ex.Message}")), () => State == RepairDialogState.Reading);
+            ConfirmCommand = new RelayCommand(_ => ConfirmSaveAsync().SafeFireAndForget(ex => TM.App.Log($"[ChapterRepairViewModel] {ex.Message}")), () => State == RepairDialogState.Comparing);
             CancelRepairCommand = new RelayCommand(_ => CancelRepair(), () => State == RepairDialogState.Generating && _repairCts != null);
         }
 
@@ -123,7 +125,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
 
         #region 修复逻辑
 
-        private async void StartRepairAsync()
+        private async Task StartRepairAsync()
         {
             var skChat = ServiceLocator.Get<TM.Services.Framework.AI.SemanticKernel.SKChatService>();
             if (skChat.IsWorkspaceBatchGenerating)
@@ -155,16 +157,8 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
                 ProgressText = "正在准备上下文...";
 
                 var hints = Problems.Select(p => p.Summary).Where(s => !string.IsNullOrWhiteSpace(s)).ToList();
-
-                repairService.ProgressChanged += OnProgressChanged;
-                try
-                {
-                    RepairedContent = await repairService.RepairChapterAsync(_chapterId, hints, _repairCts.Token);
-                }
-                finally
-                {
-                    repairService.ProgressChanged -= OnProgressChanged;
-                }
+                var repairProgress = new Progress<string>(OnProgressChanged);
+                RepairedContent = await repairService.RepairChapterAsync(_chapterId, hints, _repairCts.Token, repairProgress, _repairSessionId);
 
                 ConsistencyHint = await repairService.CheckNextChapterConsistencyAsync(_chapterId, RepairedContent);
                 OnPropertyChanged(nameof(HasConsistencyHint));
@@ -180,7 +174,7 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             catch (Exception ex)
             {
                 TM.App.Log($"[ChapterRepairViewModel] 修复失败: {ex.Message}");
-                GlobalToast.Error("修复失败", ex.Message);
+                GlobalToast.Error("修复失败", $"修复失败：{ex.Message}");
                 State = RepairDialogState.Reading;
             }
             finally
@@ -195,33 +189,31 @@ namespace TM.Modules.Validate.ValidationSummary.ValidationResult
             _repairCts?.Cancel();
         }
 
+        public void Cleanup()
+        {
+            ServiceLocator.Get<ChapterRepairService>().ClearRepairSession(_repairSessionId);
+        }
+
         private void OnProgressChanged(string text)
         {
             ProgressText = text;
         }
 
-        private async void ConfirmSaveAsync()
+        private async Task ConfirmSaveAsync()
         {
             State = RepairDialogState.Generating;
             try
             {
                 var repairService = ServiceLocator.Get<ChapterRepairService>();
-                repairService.ProgressChanged += OnProgressChanged;
-                try
-                {
-                    await repairService.SaveRepairedAsync(_chapterId, RepairedContent);
-                }
-                finally
-                {
-                    repairService.ProgressChanged -= OnProgressChanged;
-                }
+                var repairProgress = new Progress<string>(OnProgressChanged);
+                await repairService.SaveRepairedAsync(_chapterId, RepairedContent, repairProgress, _repairSessionId);
                 GlobalToast.Success("修复完成", $"章节已成功修复并保存");
                 CloseRequested?.Invoke();
             }
             catch (Exception ex)
             {
                 TM.App.Log($"[ChapterRepairViewModel] 保存失败: {ex.Message}");
-                GlobalToast.Error("保存失败", ex.Message);
+                GlobalToast.Error("保存失败", $"保存失败：{ex.Message}");
                 State = RepairDialogState.Comparing;
             }
         }

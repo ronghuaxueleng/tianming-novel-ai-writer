@@ -1,4 +1,5 @@
 using System;
+using System.Windows.Media;
 
 namespace TM.Framework.Appearance.Animation.ThemeTransition
 {
@@ -64,8 +65,8 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
 
         private static double EaseInOutQuad(double t)
         {
-            return t < 0.5 
-                ? 2 * t * t 
+            return t < 0.5
+                ? 2 * t * t
                 : -1 + (4 - 2 * t) * t;
         }
 
@@ -151,7 +152,7 @@ namespace TM.Framework.Appearance.Animation.ThemeTransition
     public class EasingFunctionItem
     {
         public EasingFunctionType Type { get; set; }
-        public string Icon { get; set; } = "";
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = "";
         public string Description { get; set; } = "";
     }

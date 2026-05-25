@@ -1,18 +1,16 @@
 using System;
-using System.Collections.Generic;
-using System.Net;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
-using TM.Framework.Common.Services;
 
 namespace TM.Framework.User.Services
 {
-    public class ApiService
+    public class ApiService : IDisposable
     {
-
+        private bool _disposed;
         private readonly HttpClient _httpClient;
         private readonly JsonSerializerOptions _jsonOptions;
 
@@ -27,19 +25,27 @@ namespace TM.Framework.User.Services
 
         public static string UserAgent { get; set; } = "TianMing/1.0";
 
-        public static bool UseSystemProxy { get; set; } = true;
+        public static string FallbackUrl { get; set; } = "https://api-t.example.com";
+
+        private static volatile bool _usingFallback;
+        private static DateTime _fallbackTime = DateTime.MinValue;
+
+        private static string GetActiveBase()
+        {
+            if (_usingFallback && !string.IsNullOrEmpty(FallbackUrl)
+                && (DateTime.UtcNow - _fallbackTime).TotalMinutes >= 2)
+            {
+                _usingFallback = false;
+                TM.App.Log("[ApiService] 探测主通道...");
+            }
+            return (_usingFallback && !string.IsNullOrEmpty(FallbackUrl)) ? FallbackUrl : BaseUrl;
+        }
 
         #endregion
 
         public ApiService()
         {
-            var handler = SslPinningHandler.CreatePinnedHandler(UseSystemProxy);
-            if (UseSystemProxy)
-            {
-                handler.Proxy = WebRequest.GetSystemWebProxy();
-                if (handler.Proxy != null)
-                    handler.Proxy.Credentials = CredentialCache.DefaultCredentials;
-            }
+            var handler = SslPinningHandler.CreatePinnedHandler(useProxy: false);
 
             _httpClient = new HttpClient(handler)
             {
@@ -74,7 +80,44 @@ namespace TM.Framework.User.Services
             return result;
         }
 
+        private static readonly SemaphoreSlim _refreshLock = new(1, 1);
+        private static Task<ApiResponse<RefreshTokenResult>>? _inFlightRefresh;
+
         public async Task<ApiResponse<RefreshTokenResult>> RefreshTokenAsync()
+        {
+            var inFlight = _inFlightRefresh;
+            if (inFlight != null)
+            {
+                return await inFlight.ConfigureAwait(false);
+            }
+
+            await _refreshLock.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                inFlight = _inFlightRefresh;
+                if (inFlight != null)
+                {
+                    return await inFlight.ConfigureAwait(false);
+                }
+
+                var task = DoRefreshAsync();
+                _inFlightRefresh = task;
+                try
+                {
+                    return await task.ConfigureAwait(false);
+                }
+                finally
+                {
+                    _inFlightRefresh = null;
+                }
+            }
+            finally
+            {
+                _refreshLock.Release();
+            }
+        }
+
+        private async Task<ApiResponse<RefreshTokenResult>> DoRefreshAsync()
         {
             var request = new RefreshTokenRequest
             {
@@ -170,6 +213,21 @@ namespace TM.Framework.User.Services
 
         #endregion
 
+        #region 天命模型配置
+
+        public async Task<ApiResponse<BuiltInConfigsResponse>> GetBuiltInConfigsAsync()
+        {
+            return await GetAsync<BuiltInConfigsResponse>("/api/config/builtin-configs");
+        }
+
+        public async Task<ApiResponse<object>> VerifyAccessPasswordAsync(string password, string category)
+        {
+            return await PostAsync<object>("/api/config/verify-access-password",
+                new { password, category });
+        }
+
+        #endregion
+
         #region 会员接口
 
         public async Task<ApiResponse<SubscriptionInfo>> GetSubscriptionAsync()
@@ -218,14 +276,15 @@ namespace TM.Framework.User.Services
             return await SendAsync<T>(HttpMethod.Delete, path, null, requiresAuth, requiresSign);
         }
 
-        private async Task<ApiResponse<T>> SendAsync<T>(HttpMethod method, string path, object? body, bool requiresAuth, bool requiresSign, bool isRetry = false)
+        private async Task<ApiResponse<T>> SendAsync<T>(HttpMethod method, string path, object? body, bool requiresAuth, bool requiresSign, bool isRetry = false, bool triedFallback = false)
         {
+            var activeBase = GetActiveBase();
             try
             {
                 if (requiresAuth && !isRetry && TokenManager.IsAccessTokenExpired && TokenManager.HasRefreshToken)
                 {
                     TM.App.Log("[ApiService] refreshing...");
-                    var refreshResult = await RefreshTokenAsync();
+                    var refreshResult = await RefreshTokenAsync().ConfigureAwait(false);
                     if (!refreshResult.Success)
                     {
                         TM.App.Log("[ApiService] refresh fail");
@@ -233,8 +292,8 @@ namespace TM.Framework.User.Services
                     }
                 }
 
-                var url = BaseUrl.TrimEnd('/') + path;
-                var request = new HttpRequestMessage(method, url);
+                var url = activeBase.TrimEnd('/') + path;
+                using var request = new HttpRequestMessage(method, url);
 
                 request.Headers.Add("X-Client-Id", TokenManager.ClientId);
 
@@ -258,8 +317,8 @@ namespace TM.Framework.User.Services
                     request.Headers.Add("X-Sign", signHeaders.Signature);
                 }
 
-                var response = await _httpClient.SendAsync(request);
-                var responseJson = await response.Content.ReadAsStringAsync();
+                var response = await _httpClient.SendAsync(request).ConfigureAwait(false);
+                var responseJson = await response.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                 TM.App.Log($"[ApiService] {method} {path} -> {(int)response.StatusCode}");
 
@@ -280,13 +339,14 @@ namespace TM.Framework.User.Services
                         TM.App.Log($"[ApiService] 错误响应解析失败: {ex.Message}");
                     }
 
-                    if ((int)response.StatusCode == 401 && !isRetry && TokenManager.HasRefreshToken)
+                    if ((int)response.StatusCode == 401 && !isRetry && TokenManager.HasRefreshToken
+                        && !string.Equals(path, "/api/auth/refresh", StringComparison.OrdinalIgnoreCase))
                     {
                         TM.App.Log("[ApiService] 401, retrying...");
-                        var refreshResult = await RefreshTokenAsync();
+                        var refreshResult = await RefreshTokenAsync().ConfigureAwait(false);
                         if (refreshResult.Success)
                         {
-                            return await SendAsync<T>(method, path, body, requiresAuth, requiresSign, isRetry: true);
+                            return await SendAsync<T>(method, path, body, requiresAuth, requiresSign, isRetry: true, triedFallback).ConfigureAwait(false);
                         }
 
                         if (refreshResult.ErrorCode == ApiErrorCodes.AUTH_DEVICE_KICKED)
@@ -306,18 +366,38 @@ namespace TM.Framework.User.Services
                         return errorResult;
                     }
 
-                    return ApiResponse<T>.Fail($"请求失败: {response.StatusCode}", ApiErrorCodes.SERVER_ERROR);
+                    var statusCode = (int)response.StatusCode;
+                    return statusCode switch
+                    {
+                        429 => ApiResponse<T>.Fail("请求过于频繁，请稍后再试", ApiErrorCodes.RATE_LIMITED),
+                        502 or 503 or 504 => ApiResponse<T>.Fail("服务器维护中，请稍后再试", ApiErrorCodes.SERVER_UNAVAILABLE),
+                        _ => ApiResponse<T>.Fail($"请求失败({statusCode})", ApiErrorCodes.SERVER_ERROR)
+                    };
                 }
             }
             catch (HttpRequestException ex)
             {
-                TM.App.Log($"[ApiService] 网络错误: {ex.Message}");
+                TM.App.Log($"[ApiService] 网络错误({activeBase}): {ex.Message}");
+                if (!triedFallback && !string.IsNullOrEmpty(FallbackUrl) && activeBase != FallbackUrl)
+                {
+                    _usingFallback = true;
+                    _fallbackTime = DateTime.UtcNow;
+                    TM.App.Log($"[ApiService] 切换备用通道: {FallbackUrl}");
+                    return await SendAsync<T>(method, path, body, requiresAuth, requiresSign, isRetry, triedFallback: true);
+                }
                 return ApiResponse<T>.Fail("网络连接失败，请检查网络后重试", ApiErrorCodes.NETWORK_ERROR);
             }
             catch (TaskCanceledException)
             {
-                TM.App.Log("[ApiService] 请求超时");
-                return ApiResponse<T>.Fail("请求超时，请稍后重试", ApiErrorCodes.NETWORK_ERROR);
+                TM.App.Log($"[ApiService] 请求超时({activeBase})");
+                if (!triedFallback && !string.IsNullOrEmpty(FallbackUrl) && activeBase != FallbackUrl)
+                {
+                    _usingFallback = true;
+                    _fallbackTime = DateTime.UtcNow;
+                    TM.App.Log($"[ApiService] 超时切换备用通道: {FallbackUrl}");
+                    return await SendAsync<T>(method, path, body, requiresAuth, requiresSign, isRetry, triedFallback: true);
+                }
+                return ApiResponse<T>.Fail("连接超时，请检查网络后重试", ApiErrorCodes.NETWORK_TIMEOUT);
             }
             catch (Exception ex)
             {
@@ -329,5 +409,13 @@ namespace TM.Framework.User.Services
         public static event Action? OnDeviceKicked;
 
         #endregion
+
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            _httpClient.Dispose();
+            GC.SuppressFinalize(this);
+        }
     }
 }

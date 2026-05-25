@@ -1,21 +1,18 @@
 using System;
 using System.Reflection;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using TM.Framework.Common.Helpers.Security;
-using TM.Framework.Common.Services;
 using TM.Framework.User.Account.AccountBinding;
 using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Account.Login
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public partial class LoginWindow : Window
     {
         public bool LoginSuccess { get; private set; }
@@ -53,6 +50,7 @@ namespace TM.Framework.User.Account.Login
 
         private bool _rememberAccount;
         private bool _rememberPassword;
+        private RememberedAccount? _cachedRemembered;
 
         public LoginWindow()
         {
@@ -64,18 +62,13 @@ namespace TM.Framework.User.Account.Login
             _apiService = ServiceLocator.Get<ApiService>();
             _authTokenManager = ServiceLocator.Get<AuthTokenManager>();
 
-            InitializeAccountList();
+            _ = InitializeAccountsAsync();
             LoadRememberedState();
             UpdateRememberOptionsButtonContent();
-            LoadAppIcon();
-            LoadThirdPartyIcons();
+            TM.Framework.Common.Helpers.UI.AppIconLoader.Load(AppIconBorder, 128, FallbackIconImage, "LoginWindow");
+            Dispatcher.BeginInvoke(System.Windows.Threading.DispatcherPriority.Background, (Action)LoadThirdPartyIcons);
             UpdateRememberMenuHeaders();
             UpdatePasswordVisibilityUI();
-
-            if (!_loginService.HasAnyAccount())
-            {
-                FirstTimeHintTextBlock.Visibility = Visibility.Visible;
-            }
 
             TM.App.Log("[LoginWindow] 登录窗口已初始化");
         }
@@ -108,32 +101,39 @@ namespace TM.Framework.User.Account.Login
             {
                 VisiblePasswordTextBox.Visibility = Visibility.Visible;
                 PasswordBox.Visibility = Visibility.Collapsed;
-                TogglePasswordVisibilityIcon.Text = "🙈";
+                TogglePasswordVisibilityIcon.Source = (System.Windows.Media.ImageSource?)TryFindResource("Icon.EyeOff");
             }
             else
             {
                 VisiblePasswordTextBox.Visibility = Visibility.Collapsed;
                 PasswordBox.Visibility = Visibility.Visible;
-                TogglePasswordVisibilityIcon.Text = "👁";
+                TogglePasswordVisibilityIcon.Source = (System.Windows.Media.ImageSource?)TryFindResource("Icon.Eye");
             }
         }
 
         private void LoadThirdPartyIcons()
         {
-            try
+            var icons = new[] { "weixin.png", "qq.png", "Github.png", "Google.png", "Microsoft.png", "Baidu.png" };
+            _ = AccountIconHelper.WarmUpAsync(icons).ContinueWith(_ =>
             {
-                WeChatIcon.Source = AccountIconHelper.GetIcon("weixin.jpg");
-                QQIcon.Source = AccountIconHelper.GetIcon("qq.png");
-                GitHubIcon.Source = AccountIconHelper.GetIcon("Github.png");
-                GoogleIcon.Source = AccountIconHelper.GetIcon("Google.png");
-                MicrosoftIcon.Source = AccountIconHelper.GetIcon("Microsoft.png");
-                BaiduIcon.Source = AccountIconHelper.GetIcon("Baidu.png");
-                TM.App.Log("[LoginWindow] 第三方登录图标已加载");
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginWindow] 加载第三方登录图标失败: {ex.Message}");
-            }
+                Dispatcher.BeginInvoke(() =>
+                {
+                    try
+                    {
+                        WeChatIcon.Source = AccountIconHelper.GetIcon("weixin.png");
+                        QQIcon.Source = AccountIconHelper.GetIcon("qq.png");
+                        GitHubIcon.Source = AccountIconHelper.GetIcon("Github.png");
+                        GoogleIcon.Source = AccountIconHelper.GetIcon("Google.png");
+                        MicrosoftIcon.Source = AccountIconHelper.GetIcon("Microsoft.png");
+                        BaiduIcon.Source = AccountIconHelper.GetIcon("Baidu.png");
+                        TM.App.Log("[LoginWindow] 第三方登录图标已加载");
+                    }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[LoginWindow] 加载第三方登录图标失败: {ex.Message}");
+                    }
+                });
+            });
         }
 
         private void SetPassword(string password)
@@ -201,67 +201,51 @@ namespace TM.Framework.User.Account.Login
             }
         }
 
-        private void LoadAppIcon()
+        private const string ClearHistoryItem = "清除历史记录";
+
+        private async System.Threading.Tasks.Task InitializeAccountsAsync()
         {
             try
             {
-                var iconPath = StoragePathHelper.GetFrameworkPath("UI/Icons/app.ico");
-                if (!File.Exists(iconPath))
-                {
-                    AppIconBorder.Background = null;
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    FallbackIconTextBlock.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                var decoder = new IconBitmapDecoder(new Uri(iconPath, UriKind.Absolute), BitmapCreateOptions.PreservePixelFormat, BitmapCacheOption.OnLoad);
-                var target = 30;
-                var best = decoder.Frames
-                    .OrderBy(f => Math.Abs(f.PixelWidth - target))
-                    .ThenByDescending(f => f.PixelWidth)
-                    .FirstOrDefault();
-
-                var source = best ?? decoder.Frames.FirstOrDefault();
-                if (source == null)
-                {
-                    AppIconBorder.Background = null;
-                    AppIconBorder.Visibility = Visibility.Collapsed;
-                    FallbackIconTextBlock.Visibility = Visibility.Visible;
-                    return;
-                }
-
-                var brush = new ImageBrush(source)
-                {
-                    Stretch = Stretch.Uniform
-                };
-                if (brush.CanFreeze)
-                    brush.Freeze();
-
-                AppIconBorder.Background = brush;
-                AppIconBorder.Visibility = Visibility.Visible;
-                FallbackIconTextBlock.Visibility = Visibility.Collapsed;
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginWindow] 加载应用图标失败: {ex.Message}");
-                AppIconBorder.Background = null;
-                AppIconBorder.Visibility = Visibility.Collapsed;
-                FallbackIconTextBlock.Visibility = Visibility.Visible;
-            }
-        }
-
-        private const string ClearHistoryItem = "🗑️ 清除历史记录";
-
-        private void InitializeAccountList()
-        {
-            try
-            {
-                UsernameComboBox.Items.Clear();
-
-                var accounts = _loginService.GetAllAccounts()
+                var allAccounts = await _loginService.GetAllAccountsAsync();
+                var accounts = allAccounts
                     .OrderByDescending(a => a.LastLoginTime ?? DateTime.MinValue)
                     .ThenBy(a => a.Username)
                     .ToList();
+
+                var savedText = UsernameComboBox.Text;
+                UsernameComboBox.Items.Clear();
+                foreach (var account in accounts)
+                {
+                    if (!string.IsNullOrWhiteSpace(account.Username))
+                        UsernameComboBox.Items.Add(account.Username);
+                }
+                if (accounts.Count > 0)
+                    UsernameComboBox.Items.Add(ClearHistoryItem);
+
+                if (!string.IsNullOrEmpty(savedText) && savedText != ClearHistoryItem)
+                    UsernameComboBox.Text = savedText;
+
+                if (accounts.Count == 0)
+                    FirstTimeHintTextBlock.Visibility = Visibility.Visible;
+            }
+            catch (Exception ex)
+            {
+                TM.App.Log($"[LoginWindow] 加载历史账号失败: {ex.Message}");
+            }
+        }
+
+        private async Task InitializeAccountListAsync()
+        {
+            try
+            {
+                var allAccounts2 = await _loginService.GetAllAccountsAsync();
+                var accounts = allAccounts2
+                    .OrderByDescending(a => a.LastLoginTime ?? DateTime.MinValue)
+                    .ThenBy(a => a.Username)
+                    .ToList();
+
+                UsernameComboBox.Items.Clear();
 
                 foreach (var account in accounts)
                 {
@@ -282,46 +266,53 @@ namespace TM.Framework.User.Account.Login
 
         private void LoadRememberedState()
         {
-            try
+            _ = _loginService.GetRememberedAccountInfoAsync().ContinueWith(t =>
             {
-                var remembered = _loginService.GetRememberedAccountInfo();
-
-                _rememberAccount = remembered?.RememberAccount == true;
-                _rememberPassword = remembered?.RememberPassword == true;
-                UpdateRememberMenuHeaders();
-
-                if (!string.IsNullOrWhiteSpace(remembered?.Username))
+                Dispatcher.BeginInvoke(() =>
                 {
-                    UsernameComboBox.Text = remembered.Username;
-
-                    if (_rememberPassword && !string.IsNullOrWhiteSpace(remembered.EncryptedPassword))
+                    try
                     {
-                        try
+                        var remembered = t.IsCompletedSuccessfully ? t.Result : null;
+                        _cachedRemembered = remembered;
+                        _rememberAccount = remembered?.RememberAccount == true;
+                        _rememberPassword = remembered?.RememberPassword == true;
+                        UpdateRememberMenuHeaders();
+                        UpdateRememberOptionsButtonContent();
+
+                        if (!string.IsNullOrWhiteSpace(remembered?.Username))
                         {
-                            SetPassword(EncryptionHelper.DecryptApiKey(remembered.EncryptedPassword));
+                            UsernameComboBox.Text = remembered.Username;
+
+                            if (_rememberPassword && !string.IsNullOrWhiteSpace(remembered.EncryptedPassword))
+                            {
+                                try
+                                {
+                                    SetPassword(EncryptionHelper.DecryptApiKey(remembered.EncryptedPassword));
+                                }
+                                catch (Exception ex)
+                                {
+                                    DebugLogOnce("DecryptRememberedPassword", ex);
+                                    SetPassword(string.Empty);
+                                }
+                            }
+
+                            if (!string.IsNullOrEmpty(PasswordBox.Password))
+                                LoginButton.Focus();
+                            else
+                                PasswordBox.Focus();
                         }
-                        catch (Exception ex)
+                        else
                         {
-                            DebugLogOnce("DecryptRememberedPassword", ex);
-                            SetPassword(string.Empty);
+                            UsernameComboBox.Focus();
                         }
                     }
-
-                    if (!string.IsNullOrEmpty(PasswordBox.Password))
-                        LoginButton.Focus();
-                    else
-                        PasswordBox.Focus();
-                }
-                else
-                {
-                    UsernameComboBox.Focus();
-                }
-            }
-            catch (Exception ex)
-            {
-                TM.App.Log($"[LoginWindow] 加载记住信息失败: {ex.Message}");
-                UsernameComboBox.Focus();
-            }
+                    catch (Exception ex)
+                    {
+                        TM.App.Log($"[LoginWindow] 应用记住信息失败: {ex.Message}");
+                        UsernameComboBox.Focus();
+                    }
+                });
+            });
         }
 
         private void TitleBar_MouseLeftButtonDown(object sender, MouseButtonEventArgs e)
@@ -382,8 +373,9 @@ namespace TM.Framework.User.Account.Login
                     {
                         _loginService.ClearAllAccounts();
                         _loginService.ClearRememberedAccount();
+                        _cachedRemembered = null;
                         SetPassword(string.Empty);
-                        InitializeAccountList();
+                        _ = InitializeAccountListAsync();
                         GlobalToast.Success("已清除", "历史账号记录已清除");
                         TM.App.Log("[LoginWindow] 用户清除了历史账号记录");
                     }
@@ -397,7 +389,7 @@ namespace TM.Framework.User.Account.Login
                     return;
                 }
 
-                var remembered = _loginService.GetRememberedAccountInfo();
+                var remembered = _cachedRemembered;
                 if (remembered != null && string.Equals(remembered.Username, username, StringComparison.OrdinalIgnoreCase))
                 {
                     if (_rememberPassword && !string.IsNullOrWhiteSpace(remembered.EncryptedPassword))
@@ -520,7 +512,7 @@ namespace TM.Framework.User.Account.Login
                     return;
                 }
 
-                InitializeAccountList();
+                _ = InitializeAccountListAsync();
                 UsernameComboBox.Text = win.RegisteredUsername.Trim();
                 SetPassword(win.RegisteredPassword);
 
@@ -613,25 +605,60 @@ namespace TM.Framework.User.Account.Login
                 }
                 else
                 {
-                    if (loginResult.ErrorCode == ApiErrorCodes.AUTH_DEVICE_KICKED)
+                    switch (loginResult.ErrorCode)
                     {
-                        ShowError("您的账号已在其他设备登录，当前会话已失效");
-                    }
-                    else if (loginResult.ErrorCode == ApiErrorCodes.SUBSCRIPTION_NONE)
-                    {
-                        StandardDialog.ShowWarning(
-                            "账号未激活\n\n请先使用卡密激活后再登录。\n您可以点击「更多选项」→「账号续费」使用卡密激活。",
-                            "登录失败", this);
-                    }
-                    else if (loginResult.ErrorCode == ApiErrorCodes.SUBSCRIPTION_EXPIRED)
-                    {
-                        StandardDialog.ShowWarning(
-                            $"{loginResult.ErrorMessage}\n\n请点击「更多选项」→「账号续费」使用卡密续费。",
-                            "登录失败", this);
-                    }
-                    else
-                    {
-                        ShowError(loginResult.ErrorMessage ?? "登录失败");
+                        case ApiErrorCodes.AUTH_DEVICE_KICKED:
+                            ShowError("您的账号已在其他设备登录，当前会话已失效");
+                            break;
+
+                        case ApiErrorCodes.SUBSCRIPTION_NONE:
+                            StandardDialog.ShowWarning(
+                                "账号未激活\n\n请先使用卡密激活后再登录。\n您可以点击「更多选项」→「账号续费」使用卡密激活。",
+                                "登录失败", this);
+                            break;
+
+                        case ApiErrorCodes.SUBSCRIPTION_EXPIRED:
+                            TM.App.Log($"[LoginWindow] 登录失败(订阅已过期): {loginResult.ErrorMessage}");
+                            StandardDialog.ShowWarning(
+                                "订阅已过期\n\n请点击「更多选项」→「账号续费」使用卡密续费。",
+                                "登录失败", this);
+                            break;
+
+                        case ApiErrorCodes.ACCOUNT_LOCKED:
+                            StandardDialog.ShowWarning(
+                                loginResult.ErrorMessage ?? "账号已锁定，请稍后重试",
+                                "账号锁定", this);
+                            break;
+
+                        case ApiErrorCodes.ACCOUNT_DISABLED:
+                            StandardDialog.ShowError(
+                                loginResult.ErrorMessage ?? "账号已被禁用，如有疑问请联系管理员",
+                                "账号禁用", this);
+                            break;
+
+                        case ApiErrorCodes.NETWORK_ERROR:
+                            ShowError("网络连接失败，请检查网络后重试");
+                            break;
+
+                        case ApiErrorCodes.NETWORK_TIMEOUT:
+                            ShowError("连接超时，请检查网络后重试");
+                            break;
+
+                        case ApiErrorCodes.SERVER_UNAVAILABLE:
+                            ShowError("服务器维护中，请稍后再试");
+                            break;
+
+                        case ApiErrorCodes.SERVER_ERROR:
+                            ShowError("服务器异常，请稍后再试");
+                            break;
+
+                        case ApiErrorCodes.RATE_LIMITED:
+                            ShowError("操作过于频繁，请稍后再试");
+                            break;
+
+                        default:
+                            ShowError(loginResult.ErrorMessage ?? "登录失败");
+                            break;
                     }
                     SetPassword(string.Empty);
                     PasswordBox.Focus();

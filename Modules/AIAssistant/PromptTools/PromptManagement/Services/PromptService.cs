@@ -1,22 +1,19 @@
 using System;
 using System.Collections.Generic;
-using System.IO;
 using System.Linq;
+using System.Reflection;
 using System.Text.Json;
-using TM.Framework.Common.Helpers.Storage;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Services;
 using TM.Modules.AIAssistant.PromptTools.PromptManagement.Models;
 using TM.Services.Framework.AI.Interfaces.Prompts;
 
 namespace TM.Modules.AIAssistant.PromptTools.PromptManagement.Services;
 
+[Obfuscation(Exclude = true, ApplyToMembers = true)]
 public class PromptService : ModuleServiceBase<PromptCategory, PromptTemplateData>, IPromptRepository
 {
-    private const string BuiltInTemplatesFolder = "built_in_templates";
     private const string UserTemplatesFolder = "templates";
 
-    private readonly string _builtInTemplatesPath;
     private readonly string _userTemplatesPath;
 
     private HashSet<string> _builtInTemplateIds = new(StringComparer.Ordinal);
@@ -42,8 +39,6 @@ public class PromptService : ModuleServiceBase<PromptCategory, PromptTemplateDat
             dataFileName: "templates.json",
             delayDataLoading: true)
     {
-        _builtInTemplatesPath = StoragePathHelper.GetFilePath("Modules",
-            "AIAssistant/PromptTools/PromptManagement", BuiltInTemplatesFolder);
         _userTemplatesPath = StoragePathHelper.GetFilePath("Modules",
             "AIAssistant/PromptTools/PromptManagement", UserTemplatesFolder);
     }
@@ -85,7 +80,7 @@ public class PromptService : ModuleServiceBase<PromptCategory, PromptTemplateDat
             {
                 Id = ShortIdGenerator.New("D"),
                 Name = "小说初稿生成器",
-                Icon = "📋",
+                Icon = "Icon.Clipboard",
                 Category = categoryName,
                 IsEnabled = true,
                 IsBuiltIn = false,
@@ -158,7 +153,7 @@ public class PromptService : ModuleServiceBase<PromptCategory, PromptTemplateDat
             }
 
             _builtInTemplateIds = new HashSet<string>(
-                builtInTemplates.Select(t => t.Id), 
+                builtInTemplates.Select(t => t.Id),
                 StringComparer.Ordinal);
 
             var userTemplateNames = DataItems
@@ -192,45 +187,37 @@ public class PromptService : ModuleServiceBase<PromptCategory, PromptTemplateDat
     private async System.Threading.Tasks.Task<List<PromptTemplateData>> LoadBuiltInTemplatesAsync()
     {
         var result = new List<PromptTemplateData>();
+        var asm = typeof(PromptService).Assembly;
 
-        if (!Directory.Exists(_builtInTemplatesPath))
+        var builtInResources = asm.GetManifestResourceNames()
+            .Where(n => n.Contains(".Resources.built_in_templates.", StringComparison.Ordinal)
+                     && n.EndsWith(".json", StringComparison.Ordinal))
+            .ToList();
+
+        foreach (var resourceName in builtInResources)
         {
-            TM.App.Log($"[PromptService] 系统内置模板目录不存在: {_builtInTemplatesPath}");
-            return result;
-        }
-
-        try
-        {
-            var jsonFiles = Directory.GetFiles(_builtInTemplatesPath, "*.json", SearchOption.AllDirectories);
-
-            foreach (var file in jsonFiles)
+            try
             {
-                try
+                await using var stream = asm.GetManifestResourceStream(resourceName);
+                if (stream == null) continue;
+
+                var templates = await JsonSerializer.DeserializeAsync<List<PromptTemplateData>>(stream).ConfigureAwait(false);
+                if (templates != null)
                 {
-                    var json = await File.ReadAllTextAsync(file);
-                    var templates = JsonSerializer.Deserialize<List<PromptTemplateData>>(json);
-                    if (templates != null)
+                    foreach (var template in templates)
                     {
-                        foreach (var template in templates)
-                        {
-                            template.IsBuiltIn = true;
-                        }
-                        result.AddRange(templates);
+                        template.IsBuiltIn = true;
                     }
-                }
-                catch (Exception ex)
-                {
-                    TM.App.Log($"[PromptService] 加载内置模板文件失败 {file}: {ex.Message}");
+                    result.AddRange(templates);
                 }
             }
-
-            TM.App.Log($"[PromptService] 加载系统内置模板: {result.Count} 个");
-        }
-        catch (Exception ex)
-        {
-            TM.App.Log($"[PromptService] 遍历内置模板目录失败: {ex.Message}");
+            catch (Exception ex)
+            {
+                TM.App.Log($"[PromptService] 加载嵌入模板失败 {resourceName}: {ex.Message}");
+            }
         }
 
+        TM.App.Log($"[PromptService] 嵌入加载系统内置模板: {result.Count} 个（来自 {builtInResources.Count} 份 JSON）");
         return result;
     }
 

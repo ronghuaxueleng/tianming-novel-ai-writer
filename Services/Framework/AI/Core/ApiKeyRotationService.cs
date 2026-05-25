@@ -10,23 +10,38 @@ public class ApiKeyRotationService
 {
     private readonly ConcurrentDictionary<string, KeyPool> _pools = new();
 
-    public event Action<string>? KeyStateChanged;
+    private static bool IsTianmingPrivateProvider(string? providerId)
+        => TianmingProviderIdentity.IsTianmingPrivate(providerId);
+
+    public event Action<string, string>? KeyStateChanged;
+
+    public event Action<string>? ProviderExhausted;
+
+    public event Action<string>? ProviderRecovered;
 
     public void UpdateKeyPool(string providerId, List<ApiKeyEntry> keys)
     {
         if (string.IsNullOrWhiteSpace(providerId)) return;
 
+        var filtered = keys?.Where(k => !string.IsNullOrWhiteSpace(k.Key)).ToList() ?? new List<ApiKeyEntry>();
         var pool = _pools.GetOrAdd(providerId, _ => new KeyPool());
+        var validIds = new HashSet<string>(filtered.Select(k => k.Id));
+        bool wasExhausted;
+        bool hasActiveNow;
         lock (pool)
         {
-            pool.Keys = keys?.Where(k => !string.IsNullOrWhiteSpace(k.Key)).ToList() ?? new List<ApiKeyEntry>();
-            var validIds = new HashSet<string>(pool.Keys.Select(k => k.Id));
+            wasExhausted = pool.Keys.Count > 0 && pool.Keys.All(k => !k.IsEnabled);
+            pool.Keys = filtered;
             foreach (var id in pool.HealthMap.Keys.ToList())
             {
                 if (!validIds.Contains(id))
                     pool.HealthMap.TryRemove(id, out _);
             }
+            hasActiveNow = pool.Keys.Any(k => k.IsEnabled);
         }
+
+        if (wasExhausted && hasActiveNow)
+            ProviderRecovered?.Invoke(providerId);
     }
 
     public KeySelection? GetNextKey(string providerId)
@@ -39,17 +54,15 @@ public class ApiKeyRotationService
         if (string.IsNullOrWhiteSpace(providerId)) return null;
         if (!_pools.TryGetValue(providerId, out var pool)) return null;
 
-        List<ApiKeyEntry> candidates;
-        lock (pool)
-        {
-            var now = DateTime.UtcNow;
-            candidates = pool.Keys
-                .Where(k => k.IsEnabled
-                    && !string.IsNullOrWhiteSpace(k.Key)
-                    && (excludeKeyIds == null || !excludeKeyIds.Contains(k.Id))
-                    && !IsTemporarilyDisabled(pool, k.Id, now))
-                .ToList();
-        }
+        List<ApiKeyEntry> snapshot;
+        lock (pool) { snapshot = new List<ApiKeyEntry>(pool.Keys); }
+        var now = DateTime.UtcNow;
+        var candidates = snapshot
+            .Where(k => k.IsEnabled
+                && !string.IsNullOrWhiteSpace(k.Key)
+                && (excludeKeyIds == null || !excludeKeyIds.Contains(k.Id))
+                && !IsTemporarilyDisabled(pool, k.Id, now))
+            .ToList();
 
         if (candidates.Count == 0) return null;
 
@@ -75,6 +88,7 @@ public class ApiKeyRotationService
             {
                 case KeyUseResult.Success:
                     health.ConsecutiveFailures = 0;
+                    health.ConsecutiveRateLimited = 0;
                     health.LastFailureReason = null;
                     break;
 
@@ -86,15 +100,15 @@ public class ApiKeyRotationService
                     health.LastFailureReason = result;
                     health.LastErrorMessage = rawErrorMessage;
                     PermanentlyDisableKey(pool, providerId, keyId);
-                    TM.App.Log($"[ApiKeyRotation] 永久禁用密钥 {keyId}: {result} - {rawErrorMessage}");
+                    if (!IsTianmingPrivateProvider(providerId))
+                        TM.App.Log($"[ApiKeyRotation] 永久禁用密钥 {keyId}: {result} - {rawErrorMessage}");
                     break;
 
                 case KeyUseResult.RateLimited:
                     health.TotalFailures++;
+                    health.ConsecutiveRateLimited++;
                     health.LastFailureReason = result;
                     health.LastErrorMessage = rawErrorMessage;
-                    health.DisabledUntil = DateTime.UtcNow.AddSeconds(60);
-                    TM.App.Log($"[ApiKeyRotation] 临时禁用密钥 {keyId} 60秒: RateLimited");
                     break;
 
                 case KeyUseResult.ServerError:
@@ -105,12 +119,14 @@ public class ApiKeyRotationService
                     if (health.ConsecutiveFailures >= 5)
                     {
                         health.DisabledUntil = DateTime.UtcNow.AddMinutes(5);
-                        TM.App.Log($"[ApiKeyRotation] 临时禁用密钥 {keyId} 5分钟: 连续失败 {health.ConsecutiveFailures} 次");
+                        if (!IsTianmingPrivateProvider(providerId))
+                            TM.App.Log($"[ApiKeyRotation] 临时禁用密钥 {keyId} 5分钟: 连续失败 {health.ConsecutiveFailures} 次");
                     }
                     else if (health.ConsecutiveFailures >= 3)
                     {
                         health.DisabledUntil = DateTime.UtcNow.AddSeconds(60);
-                        TM.App.Log($"[ApiKeyRotation] 临时禁用密钥 {keyId} 60秒: 连续失败 {health.ConsecutiveFailures} 次");
+                        if (!IsTianmingPrivateProvider(providerId))
+                            TM.App.Log($"[ApiKeyRotation] 临时禁用密钥 {keyId} 60秒: 连续失败 {health.ConsecutiveFailures} 次");
                     }
                     break;
 
@@ -118,8 +134,6 @@ public class ApiKeyRotationService
                     break;
 
                 default:
-                    health.TotalFailures++;
-                    health.ConsecutiveFailures++;
                     health.LastFailureReason = result;
                     health.LastErrorMessage = rawErrorMessage;
                     break;
@@ -137,32 +151,91 @@ public class ApiKeyRotationService
         }
     }
 
+    public int CooldownRateLimitedKey(string providerId, string keyId, int? retryAfterSeconds)
+    {
+        if (string.IsNullOrWhiteSpace(providerId) || string.IsNullOrWhiteSpace(keyId)) return 0;
+        if (!_pools.TryGetValue(providerId, out var pool)) return 0;
+
+        var health = pool.HealthMap.GetOrAdd(keyId, _ => new KeyHealth());
+
+        int seconds;
+        string source;
+        lock (health)
+        {
+            if (retryAfterSeconds.HasValue && retryAfterSeconds.Value > 0)
+            {
+                seconds = Math.Min(retryAfterSeconds.Value, 600);
+                source = $"Retry-After={retryAfterSeconds.Value}s";
+            }
+            else
+            {
+                var attempt = Math.Max(0, health.ConsecutiveRateLimited - 1);
+                var factor = 1 << Math.Min(attempt, 2);
+                seconds = Math.Min(30 * factor, 120);
+                source = $"exp-backoff(attempt={health.ConsecutiveRateLimited})";
+            }
+            health.DisabledUntil = DateTime.UtcNow.AddSeconds(seconds);
+        }
+        if (!IsTianmingPrivateProvider(providerId))
+            TM.App.Log($"[ApiKeyRotation] 限速冷却 {keyId} {seconds}s ({source})");
+        return seconds;
+    }
+
+    public int? GetMinRemainingCooldownSeconds(string providerId, IEnumerable<string> keyIds)
+    {
+        if (string.IsNullOrWhiteSpace(providerId) || keyIds == null) return null;
+        if (!_pools.TryGetValue(providerId, out var pool)) return null;
+
+        var now = DateTime.UtcNow;
+        int? minRemaining = null;
+        foreach (var keyId in keyIds)
+        {
+            if (string.IsNullOrWhiteSpace(keyId)) continue;
+            if (!pool.HealthMap.TryGetValue(keyId, out var health)) continue;
+
+            DateTime? until;
+            lock (health) { until = health.DisabledUntil; }
+            if (!until.HasValue) continue;
+
+            var rem = (int)Math.Ceiling((until.Value - now).TotalSeconds);
+            if (rem <= 0) continue;
+            if (!minRemaining.HasValue || rem < minRemaining.Value)
+                minRemaining = rem;
+        }
+        return minRemaining;
+    }
+
     public KeyPoolStatus? GetPoolStatus(string providerId)
     {
         if (!_pools.TryGetValue(providerId, out var pool)) return null;
 
+        List<ApiKeyEntry> keySnapshot;
+        Dictionary<string, KeyHealth> healthSnapshot;
         lock (pool)
         {
-            var now = DateTime.UtcNow;
-            var entries = pool.Keys.Select(k =>
-            {
-                pool.HealthMap.TryGetValue(k.Id, out var h);
-                var status = !k.IsEnabled ? KeyEntryStatus.PermanentlyDisabled
-                    : h != null && IsHealthDisabled(h, now) ? KeyEntryStatus.TemporarilyDisabled
-                    : KeyEntryStatus.Active;
-
-                return new KeyEntryStatusInfo(
-                    k.Id, k.Remark, status,
-                    h?.LastFailureReason, h?.LastErrorMessage,
-                    h?.TotalRequests ?? 0, h?.TotalFailures ?? 0,
-                    h?.DisabledUntil);
-            }).ToList();
-
-            return new KeyPoolStatus(
-                pool.Keys.Count,
-                entries.Count(e => e.Status == KeyEntryStatus.Active),
-                entries);
+            keySnapshot = new List<ApiKeyEntry>(pool.Keys);
+            healthSnapshot = new Dictionary<string, KeyHealth>(pool.HealthMap);
         }
+
+        var now = DateTime.UtcNow;
+        var entries = keySnapshot.Select(k =>
+        {
+            healthSnapshot.TryGetValue(k.Id, out var h);
+            var status = !k.IsEnabled ? KeyEntryStatus.PermanentlyDisabled
+                : h != null && IsHealthDisabled(h, now) ? KeyEntryStatus.TemporarilyDisabled
+                : KeyEntryStatus.Active;
+
+            return new KeyEntryStatusInfo(
+                k.Id, k.Remark, status,
+                h?.LastFailureReason, h?.LastErrorMessage,
+                h?.TotalRequests ?? 0, h?.TotalFailures ?? 0,
+                h?.DisabledUntil);
+        }).ToList();
+
+        return new KeyPoolStatus(
+            keySnapshot.Count,
+            entries.Count(e => e.Status == KeyEntryStatus.Active),
+            entries);
     }
 
     #region 内部方法
@@ -186,6 +259,7 @@ public class ApiKeyRotationService
 
     private void PermanentlyDisableKey(KeyPool pool, string providerId, string keyId)
     {
+        bool allExhausted = false;
         lock (pool)
         {
             var key = pool.Keys.FirstOrDefault(k => k.Id == keyId);
@@ -193,8 +267,11 @@ public class ApiKeyRotationService
             {
                 key.IsEnabled = false;
             }
+            allExhausted = pool.Keys.Count > 0 && pool.Keys.All(k => !k.IsEnabled);
         }
-        KeyStateChanged?.Invoke(providerId);
+        KeyStateChanged?.Invoke(providerId, keyId);
+        if (allExhausted)
+            ProviderExhausted?.Invoke(providerId);
     }
 
     #endregion
@@ -211,6 +288,7 @@ public class ApiKeyRotationService
     private class KeyHealth
     {
         public int ConsecutiveFailures { get; set; }
+        public int ConsecutiveRateLimited { get; set; }
         public DateTime? DisabledUntil { get; set; }
         public long TotalRequests { get; set; }
         public long TotalFailures { get; set; }

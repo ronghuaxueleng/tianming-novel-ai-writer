@@ -1,18 +1,18 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading.Tasks;
-using TM.Framework.Common.Helpers.Storage;
+using TM.Services.Modules.ProjectData.Interfaces;
 using TM.Services.Modules.ProjectData.Models.Guides;
 
 namespace TM.Services.Modules.ProjectData.Implementations
 {
     public class ContextIdsCompletenessChecker
     {
-        private readonly GuideContextService _guideContextService;
+        private readonly IGuideContextService _guideContextService;
 
         private static readonly JsonSerializerOptions JsonOptions = new()
         {
@@ -21,7 +21,7 @@ namespace TM.Services.Modules.ProjectData.Implementations
             DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
         };
 
-        public ContextIdsCompletenessChecker(GuideContextService guideContextService)
+        public ContextIdsCompletenessChecker(IGuideContextService guideContextService)
         {
             _guideContextService = guideContextService;
         }
@@ -30,8 +30,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
         {
             try
             {
-                var warnings = await CheckAsync();
-                await WriteWarningsAsync(warnings);
+                var warnings = await CheckAsync().ConfigureAwait(false);
+                await WriteWarningsAsync(warnings).ConfigureAwait(false);
                 TM.App.Log($"[CompletenessChecker] 完成: 伏笔警告 {warnings.ForeshadowingWarnings.Count} 条, 冲突警告 {warnings.ConflictWarnings.Count} 条");
                 return warnings;
             }
@@ -50,23 +50,26 @@ namespace TM.Services.Modules.ProjectData.Implementations
             };
 
             var guidesDir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
-            var foreshadowingGuide = await ReadGuideAsync<ForeshadowingStatusGuide>(
+            var foreshadowingTask = ReadGuideAsync<ForeshadowingStatusGuide>(
                 Path.Combine(guidesDir, "foreshadowing_status_guide.json"));
+            var contentGuideTask = _guideContextService.GetContentGuideAsync();
 
+            var conflictShardFiles = Directory.Exists(guidesDir)
+                ? Directory.GetFiles(guidesDir, "conflict_progress_guide_vol*.json")
+                : Array.Empty<string>();
+            var conflictShardsTask = Task.WhenAll(conflictShardFiles.Select(f => ReadGuideAsync<ConflictProgressGuide>(f)));
+
+            await Task.WhenAll(foreshadowingTask, contentGuideTask, conflictShardsTask).ConfigureAwait(false);
+
+            var foreshadowingGuide = foreshadowingTask.Result;
             var conflictGuide = new ConflictProgressGuide();
-            if (Directory.Exists(guidesDir))
-            {
-                foreach (var volFile in Directory.GetFiles(guidesDir, "conflict_progress_guide_vol*.json"))
-                {
-                    var shard = await ReadGuideAsync<ConflictProgressGuide>(volFile);
-                    foreach (var (id, entry) in shard.Conflicts)
-                        conflictGuide.Conflicts[id] = entry;
-                }
-            }
+            foreach (var shard in conflictShardsTask.Result)
+                foreach (var (id, entry) in shard.Conflicts)
+                    conflictGuide.Conflicts[id] = entry;
 
-            var contentGuide = await _guideContextService.GetContentGuideAsync();
+            var contentGuide = contentGuideTask.Result;
 
-            var plannedPayoffs  = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            var plannedPayoffs = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             var plannedConflicts = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
             if (contentGuide?.Chapters != null)
@@ -91,10 +94,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 warnings.ForeshadowingWarnings.Add(new ForeshadowingWarning
                 {
                     ForeshadowId = id,
-                    Name         = entry.Name,
-                    Tier         = entry.Tier,
+                    Name = entry.Name,
+                    Tier = entry.Tier,
                     SetupChapter = entry.ActualSetupChapter,
-                    Issue        = "已埋设，但无任何章节蓝图声明揭示（ForeshadowingPayoffs 中未出现）"
+                    Issue = "已埋设，但无任何章节蓝图声明揭示（ForeshadowingPayoffs 中未出现）"
                 });
             }
 
@@ -106,10 +109,10 @@ namespace TM.Services.Modules.ProjectData.Implementations
                 warnings.ConflictWarnings.Add(new ConflictWarning
                 {
                     ConflictId = id,
-                    Name       = entry.Name,
-                    Tier       = entry.Tier,
-                    Status     = entry.Status,
-                    Issue      = "冲突活跃（未resolved），但无任何章节蓝图声明追踪（Conflicts 中未出现）"
+                    Name = entry.Name,
+                    Tier = entry.Tier,
+                    Status = entry.Status,
+                    Issue = "冲突活跃（未resolved），但无任何章节蓝图声明追踪（Conflicts 中未出现）"
                 });
             }
 
@@ -129,8 +132,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
                         warnings.EmptyContextWarnings.Add(new EmptyContextWarning
                         {
                             ChapterId = chapterId,
-                            Title     = chapter.Title,
-                            Issue     = "Characters/Locations/WorldRuleIds 均为空，建议模块进一步完善蓝图"
+                            Title = chapter.Title,
+                            Issue = "Characters/Locations/WorldRuleIds 均为空，建议模块进一步完善蓝图"
                         });
                     }
                 }
@@ -147,8 +150,8 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
             try
             {
-                var json = await File.ReadAllTextAsync(path);
-                return JsonSerializer.Deserialize<T>(json, JsonOptions) ?? new T();
+                await using var stream = File.OpenRead(path);
+                return await JsonSerializer.DeserializeAsync<T>(stream, JsonOptions).ConfigureAwait(false) ?? new T();
             }
             catch
             {
@@ -158,50 +161,52 @@ namespace TM.Services.Modules.ProjectData.Implementations
 
         private async Task WriteWarningsAsync(CompletenessWarnings warnings)
         {
-            var dir  = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
+            var dir = Path.Combine(StoragePathHelper.GetProjectConfigPath(), "guides");
             var path = Path.Combine(dir, "completeness_warnings.json");
 
             if (!Directory.Exists(dir))
                 Directory.CreateDirectory(dir);
 
-            var json = JsonSerializer.Serialize(warnings, JsonOptions);
-            var tmpCic = path + ".tmp";
-            await File.WriteAllTextAsync(tmpCic, json);
+            var tmpCic = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+            await using (var stream = File.Create(tmpCic))
+            {
+                await JsonSerializer.SerializeAsync(stream, warnings, JsonOptions).ConfigureAwait(false);
+            }
             File.Move(tmpCic, path, overwrite: true);
         }
     }
 
     public class CompletenessWarnings
     {
-        [JsonPropertyName("GeneratedAt")]           public string GeneratedAt { get; set; } = string.Empty;
-        [JsonPropertyName("Summary")]               public string Summary { get; set; } = string.Empty;
+        [JsonPropertyName("GeneratedAt")] public string GeneratedAt { get; set; } = string.Empty;
+        [JsonPropertyName("Summary")] public string Summary { get; set; } = string.Empty;
         [JsonPropertyName("ForeshadowingWarnings")] public List<ForeshadowingWarning> ForeshadowingWarnings { get; set; } = new();
-        [JsonPropertyName("ConflictWarnings")]      public List<ConflictWarning> ConflictWarnings { get; set; } = new();
+        [JsonPropertyName("ConflictWarnings")] public List<ConflictWarning> ConflictWarnings { get; set; } = new();
         [JsonPropertyName("EmptyContextWarnings")] public List<EmptyContextWarning> EmptyContextWarnings { get; set; } = new();
     }
 
     public class ForeshadowingWarning
     {
         [JsonPropertyName("ForeshadowId")] public string ForeshadowId { get; set; } = string.Empty;
-        [JsonPropertyName("Name")]         public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("Tier")]         public string Tier { get; set; } = string.Empty;
+        [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
+        [JsonPropertyName("Tier")] public string Tier { get; set; } = string.Empty;
         [JsonPropertyName("SetupChapter")] public string SetupChapter { get; set; } = string.Empty;
-        [JsonPropertyName("Issue")]        public string Issue { get; set; } = string.Empty;
+        [JsonPropertyName("Issue")] public string Issue { get; set; } = string.Empty;
     }
 
     public class ConflictWarning
     {
         [JsonPropertyName("ConflictId")] public string ConflictId { get; set; } = string.Empty;
-        [JsonPropertyName("Name")]       public string Name { get; set; } = string.Empty;
-        [JsonPropertyName("Tier")]       public string Tier { get; set; } = string.Empty;
-        [JsonPropertyName("Status")]     public string Status { get; set; } = string.Empty;
-        [JsonPropertyName("Issue")]      public string Issue { get; set; } = string.Empty;
+        [JsonPropertyName("Name")] public string Name { get; set; } = string.Empty;
+        [JsonPropertyName("Tier")] public string Tier { get; set; } = string.Empty;
+        [JsonPropertyName("Status")] public string Status { get; set; } = string.Empty;
+        [JsonPropertyName("Issue")] public string Issue { get; set; } = string.Empty;
     }
 
     public class EmptyContextWarning
     {
         [JsonPropertyName("ChapterId")] public string ChapterId { get; set; } = string.Empty;
-        [JsonPropertyName("Title")]     public string Title { get; set; } = string.Empty;
-        [JsonPropertyName("Issue")]     public string Issue { get; set; } = string.Empty;
+        [JsonPropertyName("Title")] public string Title { get; set; } = string.Empty;
+        [JsonPropertyName("Issue")] public string Issue { get; set; } = string.Empty;
     }
 }

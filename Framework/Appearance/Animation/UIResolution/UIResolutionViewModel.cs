@@ -1,31 +1,30 @@
-using System;
+﻿using System;
 using System.Reflection;
 using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Linq;
 using System.Runtime.CompilerServices;
-using System.Windows;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers.MVVM;
-using TM.Framework.Common.Services;
+using System.Windows.Media;
 
 namespace TM.Framework.Appearance.Animation.UIResolution
 {
     public class PresetResolutionItem
     {
         public PresetResolution Type { get; set; }
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = string.Empty;
     }
 
     public class ScaleLevelItem
     {
         public UIScaleLevel Level { get; set; }
-        public string Icon { get; set; } = string.Empty;
+        public ImageSource? Icon { get; set; }
         public string DisplayName { get; set; } = string.Empty;
     }
 
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class UIResolutionViewModel : INotifyPropertyChanged
     {
         private readonly UIResolutionService _resolutionService;
@@ -58,25 +57,25 @@ namespace TM.Framework.Appearance.Animation.UIResolution
             _resolutionService = resolutionService;
             PresetResolutions = new ObservableCollection<PresetResolutionItem>
             {
-                new PresetResolutionItem { Type = PresetResolution.HD, Icon = "📺", DisplayName = "720p (1280×720)" },
-                new PresetResolutionItem { Type = PresetResolution.FullHD, Icon = "🖥️", DisplayName = "1080p (1920×1080)" },
-                new PresetResolutionItem { Type = PresetResolution.QHD, Icon = "🖥️", DisplayName = "1440p (2560×1440)" },
-                new PresetResolutionItem { Type = PresetResolution.Custom, Icon = "⚙️", DisplayName = "自定义" }
+                new PresetResolutionItem { Type = PresetResolution.HD, Icon = IconHelper.TryGet("Icon.Monitor"), DisplayName = "720p (1280×720)" },
+                new PresetResolutionItem { Type = PresetResolution.FullHD, Icon = IconHelper.TryGet("Icon.Monitor"), DisplayName = "1080p (1920×1080)" },
+                new PresetResolutionItem { Type = PresetResolution.QHD, Icon = IconHelper.TryGet("Icon.Monitor"), DisplayName = "1440p (2560×1440)" },
+                new PresetResolutionItem { Type = PresetResolution.Custom, Icon = IconHelper.TryGet("Icon.Settings"), DisplayName = "自定义" }
             };
 
             ScaleLevels = new ObservableCollection<ScaleLevelItem>
             {
-                new ScaleLevelItem { Level = UIScaleLevel.Scale100, Icon = "🔍", DisplayName = "100% (标准)" },
-                new ScaleLevelItem { Level = UIScaleLevel.Scale125, Icon = "🔍", DisplayName = "125% (稍大)" },
-                new ScaleLevelItem { Level = UIScaleLevel.Scale150, Icon = "🔍", DisplayName = "150% (较大)" },
-                new ScaleLevelItem { Level = UIScaleLevel.Scale200, Icon = "🔍", DisplayName = "200% (很大)" }
+                new ScaleLevelItem { Level = UIScaleLevel.Scale100, Icon = IconHelper.TryGet("Icon.Search"), DisplayName = "100% (标准)" },
+                new ScaleLevelItem { Level = UIScaleLevel.Scale125, Icon = IconHelper.TryGet("Icon.Search"), DisplayName = "125% (稍大)" },
+                new ScaleLevelItem { Level = UIScaleLevel.Scale150, Icon = IconHelper.TryGet("Icon.Search"), DisplayName = "150% (较大)" },
+                new ScaleLevelItem { Level = UIScaleLevel.Scale200, Icon = IconHelper.TryGet("Icon.Search"), DisplayName = "200% (很大)" }
             };
 
             _currentSettings = UIResolutionSettings.CreateDefault();
-            AsyncSettingsLoader.RunOrDefer(() =>
+            AsyncSettingsLoader.RunOrDeferAsync(async () =>
             {
                 UIResolutionSettings s;
-                try { s = ResolutionService.LoadSettings(); }
+                try { s = await ResolutionService.LoadSettingsAsync().ConfigureAwait(false); }
                 catch { s = UIResolutionSettings.CreateDefault(); }
                 return () =>
                 {
@@ -242,7 +241,7 @@ namespace TM.Framework.Appearance.Animation.UIResolution
             catch (Exception ex)
             {
                 TM.App.Log($"[UIResolution] 预览失败: {ex.Message}");
-                StandardDialog.ShowError($"预览失败：\n\n{ex.Message}", "错误", null);
+                StandardDialog.ShowError($"预览失败：{ex.Message}", "预览失败", null);
             }
         }
 
@@ -260,7 +259,7 @@ namespace TM.Framework.Appearance.Animation.UIResolution
             catch (Exception ex)
             {
                 TM.App.Log($"[UIResolution] 应用设置失败: {ex.Message}");
-                StandardDialog.ShowError($"应用设置失败：\n\n{ex.Message}", "错误", null);
+                StandardDialog.ShowError($"应用设置失败：{ex.Message}", "应用失败", null);
             }
         }
 

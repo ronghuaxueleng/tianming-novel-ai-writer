@@ -1,7 +1,7 @@
 <Window x:Class="TM.Framework.Common.Controls.Dialogs.StandardDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:emoji="clr-namespace:Emoji.Wpf;assembly=Emoji.Wpf"
+        UseLayoutRounding="True"
         WindowStyle="None"
         AllowsTransparency="True"
         Background="Transparent"
@@ -12,8 +12,8 @@
         MinWidth="360"
         MaxWidth="600">
 
-    <Border Background="{DynamicResource ContentBackground}"
-            BorderBrush="{DynamicResource BorderBrush}"
+    <Border Background="{DynamicResource DialogGlass}"
+            BorderBrush="{DynamicResource GlassBorderBrush}"
             BorderThickness="1"
             CornerRadius="12"
             Padding="0"
@@ -27,19 +27,21 @@
             </Grid.RowDefinitions>
 
             <Border Grid.Row="0"
-                    Background="{DynamicResource Surface}"
-                    BorderBrush="{DynamicResource BorderBrush}"
+                    Background="Transparent"
+                    BorderBrush="{DynamicResource GlassBorderBrush}"
                     BorderThickness="0,0,0,1"
                     CornerRadius="12,12,0,0"
                     Height="34"
                     Padding="16,7"
                     MouseLeftButtonDown="TitleBar_MouseDown">
                 <StackPanel Orientation="Horizontal">
-                    <emoji:TextBlock x:Name="TitleIcon"
-                                     Text="ℹ️"
-                                     FontSize="14"
+
+                    <Image x:Name="TitleIcon"
+                                     Source="{DynamicResource Icon.Info}"
+                                     Width="14" Height="14"
                                      VerticalAlignment="Center"
                                      Margin="0,0,8,0"/>
+
                     <TextBlock x:Name="TitleText"
                                Text="标题"
                                FontSize="14"

@@ -1,7 +1,6 @@
-using System;
+﻿using System;
 using Microsoft.Toolkit.Uwp.Notifications;
 using TM.Services.Framework.Notification;
-using TM.Framework.Common.Controls.Feedback;
 
 namespace TM.Services.Framework.SystemIntegration
 {
@@ -9,6 +8,11 @@ namespace TM.Services.Framework.SystemIntegration
     {
         private static bool _isEnabled = false;
         private const string AppName = "天命";
+
+        private static readonly Lazy<TM.Framework.Notifications.NotificationManagement.DoNotDisturb.DoNotDisturbSettings> _cachedDndSettings =
+            new(() => TM.Framework.Common.Services.ServiceLocator.Get<TM.Framework.Notifications.NotificationManagement.DoNotDisturb.DoNotDisturbSettings>());
+        private static readonly Lazy<TM.Framework.Notifications.NotificationManagement.NotificationHistory.NotificationHistorySettings> _cachedHistorySettings =
+            new(() => TM.Framework.Common.Services.ServiceLocator.Get<TM.Framework.Notifications.NotificationManagement.NotificationHistory.NotificationHistorySettings>());
 
         public static void Enable()
         {
@@ -38,10 +42,10 @@ namespace TM.Services.Framework.SystemIntegration
             {
                 var toastType = ConvertToToastType(type);
 
-                var dndSettings = ServiceLocator.Get<TM.Framework.Notifications.NotificationManagement.DoNotDisturb.DoNotDisturbSettings>();
-                bool isBlocked = dndSettings.ShouldBlock(isHighPriority);
+                var dndSettings = _cachedDndSettings.Value;
+                bool isBlocked = dndSettings.IsCurrentlyActive;
 
-                var historySettings = ServiceLocator.Get<TM.Framework.Notifications.NotificationManagement.NotificationHistory.NotificationHistorySettings>();
+                var historySettings = _cachedHistorySettings.Value;
                 string typeStr = ConvertTypeToString(type);
                 historySettings.AddRecord(title, message, typeStr, isBlocked || !_isEnabled);
 
@@ -57,10 +61,7 @@ namespace TM.Services.Framework.SystemIntegration
                     return;
                 }
 
-                System.Threading.Tasks.Task.Run(async () =>
-                {
-                    await ServiceLocator.Get<NotificationSoundService>().PlayNotificationSound(toastType, isHighPriority);
-                });
+                _ = ServiceLocator.Get<NotificationSoundService>().PlayNotificationSound(toastType, isHighPriority);
 
                 new ToastContentBuilder()
                     .AddText(title)

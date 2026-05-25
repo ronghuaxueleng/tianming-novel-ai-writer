@@ -1,10 +1,12 @@
 using System;
+using System.Reflection;
 using System.Text.Json.Serialization;
 using TM.Framework.Common.Models;
 
 namespace TM.Services.Modules.ProjectData.Models.Common
 {
-    public abstract class BusinessDataBase : IDataItem, ISourceBookBound
+    [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    public abstract class BusinessDataBase : IDataItem
     {
         [JsonPropertyName("Id")]
         public string Id { get; set; } = string.Empty;
@@ -20,9 +22,6 @@ namespace TM.Services.Modules.ProjectData.Models.Common
 
         [JsonPropertyName("IsEnabled")]
         public bool IsEnabled { get; set; } = true;
-
-        [JsonPropertyName("SourceBookId")]
-        public string? SourceBookId { get; set; }
 
         [JsonPropertyName("CreatedAt")]
         public DateTime CreatedAt { get; set; } = DateTime.Now;

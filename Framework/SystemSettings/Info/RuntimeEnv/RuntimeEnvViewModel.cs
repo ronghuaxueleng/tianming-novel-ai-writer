@@ -1,21 +1,20 @@
-using System;
+﻿using System;
 using System.Reflection;
-using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Text.Json;
+using System.Threading.Tasks;
 using System.Windows.Input;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.MVVM;
+using TM.Framework.Common.ViewModels;
 using TM.Framework.SystemSettings.Info.Models;
 
 namespace TM.Framework.SystemSettings.Info.RuntimeEnv
 {
     [Obfuscation(Exclude = true, ApplyToMembers = true)]
+    [Obfuscation(Feature = "no NecroBit", Exclude = false, ApplyToMembers = true)]
     public class RuntimeEnvViewModel : INotifyPropertyChanged
     {
         private RuntimeEnvSettings _settings = null!;
@@ -34,11 +33,11 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
 
             AsyncSettingsLoader.LoadOrDefer<RuntimeEnvSettings>(_settingsFilePath, s => { _settings = s; }, "RuntimeEnv");
 
-            AssemblyList = new ObservableCollection<AssemblyItem>();
-            EnvironmentVariables = new ObservableCollection<EnvVarItem>();
+            AssemblyList = new RangeObservableCollection<AssemblyItem>();
+            EnvironmentVariables = new RangeObservableCollection<EnvVarItem>();
 
             RefreshCommand = new RelayCommand(RefreshInfo);
-            ExportCommand = new RelayCommand(ExportInfo);
+            ExportCommand = new RelayCommand(() => ExportInfo().SafeFireAndForget(ex => TM.App.Log($"[RuntimeEnvViewModel] {ex.Message}")));
 
             RefreshInfo();
         }
@@ -85,8 +84,8 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
             set { _timeZone = value; OnPropertyChanged(nameof(TimeZone)); }
         }
 
-        public ObservableCollection<AssemblyItem> AssemblyList { get; } = null!;
-        public ObservableCollection<EnvVarItem> EnvironmentVariables { get; } = null!;
+        public RangeObservableCollection<AssemblyItem> AssemblyList { get; } = null!;
+        public RangeObservableCollection<EnvVarItem> EnvironmentVariables { get; } = null!;
 
         public ICommand RefreshCommand { get; } = null!;
         public ICommand ExportCommand { get; } = null!;
@@ -111,7 +110,7 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
             catch (Exception ex)
             {
                 TM.App.Log($"[RuntimeEnv] 刷新失败: {ex.Message}");
-                GlobalToast.Error("刷新失败", $"无法刷新运行环境信息: {ex.Message}");
+                GlobalToast.Error("刷新失败", $"刷新失败：{ex.Message}");
             }
         }
 
@@ -119,21 +118,22 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
         {
             try
             {
-                AssemblyList.Clear();
                 var assemblies = AppDomain.CurrentDomain.GetAssemblies()
                     .Where(a => !a.IsDynamic)
                     .OrderBy(a => a.GetName().Name);
 
+                var list = new System.Collections.Generic.List<AssemblyItem>();
                 foreach (var assembly in assemblies.Take(100))
                 {
                     var name = assembly.GetName();
-                    AssemblyList.Add(new AssemblyItem
+                    list.Add(new AssemblyItem
                     {
                         Name = name.Name ?? "Unknown",
                         Version = name.Version?.ToString() ?? "N/A",
                         Location = assembly.Location
                     });
                 }
+                AssemblyList.ReplaceAll(list);
             }
             catch (Exception ex)
             {
@@ -145,17 +145,18 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
         {
             try
             {
-                EnvironmentVariables.Clear();
                 var envVars = Environment.GetEnvironmentVariables();
 
+                var envList = new System.Collections.Generic.List<EnvVarItem>();
                 foreach (var key in envVars.Keys.Cast<string>().OrderBy(k => k).Take(100))
                 {
-                    EnvironmentVariables.Add(new EnvVarItem
+                    envList.Add(new EnvVarItem
                     {
                         Name = key,
                         Value = envVars[key]?.ToString() ?? ""
                     });
                 }
+                EnvironmentVariables.ReplaceAll(envList);
             }
             catch (Exception ex)
             {
@@ -163,7 +164,7 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
             }
         }
 
-        private async void ExportInfo()
+        private async Task ExportInfo()
         {
             try
             {
@@ -195,7 +196,7 @@ namespace TM.Framework.SystemSettings.Info.RuntimeEnv
             catch (Exception ex)
             {
                 TM.App.Log($"[RuntimeEnv] 导出失败: {ex.Message}");
-                GlobalToast.Error("导出失败", $"无法导出运行环境信息: {ex.Message}");
+                GlobalToast.Error("导出失败", $"导出失败：{ex.Message}");
             }
         }
 

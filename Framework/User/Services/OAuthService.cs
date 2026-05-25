@@ -3,13 +3,10 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Net;
 using System.Text;
-using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Web;
 using TM.Framework.Common.Helpers.Id;
-using TM.Framework.Common.Helpers.Storage;
-using TM.Framework.User.Services;
 
 namespace TM.Framework.User.Services
 {
@@ -127,7 +124,7 @@ namespace TM.Framework.User.Services
 
                 OpenBrowser(authUrl);
 
-                var result = await callbackTask;
+                var result = await callbackTask.ConfigureAwait(false);
                 result.Platform = platform;
                 result.State = state;
 
@@ -158,12 +155,16 @@ namespace TM.Framework.User.Services
             finally
             {
                 StopListener();
+                _cts?.Dispose();
+                _cts = null;
             }
         }
 
         public void CancelAuthorization()
         {
             _cts?.Cancel();
+            _cts?.Dispose();
+            _cts = null;
             StopListener();
             TM.App.Log("[OAuthService] 授权已取消");
         }
@@ -224,14 +225,14 @@ namespace TM.Framework.User.Services
                 while (!ct.IsCancellationRequested)
                 {
                     var contextTask = _listener.GetContextAsync();
-                    var completedTask = await Task.WhenAny(contextTask, Task.Delay(-1, ct));
+                    var completedTask = await Task.WhenAny(contextTask, Task.Delay(-1, ct)).ConfigureAwait(false);
 
                     if (completedTask != contextTask)
                     {
                         throw new OperationCanceledException();
                     }
 
-                    var context = await contextTask;
+                    var context = await contextTask.ConfigureAwait(false);
                     var request = context.Request;
                     var response = context.Response;
 
@@ -287,7 +288,7 @@ namespace TM.Framework.User.Services
                         var buffer = Encoding.UTF8.GetBytes(responseHtml);
                         response.ContentType = "text/html; charset=utf-8";
                         response.ContentLength64 = buffer.Length;
-                        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length, ct);
+                        await response.OutputStream.WriteAsync(buffer, 0, buffer.Length, ct).ConfigureAwait(false);
                         response.Close();
 
                         return result;

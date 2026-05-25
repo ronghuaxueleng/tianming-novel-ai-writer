@@ -1,4 +1,4 @@
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
 using TM.Services.Modules.ProjectData.Models.Design.Templates;
 using System.Text.Json.Serialization;
 

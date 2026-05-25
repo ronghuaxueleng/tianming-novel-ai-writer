@@ -2,8 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Text.Json;
-using TM.Framework.Common.Helpers;
-using TM.Framework.Common.Helpers.Storage;
+using System.Threading;
 
 namespace TM.Modules.Generate.Content.Services
 {
@@ -14,18 +13,33 @@ namespace TM.Modules.Generate.Content.Services
         private static string ConfigPath => Path.Combine(
             StoragePathHelper.GetProjectConfigPath(), ConfigFileName);
 
-        private ContentConfig _config;
+        private volatile ContentConfig _config;
+        private readonly SemaphoreSlim _saveSemaphore = new(1, 1);
+        private volatile string? _latestConfigJson;
+        private int _configVersion;
 
         public ContentConfigService()
         {
-            _config = LoadConfig();
+            _config = new ContentConfig();
+            var initVersion = System.Threading.Volatile.Read(ref _configVersion);
+            System.Threading.Tasks.Task.Run(async () =>
+            {
+                var loaded = await LoadConfigAsync().ConfigureAwait(false);
+                if (initVersion == System.Threading.Volatile.Read(ref _configVersion))
+                    _config = loaded;
+            }).SafeFireAndForget(ex => TM.App.Log($"[ContentConfigService] 初始化失败: {ex.Message}"));
 
             try
             {
                 StoragePathHelper.CurrentProjectChanged += (_, _) =>
                 {
-                    _config = LoadConfig();
-                    TM.App.Log("[ContentConfigService] 项目切换，已重新加载配置");
+                    var switchVersion = System.Threading.Volatile.Read(ref _configVersion);
+                    System.Threading.Tasks.Task.Run(async () =>
+                    {
+                        var loaded = await LoadConfigAsync().ConfigureAwait(false);
+                        if (switchVersion == System.Threading.Volatile.Read(ref _configVersion))
+                            _config = loaded;
+                    }).SafeFireAndForget(ex => TM.App.Log($"[ContentConfigService] 项目切换重载失败: {ex.Message}"));
                 };
             }
             catch (Exception ex)
@@ -45,6 +59,7 @@ namespace TM.Modules.Generate.Content.Services
 
         public void SetModuleEnabled(string modulePath, bool enabled)
         {
+            System.Threading.Interlocked.Increment(ref _configVersion);
             _config.EnabledModules[modulePath] = enabled;
             SaveConfig();
             TM.App.Log($"[ContentConfigService] 保存模块状态: {modulePath} = {enabled}");
@@ -57,6 +72,7 @@ namespace TM.Modules.Generate.Content.Services
 
         public void SetAllEnabledStates(Dictionary<string, bool> states)
         {
+            System.Threading.Interlocked.Increment(ref _configVersion);
             foreach (var (path, enabled) in states)
             {
                 _config.EnabledModules[path] = enabled;
@@ -64,13 +80,13 @@ namespace TM.Modules.Generate.Content.Services
             SaveConfig();
         }
 
-        private ContentConfig LoadConfig()
+        private async System.Threading.Tasks.Task<ContentConfig> LoadConfigAsync()
         {
             try
             {
                 if (File.Exists(ConfigPath))
                 {
-                    var json = File.ReadAllText(ConfigPath);
+                    var json = await File.ReadAllTextAsync(ConfigPath).ConfigureAwait(false);
                     var config = JsonSerializer.Deserialize<ContentConfig>(json);
                     if (config != null)
                     {
@@ -90,21 +106,28 @@ namespace TM.Modules.Generate.Content.Services
         private void SaveConfig()
         {
             var path = ConfigPath;
-            var json = JsonSerializer.Serialize(_config, JsonHelper.Default);
-            _ = System.Threading.Tasks.Task.Run(() =>
+            _latestConfigJson = JsonSerializer.Serialize(_config, JsonHelper.Default);
+            _ = System.Threading.Tasks.Task.Run(async () =>
             {
+                await _saveSemaphore.WaitAsync().ConfigureAwait(false);
                 try
                 {
+                    var json = _latestConfigJson;
+                    if (json == null) return;
                     var dir = Path.GetDirectoryName(path);
                     if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
                         Directory.CreateDirectory(dir);
                     var tmp = path + "." + Guid.NewGuid().ToString("N") + ".tmp";
-                    File.WriteAllText(tmp, json);
+                    await File.WriteAllTextAsync(tmp, json).ConfigureAwait(false);
                     File.Move(tmp, path, overwrite: true);
                 }
                 catch (Exception ex)
                 {
                     TM.App.Log($"[ContentConfigService] 保存配置失败: {ex.Message}");
+                }
+                finally
+                {
+                    _saveSemaphore.Release();
                 }
             });
         }
